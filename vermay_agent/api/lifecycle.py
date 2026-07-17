@@ -64,8 +64,9 @@ def lifecycle_payload(
     *,
     status: str,
     error_code: str | None = None,
+    retryable: bool | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "session_id": context.session_id,
         "task_id": context.task_id,
         "thread_id": context.thread_id,
@@ -77,3 +78,6 @@ def lifecycle_payload(
         "duration_ms": int((monotonic() - context.started_at) * 1000),
         "error_code": error_code,
     }
+    if retryable is not None:
+        payload["retryable"] = retryable
+    return payload

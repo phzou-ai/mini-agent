@@ -73,9 +73,17 @@ def test_a2a_routes_map_invalid_message_and_unknown_task_errors(tmp_path):
     missing = client.get("/tasks/missing-task")
 
     assert invalid.status_code == 400
-    assert invalid.json()["detail"] == {"code": "invalid_request", "message": "A2A message role must be 'user'."}
+    assert invalid.json()["detail"] == {
+        "code": "invalid_request",
+        "message": "A2A message role must be 'user'.",
+        "retryable": False,
+    }
     assert missing.status_code == 404
-    assert missing.json()["detail"] == {"code": "task_not_found", "message": "task not found"}
+    assert missing.json()["detail"] == {
+        "code": "task_not_found",
+        "message": "task not found",
+        "retryable": False,
+    }
     service.close()
     store.close()
 
@@ -88,7 +96,11 @@ def test_a2a_subscribe_route_maps_unknown_task_to_http_error_without_jsonrpc_bod
     response = client.post("/tasks/missing-task:subscribe")
 
     assert response.status_code == 404
-    assert response.json()["detail"] == {"code": "task_not_found", "message": "task not found"}
+    assert response.json()["detail"] == {
+        "code": "task_not_found",
+        "message": "task not found",
+        "retryable": False,
+    }
     service.close()
     store.close()
 

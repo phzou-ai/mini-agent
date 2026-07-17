@@ -5,8 +5,13 @@ import os
 import urllib.error
 import urllib.request
 
-from .json_decision import parse_json_decision
+from vermay_agent.errors import ModelProtocolError, ModelProviderError
 from vermay_agent.types import Message, ModelResponse, ToolCall
+
+from .json_decision import parse_json_decision
+
+
+PROVIDER = "openai_compatible"
 
 
 class OpenAICompatibleModelClient:
@@ -43,39 +48,56 @@ class OpenAICompatibleModelClient:
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                raw = response.read().decode("utf-8")
+                response_bytes = response.read()
         except urllib.error.HTTPError as exc:
-            return ModelResponse(content=self._format_http_error(exc))
+            raise ModelProviderError(
+                self._format_http_error(exc),
+                provider=PROVIDER,
+                status_code=exc.code,
+                retryable=_retryable_http_status(exc.code),
+            ) from exc
         except urllib.error.URLError as exc:
-            return ModelResponse(content=f"OpenAI-compatible request failed: {exc}")
+            raise ModelProviderError(
+                f"OpenAI-compatible request failed: {exc}",
+                provider=PROVIDER,
+                retryable=True,
+            ) from exc
+        except TimeoutError as exc:
+            raise ModelProviderError(
+                f"OpenAI-compatible request timed out: {exc}",
+                provider=PROVIDER,
+                retryable=True,
+            ) from exc
+
+        try:
+            raw = response_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ModelProtocolError(
+                "Invalid OpenAI-compatible response: response body is not UTF-8",
+                provider=PROVIDER,
+            ) from exc
 
         try:
             body = json.loads(raw)
             message = body["choices"][0]["message"]
         except (KeyError, IndexError, json.JSONDecodeError, TypeError) as exc:
-            return ModelResponse(content=f"Invalid OpenAI-compatible response: {exc}; raw={raw[:1000]}")
+            raise _protocol_error(exc, raw) from exc
+        if not isinstance(message, dict):
+            raise _protocol_error(TypeError("choices[0].message must be an object"), raw)
 
-        tool_calls = message.get("tool_calls") or []
-        if tool_calls:
-            tool_call_id = tool_calls[0].get("id")
-            function = tool_calls[0].get("function") or {}
-            name = function.get("name")
-            raw_arguments = function.get("arguments") or "{}"
-            try:
-                arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else dict(raw_arguments)
-            except (TypeError, json.JSONDecodeError):
-                arguments = {}
-            if isinstance(name, str):
+        tool_calls = message.get("tool_calls")
+        if tool_calls is not None:
+            parsed_tool_calls = _parse_tool_calls(tool_calls)
+            if parsed_tool_calls:
+                names = ", ".join(tool_call.name for tool_call in parsed_tool_calls)
                 return ModelResponse(
-                    content=f"Calling tool {name}.",
-                    tool_call=ToolCall(
-                        name=name,
-                        arguments=arguments,
-                        id=tool_call_id if isinstance(tool_call_id, str) else None,
-                    ),
+                    content=f"Calling tools: {names}." if len(parsed_tool_calls) > 1 else f"Calling tool {names}.",
+                    tool_calls=parsed_tool_calls,
                 )
 
-        content = message.get("content") or ""
+        content = message.get("content")
+        if not isinstance(content, str):
+            raise _protocol_error(TypeError("message.content must be a string when no tool calls are returned"), raw)
         parsed = _parse_json_action(content)
         if parsed is not None:
             return parsed
@@ -138,6 +160,67 @@ def _to_openai_tool(tool: dict) -> dict:
     }
 
 
+def _parse_tool_calls(raw_tool_calls: object) -> list[ToolCall]:
+    if not isinstance(raw_tool_calls, list):
+        raise ModelProtocolError(
+            "Invalid OpenAI-compatible response: message.tool_calls must be an array",
+            provider=PROVIDER,
+        )
+
+    parsed: list[ToolCall] = []
+    for index, raw_tool_call in enumerate(raw_tool_calls):
+        if not isinstance(raw_tool_call, dict):
+            raise ModelProtocolError(
+                f"Invalid OpenAI-compatible response: tool_calls[{index}] must be an object",
+                provider=PROVIDER,
+            )
+        function = raw_tool_call.get("function") or {}
+        if not isinstance(function, dict):
+            raise ModelProtocolError(
+                f"Invalid OpenAI-compatible response: tool_calls[{index}].function must be an object",
+                provider=PROVIDER,
+            )
+        name = function.get("name")
+        if not isinstance(name, str) or not name:
+            raise ModelProtocolError(
+                f"Invalid OpenAI-compatible response: tool_calls[{index}].function.name is required",
+                provider=PROVIDER,
+            )
+        raw_arguments = function.get("arguments") or "{}"
+        try:
+            arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else dict(raw_arguments)
+        except (TypeError, ValueError) as exc:
+            raise ModelProtocolError(
+                f"Invalid OpenAI-compatible response: tool_calls[{index}].function.arguments must be a JSON object",
+                provider=PROVIDER,
+            ) from exc
+        if not isinstance(arguments, dict):
+            raise ModelProtocolError(
+                f"Invalid OpenAI-compatible response: tool_calls[{index}].function.arguments must be a JSON object",
+                provider=PROVIDER,
+            )
+        tool_call_id = raw_tool_call.get("id")
+        parsed.append(
+            ToolCall(
+                name=name,
+                arguments=arguments,
+                id=tool_call_id if isinstance(tool_call_id, str) else None,
+            )
+        )
+    return parsed
+
+
+def _retryable_http_status(status_code: int) -> bool:
+    return status_code in {408, 409, 425, 429} or status_code >= 500
+
+
+def _protocol_error(exc: Exception, raw: str) -> ModelProtocolError:
+    return ModelProtocolError(
+        f"Invalid OpenAI-compatible response: {exc}; raw={raw[:1000]}",
+        provider=PROVIDER,
+    )
+
+
 def _parse_json_action(content: str) -> ModelResponse | None:
     decision = parse_json_decision(content)
     if decision is None:
@@ -146,7 +229,10 @@ def _parse_json_action(content: str) -> ModelResponse | None:
         name = decision.get("name")
         arguments = decision.get("arguments", {})
         if isinstance(name, str) and isinstance(arguments, dict):
-            return ModelResponse(content=f"Calling tool {name}.", tool_call=ToolCall(name=name, arguments=arguments))
+            return ModelResponse(
+                content=f"Calling tool {name}.",
+                tool_calls=[ToolCall(name=name, arguments=arguments)],
+            )
     if decision.get("action") == "final" or "content" in decision:
         content_value = decision.get("content", "")
         if not isinstance(content_value, str):

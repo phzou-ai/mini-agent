@@ -26,7 +26,11 @@ export async function POST(
 
   if (typeof approved !== "boolean") {
     return NextResponse.json(
-      { status: 400, message: "approved must be a boolean" },
+      {
+        code: "invalid_request",
+        message: "approved must be a boolean",
+        retryable: false,
+      },
       { status: 400 }
     )
   }

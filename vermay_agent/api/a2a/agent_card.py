@@ -17,7 +17,7 @@ class A2AAgentSkillConfig:
 class A2AAgentCardConfig:
     name: str = "Vermay Agent"
     description: str = "An A2A-first main agent for direct answers, local task execution, and child-agent delegation."
-    url: str = "http://127.0.0.1:8000"
+    url: str = "http://127.0.0.1:8000/rpc"
     version: str = "0.1.0"
     protocol_versions: tuple[str, ...] = ("0.3",)
     default_input_modes: tuple[str, ...] = ("text/plain",)
@@ -66,6 +66,7 @@ def build_agent_card(config: A2AAgentCardConfig | None = None) -> dict[str, Any]
         "name": active.name,
         "description": active.description,
         "url": active.url,
+        "preferredTransport": "JSONRPC",
         "version": active.version,
         "protocolVersions": list(active.protocol_versions),
         "capabilities": {

@@ -7,8 +7,9 @@
     "dev": "next dev",
     "build": "next build --webpack",
     "start": "next start",
-    "typecheck": "tsc --noEmit",
-    "test:e2e": "playwright test"
+    "typecheck": "tsc --noEmit --incremental false",
+    "test:e2e": "playwright test",
+    "test:regression": "playwright test --config playwright.regression.config.ts"
   },
   "dependencies": {
     "clsx": "^1.2.1",

@@ -29,6 +29,13 @@ class RemoteAgentTaskSnapshot:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+class RemoteAgentProtocolError(RuntimeError):
+    def __init__(self, message: str, *, code: int | None = None, data: object = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.data = data
+
+
 class RemoteAgentClient(Protocol):
     def send_message(
         self,
@@ -80,17 +87,7 @@ class DirectA2ARemoteAgentClient:
                 "metadata": _forward_metadata(request.metadata, context_id=context_id),
             },
         }
-        http_request = Request(
-            _rpc_url(agent.card_url),
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            method="POST",
-        )
-        with urlopen(http_request, timeout=self.timeout_seconds) as response:
-            body = json.loads(response.read().decode("utf-8"))
-        result = body.get("result")
-        if not isinstance(result, dict):
-            raise ValueError("remote agent response missing JSON-RPC result")
+        body, result = self._post_jsonrpc(agent, payload)
         return _remote_result_from_payload(result, raw=body)
 
     def get_task(self, *, agent: RegisteredAgentRecord, task_id: str) -> RemoteAgentTaskSnapshot:
@@ -100,17 +97,8 @@ class DirectA2ARemoteAgentClient:
             "method": "GetTask",
             "params": {"id": task_id},
         }
-        with urlopen(
-            Request(
-                _rpc_url(agent.card_url),
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
-                method="POST",
-            ),
-            timeout=self.timeout_seconds,
-        ) as response:
-            body = json.loads(response.read().decode("utf-8"))
-        return _remote_task_snapshot_from_body(body, fallback_task_id=task_id)
+        body, result = self._post_jsonrpc(agent, payload)
+        return _remote_task_snapshot_from_payload(result, raw=body, fallback_task_id=task_id)
 
     def cancel_task(
         self,
@@ -129,15 +117,23 @@ class DirectA2ARemoteAgentClient:
         }
         if reason:
             payload["params"]["reason"] = reason
+        body, result = self._post_jsonrpc(agent, payload)
+        return _remote_task_snapshot_from_payload(result, raw=body, fallback_task_id=task_id)
+
+    def _post_jsonrpc(
+        self,
+        agent: RegisteredAgentRecord,
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         http_request = Request(
-            _rpc_url(agent.card_url),
+            _rpc_url(agent),
             data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json", "Accept": "application/json"},
             method="POST",
         )
         with urlopen(http_request, timeout=self.timeout_seconds) as response:
-            body = json.loads(response.read().decode("utf-8"))
-        return _remote_task_snapshot_from_body(body, fallback_task_id=task_id)
+            body = _read_json_object(response, label="remote agent response")
+        return body, _jsonrpc_result(body, expected_id=payload["id"])
 
 
 def fetch_agent_card(card_url: str, *, timeout_seconds: float = 10.0) -> dict[str, Any]:
@@ -145,14 +141,46 @@ def fetch_agent_card(card_url: str, *, timeout_seconds: float = 10.0) -> dict[st
         Request(card_url, headers={"Accept": "application/json"}, method="GET"),
         timeout=timeout_seconds,
     ) as response:
-        body = json.loads(response.read().decode("utf-8"))
-    if not isinstance(body, dict):
-        raise ValueError("agent card response must be a JSON object")
-    return body
+        return _read_json_object(response, label="agent card response")
 
 
-def _rpc_url(card_url: str) -> str:
-    return _root_url(card_url).rstrip("/") + "/rpc"
+def _rpc_url(agent: RegisteredAgentRecord) -> str:
+    card = agent.card_json
+    supported_interfaces = card.get("supportedInterfaces")
+    if isinstance(supported_interfaces, list):
+        endpoint = _interface_url(supported_interfaces, binding_key="protocolBinding")
+        if endpoint is not None:
+            return _validated_http_url(endpoint, label="agent card JSON-RPC interface URL")
+
+    preferred_transport = card.get("preferredTransport")
+    card_url = card.get("url")
+    if isinstance(card_url, str) and (
+        preferred_transport is None or _is_jsonrpc_binding(preferred_transport)
+    ):
+        return _validated_http_url(card_url, label="agent card JSON-RPC URL")
+
+    additional_interfaces = card.get("additionalInterfaces")
+    if isinstance(additional_interfaces, list):
+        endpoint = _interface_url(additional_interfaces, binding_key="transport")
+        if endpoint is not None:
+            return _validated_http_url(endpoint, label="agent card JSON-RPC interface URL")
+
+    declares_non_jsonrpc = (
+        isinstance(supported_interfaces, list)
+        or preferred_transport is not None
+        or isinstance(additional_interfaces, list)
+    )
+    if declares_non_jsonrpc:
+        raise ValueError(f"registered agent does not declare a JSON-RPC interface: {agent.agent_id}")
+
+    return _legacy_rpc_url(agent.card_url)
+
+
+def _legacy_rpc_url(card_url: str) -> str:
+    return _validated_http_url(
+        _root_url(card_url).rstrip("/") + "/rpc",
+        label="registered agent card URL",
+    )
 
 
 def _root_url(card_url: str) -> str:
@@ -162,6 +190,68 @@ def _root_url(card_url: str) -> str:
     if path.endswith(marker):
         path = path[: -len(marker)]
     return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def _interface_url(interfaces: list[object], *, binding_key: str) -> str | None:
+    for interface in interfaces:
+        if not isinstance(interface, dict) or not _is_jsonrpc_binding(interface.get(binding_key)):
+            continue
+        url = interface.get("url")
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError("agent card JSON-RPC interface must define a non-empty URL")
+        return url.strip()
+    return None
+
+
+def _is_jsonrpc_binding(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    return value.replace("-", "").replace("_", "").strip().lower() == "jsonrpc"
+
+
+def _validated_http_url(value: str, *, label: str) -> str:
+    normalized = value.strip()
+    parsed = urlsplit(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError(f"{label} must be an absolute HTTP(S) URL")
+    return normalized
+
+
+def _read_json_object(response, *, label: str) -> dict[str, Any]:
+    try:
+        body = json.loads(response.read().decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RemoteAgentProtocolError(f"{label} is not valid JSON") from exc
+    if not isinstance(body, dict):
+        raise RemoteAgentProtocolError(f"{label} must be a JSON object")
+    return body
+
+
+def _jsonrpc_result(body: dict[str, Any], *, expected_id: object) -> dict[str, Any]:
+    if body.get("jsonrpc") != "2.0":
+        raise RemoteAgentProtocolError("remote agent response must use JSON-RPC 2.0")
+    if body.get("id") != expected_id:
+        raise RemoteAgentProtocolError("remote agent response id does not match request id")
+
+    error = body.get("error")
+    if error is not None:
+        if not isinstance(error, dict):
+            raise RemoteAgentProtocolError("remote agent JSON-RPC error must be an object")
+        code = error.get("code")
+        message = error.get("message")
+        normalized_code = code if isinstance(code, int) and not isinstance(code, bool) else None
+        normalized_message = message.strip() if isinstance(message, str) and message.strip() else "Remote agent error"
+        suffix = f" ({normalized_code})" if normalized_code is not None else ""
+        raise RemoteAgentProtocolError(
+            f"{normalized_message}{suffix}",
+            code=normalized_code,
+            data=error.get("data"),
+        )
+
+    result = body.get("result")
+    if not isinstance(result, dict):
+        raise RemoteAgentProtocolError("remote agent response missing JSON-RPC result")
+    return result
 
 
 def _remote_result_from_payload(result: dict[str, Any], *, raw: dict[str, Any]) -> RemoteAgentSendResult:
@@ -186,10 +276,12 @@ def _remote_result_from_payload(result: dict[str, Any], *, raw: dict[str, Any]) 
     raise ValueError(f"unsupported remote agent result kind: {kind}")
 
 
-def _remote_task_snapshot_from_body(body: dict[str, Any], *, fallback_task_id: str) -> RemoteAgentTaskSnapshot:
-    result = body.get("result") if isinstance(body.get("result"), dict) else body
-    if not isinstance(result, dict):
-        raise ValueError("remote agent task response missing task payload")
+def _remote_task_snapshot_from_payload(
+    result: dict[str, Any],
+    *,
+    raw: dict[str, Any],
+    fallback_task_id: str,
+) -> RemoteAgentTaskSnapshot:
     task = result.get("task") if isinstance(result.get("task"), dict) else result
     if not isinstance(task, dict):
         raise ValueError("remote agent task response missing task object")
@@ -200,7 +292,7 @@ def _remote_task_snapshot_from_body(body: dict[str, Any], *, fallback_task_id: s
         context_id=_optional_str(task.get("contextId")),
         status=_optional_str(status.get("state")),
         artifacts=list(artifacts),
-        raw=body,
+        raw=raw,
     )
 
 

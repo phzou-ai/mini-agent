@@ -30,7 +30,7 @@ class OllamaModelAdapter:
             messages=[_to_project_message(message) for message in messages],
             tools=tool_schemas_from_tools(tools),
         )
-        if response.tool_call is None:
+        if not response.tool_calls:
             return ModelInvocation(message=AIMessage(content=response.content))
 
         return ModelInvocation(
@@ -38,11 +38,12 @@ class OllamaModelAdapter:
                 content=response.content,
                 tool_calls=[
                     {
-                        "name": response.tool_call.name,
-                        "args": response.tool_call.arguments,
-                        "id": response.tool_call.id or f"call-{uuid4().hex}",
+                        "name": tool_call.name,
+                        "args": tool_call.arguments,
+                        "id": tool_call.id or f"call-{uuid4().hex}",
                         "type": "tool_call",
                     }
+                    for tool_call in response.tool_calls
                 ],
             )
         )
@@ -65,7 +66,7 @@ class OpenAICompatibleModelAdapter:
             messages=[_to_project_message(message) for message in messages],
             tools=tool_schemas_from_tools(tools),
         )
-        if response.tool_call is None:
+        if not response.tool_calls:
             return ModelInvocation(message=AIMessage(content=response.content))
 
         return ModelInvocation(
@@ -73,11 +74,12 @@ class OpenAICompatibleModelAdapter:
                 content=response.content,
                 tool_calls=[
                     {
-                        "name": response.tool_call.name,
-                        "args": response.tool_call.arguments,
-                        "id": f"call-{uuid4().hex}",
+                        "name": tool_call.name,
+                        "args": tool_call.arguments,
+                        "id": tool_call.id or f"call-{uuid4().hex}",
                         "type": "tool_call",
                     }
+                    for tool_call in response.tool_calls
                 ],
             )
         )

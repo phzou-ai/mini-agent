@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -27,6 +29,8 @@ from .models import (
 class MainAgentStore:
     def __init__(self, store: AgentStore) -> None:
         self.store = store
+        self._task_event_condition = threading.Condition()
+        self._task_event_versions: dict[str, int] = {}
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -351,6 +355,9 @@ class MainAgentStore:
         record = self.get_task_event(int(cursor.lastrowid))
         if record is None:
             raise RuntimeError(f"failed to append task event: {task_id}")
+        with self._task_event_condition:
+            self._task_event_versions[task_id] = self._task_event_versions.get(task_id, 0) + 1
+            self._task_event_condition.notify_all()
         return record
 
     def get_task_event(self, event_id: int) -> TaskEventRecord | None:
@@ -377,6 +384,34 @@ class MainAgentStore:
             (task_id, after_event_id),
         )
         return [_task_event_from_row(row) for row in rows]
+
+    def wait_for_task_events(
+        self,
+        task_id: str,
+        *,
+        after_event_id: int,
+        timeout_seconds: float,
+    ) -> list[TaskEventRecord]:
+        if self.get_task(task_id) is None:
+            raise ValueError(f"unknown task: {task_id}")
+        events = self.list_task_events(task_id, after_event_id=after_event_id)
+        if events or timeout_seconds <= 0:
+            return events
+
+        with self._task_event_condition:
+            version = self._task_event_versions.get(task_id, 0)
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            events = self.list_task_events(task_id, after_event_id=after_event_id)
+            if events:
+                return events
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return []
+            with self._task_event_condition:
+                if self._task_event_versions.get(task_id, 0) <= version:
+                    self._task_event_condition.wait(timeout=remaining)
+                version = self._task_event_versions.get(task_id, 0)
 
     def upsert_artifact(
         self,

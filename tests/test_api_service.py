@@ -11,6 +11,7 @@ from vermay_agent.api.session_models import TaskStatus
 from vermay_agent.api.service import AgentService, AgentStartOptions, SessionConflictError, TaskExecutionLocks
 from vermay_agent.api.session_store import SessionStore
 from vermay_agent.app_factory import RuntimeFactoryConfig
+from vermay_agent.errors import ModelProviderError
 from vermay_agent.langgraph_runtime import ModelProviderConfig
 from vermay_agent.langgraph_runtime.results import RunResult
 from vermay_agent.mcp.selection import MCPPromptSelectionConfig, MCPResourceSelectionConfig, MCPSelectionConfig
@@ -89,6 +90,29 @@ class BlockingFailingRuntime(BlockingRuntime):
         self.started.set()
         self.release.wait(timeout=5)
         raise RuntimeError("runtime failed after cancel")
+
+
+class ConcurrentRuntime:
+    def __init__(self) -> None:
+        self._guard = threading.Lock()
+        self.started = 0
+        self.two_started = threading.Event()
+        self.release = threading.Event()
+        self.closed = False
+
+    def start(self, user_input, thread_id=None):
+        with self._guard:
+            self.started += 1
+            if self.started >= 2:
+                self.two_started.set()
+        self.release.wait(timeout=5)
+        return RunResult(thread_id=thread_id, final_answer=user_input)
+
+    def resume(self, thread_id, approved, reason=None):
+        return self.start(reason or "resumed", thread_id=thread_id)
+
+    def close(self):
+        self.closed = True
 
 
 class ManualTaskExecutionService:
@@ -703,6 +727,26 @@ def test_service_rejects_concurrent_same_task_start(tmp_path):
     store.close()
 
 
+def test_service_runs_different_tasks_concurrently_on_default_runtime(tmp_path):
+    runtime = ConcurrentRuntime()
+    service, store = make_service(tmp_path, runtime)
+    service.create_session(session_id="session-1")
+    service.create_session(session_id="session-2")
+
+    first = service.start_task("session-1", "first", task_id="task-1", wait=False)
+    second = service.start_task("session-2", "second", task_id="task-2", wait=False)
+
+    assert first.status == TaskStatus.QUEUED
+    assert second.status == TaskStatus.QUEUED
+    assert runtime.two_started.wait(timeout=2)
+    runtime.release.set()
+    wait_for_task_status(service, "task-1", TaskStatus.COMPLETED)
+    wait_for_task_status(service, "task-2", TaskStatus.COMPLETED)
+
+    service.close()
+    store.close()
+
+
 def test_service_marks_active_task_failed_when_runtime_returns_wrong_thread_id(tmp_path):
     service, store = make_service(tmp_path, FakeRuntime([RunResult(thread_id="wrong-thread", final_answer="done")]))
     service.create_session(session_id="session-1")
@@ -779,6 +823,32 @@ def test_service_persists_failed_start_task(tmp_path):
     assert record.error_code == "runtime_error"
     assert record.error_message == "model unavailable"
     assert record.to_dict()["error"] == {"code": "runtime_error", "message": "model unavailable"}
+    service.close()
+    store.close()
+
+
+def test_service_persists_model_error_and_retryability(tmp_path):
+    model_error = ModelProviderError(
+        "OpenAI-compatible request failed: HTTP 503 Service Unavailable",
+        provider="openai_compatible",
+        status_code=503,
+        retryable=True,
+    )
+    service, store = make_service(tmp_path, FailingRuntime(model_error))
+    service.create_session(session_id="session-1")
+
+    with pytest.raises(ModelProviderError, match="HTTP 503"):
+        service.start_task("session-1", "hello", task_id="task-1")
+
+    record = service.get_task("task-1")
+    assert record is not None
+    assert record.status == TaskStatus.FAILED
+    assert record.error_code == "model_error"
+    assert record.error_message == "OpenAI-compatible request failed: HTTP 503 Service Unavailable"
+    assert service.list_task_events("task-1")[-1].payload == {
+        "error_code": "model_error",
+        "retryable": True,
+    }
     service.close()
     store.close()
 

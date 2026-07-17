@@ -27,6 +27,7 @@ class AgentErrorInfo:
     message: str
     http_status: int
     public_message: str
+    retryable: bool = False
 
 
 class AgentError(RuntimeError):
@@ -85,8 +86,34 @@ class ArtifactNotFoundError(AgentError):
 
 
 class ModelError(AgentError):
-    def __init__(self, message: str) -> None:
-        super().__init__(message, code=AgentErrorCode.MODEL_ERROR, http_status=502, public_message="model error")
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        super().__init__(
+            message,
+            code=AgentErrorCode.MODEL_ERROR,
+            http_status=502,
+            public_message="Model request failed.",
+        )
+        self.retryable = retryable
+
+
+class ModelProviderError(ModelError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str,
+        retryable: bool,
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(message, retryable=retryable)
+        self.provider = provider
+        self.status_code = status_code
+
+
+class ModelProtocolError(ModelError):
+    def __init__(self, message: str, *, provider: str) -> None:
+        super().__init__(message, retryable=False)
+        self.provider = provider
 
 
 class ToolError(AgentError):
@@ -121,6 +148,7 @@ def error_info_from_exception(exc: Exception) -> AgentErrorInfo:
             message=_safe_message(str(exc), fallback=exc.code.value),
             http_status=exc.http_status,
             public_message=exc.public_message,
+            retryable=bool(getattr(exc, "retryable", False)),
         )
     if isinstance(exc, MCPTransportError):
         message = _safe_message(str(exc), fallback="MCP transport error")
@@ -128,7 +156,7 @@ def error_info_from_exception(exc: Exception) -> AgentErrorInfo:
             code=AgentErrorCode.MCP_ERROR,
             message=message,
             http_status=400,
-            public_message=message,
+            public_message="MCP server request failed.",
         )
     if isinstance(exc, FileNotFoundError):
         message = _safe_message(str(exc), fallback="file not found")
@@ -168,8 +196,16 @@ def error_info_from_exception(exc: Exception) -> AgentErrorInfo:
         code=AgentErrorCode.RUNTIME_ERROR,
         message=message,
         http_status=500,
-        public_message="agent runtime error",
+        public_message="Agent execution failed.",
     )
+
+
+def public_error_payload(error: AgentErrorInfo) -> dict[str, str | bool]:
+    return {
+        "code": error.code.value,
+        "message": error.public_message,
+        "retryable": error.retryable,
+    }
 
 
 def _safe_message(value: str, *, fallback: str) -> str:

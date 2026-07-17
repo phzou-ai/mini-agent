@@ -9,6 +9,7 @@ from vermay_agent.api.a2a import A2AAdapter, create_a2a_router
 from vermay_agent.api.app import create_app
 from vermay_agent.api.service import AgentService
 from vermay_agent.api.session_store import SessionStore
+from vermay_agent.errors import ModelProviderError
 from vermay_agent.langgraph_runtime.results import RunResult
 from vermay_agent.main_agent import (
     LocalTaskRunResult,
@@ -57,6 +58,15 @@ class FakeStreamingLocalMessageResponder(FakeLocalMessageResponder):
         self.calls.append(messages)
         yield "streamed "
         yield "answer"
+
+
+class FailingLocalMessageResponder(FakeLocalMessageResponder):
+    def respond(self, messages: list[MessageRecord]) -> list[dict]:
+        raise ModelProviderError(
+            "Ollama request failed: <urlopen error [Errno 61] Connection refused>",
+            provider="ollama",
+            retryable=True,
+        )
 
 
 class FakeLocalTaskRunner:
@@ -145,6 +155,7 @@ def make_adapter(tmp_path, runtime, *, task_execution_service=None):
 def jsonrpc_error_data(local_code: str) -> dict:
     return {
         "localCode": local_code,
+        "retryable": False,
         "errorInfo": {
             "reason": local_code,
             "domain": "vermay-agent",
@@ -159,6 +170,8 @@ def test_a2a_agent_card_declares_local_skeleton_capabilities(tmp_path):
     card = adapter.get_agent_card()
 
     assert card["name"] == "Vermay Agent"
+    assert card["url"] == "http://127.0.0.1:8000/rpc"
+    assert card["preferredTransport"] == "JSONRPC"
     assert card["capabilities"] == {
         "streaming": False,
         "pushNotifications": False,
@@ -1116,6 +1129,54 @@ def test_a2a_route_message_stream_emits_jsonrpc_error_event(tmp_path):
     assert "event: error" in response.text
     assert '"id": "req-stream-error"' in response.text
     assert "JSON-RPC method must be" in response.text
+    service.close()
+    agent_store.close()
+
+
+def test_a2a_rpc_masks_model_provider_details_and_preserves_retryability(tmp_path):
+    agent_store = AgentStore(tmp_path / "agent.sqlite")
+    main_store = MainAgentStore(agent_store)
+    core = MainAgentCore(store=main_store, local_message_responder=FailingLocalMessageResponder())
+    service = AgentService(
+        session_store=SessionStore(agent_store),
+        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
+    )
+    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+
+    response = client.post(
+        "/rpc",
+        json={
+            "jsonrpc": "2.0",
+            "id": "req-model-error",
+            "method": "SendMessage",
+            "params": {
+                "message": {
+                    "kind": "message",
+                    "role": "user",
+                    "messageId": "msg-user-model-error",
+                    "parts": [{"kind": "text", "text": "hello"}],
+                },
+                "metadata": {"executionMode": "message"},
+            },
+        },
+    )
+
+    assert response.status_code == 502
+    assert response.json()["error"] == {
+        "code": -32000,
+        "message": "Model request failed.",
+        "data": {
+            "localCode": "model_error",
+            "retryable": True,
+            "errorInfo": {
+                "reason": "model_error",
+                "domain": "vermay-agent",
+                "metadata": {"localCode": "model_error"},
+            },
+        },
+    }
+    assert "Ollama" not in response.text
+    assert "Connection refused" not in response.text
     service.close()
     agent_store.close()
 
@@ -2124,6 +2185,7 @@ def test_a2a_route_jsonrpc_completed_local_task_cancel_is_rejected(tmp_path):
     assert canceled.json()["detail"] == {
         "code": "invalid_session_state",
         "message": f"task is terminal and cannot be canceled: {task_id}",
+        "retryable": False,
     }
     assert main_store.get_task(task_id).status == MainAgentTaskStatus.COMPLETED
     service.close()

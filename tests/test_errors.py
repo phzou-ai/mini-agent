@@ -8,6 +8,8 @@ from vermay_agent.errors import (
     ArtifactNotFoundError,
     InvalidRequestError,
     InvalidSessionStateError,
+    ModelProtocolError,
+    ModelProviderError,
     SessionNotFoundError,
     TaskNotFoundError,
     error_info_from_exception,
@@ -62,7 +64,7 @@ def test_error_info_maps_mcp_transport_errors():
 
     assert error.code == AgentErrorCode.MCP_ERROR
     assert error.http_status == 400
-    assert error.public_message == "MCP server failed"
+    assert error.public_message == "MCP server request failed."
 
 
 def test_error_info_maps_json_decode_errors():
@@ -81,7 +83,8 @@ def test_error_info_masks_generic_runtime_public_message():
     assert error.code == AgentErrorCode.RUNTIME_ERROR
     assert error.http_status == 500
     assert error.message == "secret detail"
-    assert error.public_message == "agent runtime error"
+    assert error.public_message == "Agent execution failed."
+    assert error.retryable is False
 
 
 def test_custom_agent_error_can_mask_public_message():
@@ -98,3 +101,21 @@ def test_custom_agent_error_can_mask_public_message():
     assert error.http_status == 502
     assert error.message == "internal model detail"
     assert error.public_message == "model error"
+
+
+def test_model_errors_preserve_type_and_retryability():
+    provider_error = ModelProviderError(
+        "provider unavailable",
+        provider="openai_compatible",
+        retryable=True,
+        status_code=503,
+    )
+    protocol_error = ModelProtocolError("invalid response", provider="ollama")
+
+    assert error_info_from_exception(provider_error).code == AgentErrorCode.MODEL_ERROR
+    assert error_info_from_exception(provider_error).public_message == "Model request failed."
+    assert error_info_from_exception(provider_error).retryable is True
+    assert provider_error.retryable is True
+    assert provider_error.status_code == 503
+    assert error_info_from_exception(protocol_error).code == AgentErrorCode.MODEL_ERROR
+    assert protocol_error.retryable is False

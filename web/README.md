@@ -9,7 +9,7 @@ contracts, inspector UI, and approval workflow can evolve together.
 Start the backend from the repository root:
 
 ```bash
-vermay-agent serve --enable-a2a
+vermay-agent serve
 ```
 
 Start the web UI from this directory:
@@ -25,6 +25,21 @@ base URL with:
 ```bash
 VERMAY_AGENT_API_BASE=http://127.0.0.1:8000 pnpm dev
 ```
+
+## Production Build
+
+The frontend and backend remain separate runtime processes. Build and start the
+frontend with:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build
+VERMAY_AGENT_API_BASE=http://127.0.0.1:8000 pnpm start
+```
+
+`VERMAY_AGENT_API_BASE` is read by the server-side BFF. The frontend is a private
+application package and is not published to npm. The backend does not serve the
+generated Next.js bundle.
 
 ## Checks
 

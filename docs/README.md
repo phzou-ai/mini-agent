@@ -11,9 +11,10 @@ The project is positioned as an agent validation and practice workbench. It prov
 1. [overview.md](overview.md) - project purpose, current capabilities, and operating model.
 2. [modules.md](modules.md) - key packages and module responsibilities.
 3. [operations.md](operations.md) - CLI usage, runtime options, environment configuration, and traces.
-4. [langgraph-interrupt-resume.md](langgraph-interrupt-resume.md) - approval interrupt, checkpoint, and resume flow.
-5. [server-api-readiness.md](server-api-readiness.md) - local API surface, session metadata, and approval resume contract.
-6. [code-organization-review.md](code-organization-review.md) - current code organization assessment and cleanup order.
+4. [runtime-and-release.md](runtime-and-release.md) - supported runtime topology, secrets and persistence boundaries, and release gate.
+5. [langgraph-interrupt-resume.md](langgraph-interrupt-resume.md) - approval interrupt, checkpoint, and resume flow.
+6. [server-api-readiness.md](server-api-readiness.md) - local API surface, session metadata, and approval resume contract.
+7. [code-organization-review.md](code-organization-review.md) - current code organization assessment and cleanup order.
 
 ## Documentation Boundary
 

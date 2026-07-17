@@ -8,8 +8,10 @@ __pycache__/
 # OS artifacts
 .DS_Store
 
+.env
 .env.local
 .env.*.local
+!.env.example
 
 data/memory.txt
 data/agent.sqlite

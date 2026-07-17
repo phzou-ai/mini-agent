@@ -30,26 +30,9 @@ Current A2A-first public routes:
 GET  /health
 GET  /.well-known/agent-card.json
 POST /rpc
-POST /message:send
-POST /message:stream
-GET  /tasks/{task_id}
-POST /tasks/{task_id}:subscribe
-POST /tasks/{task_id}:cancel
 ```
 
-Prefer `/rpc` for new clients. Path-style A2A routes remain operational for compatibility, but they are deprecated for new first-party client work and should not be removed without a dedicated cleanup milestone.
-
-Current compatibility routes kept for burn-in:
-
-```text
-POST /message:send
-POST /message:stream
-GET  /tasks/{task_id}
-POST /tasks/{task_id}:subscribe
-POST /tasks/{task_id}:cancel
-```
-
-Known first-party compatibility usage includes backend smoke tests and backend compatibility tests. Child-agent delegation in `vermay_agent/main_agent/remote_agent.py` uses `/rpc`.
+Agent operations use A2A JSON-RPC methods through `/rpc`. Child-agent delegation in `vermay_agent/main_agent/remote_agent.py` uses the same boundary.
 
 ## JSON-RPC Methods
 
@@ -63,6 +46,7 @@ SendStreamingMessage
 GetTask
 CancelTask
 SubscribeToTask
+ResumeTask
 ```
 
 Transitional aliases remain accepted during burn-in, but canonical method names should be used for new callers:
@@ -300,7 +284,7 @@ Deterministic smoke gate:
 BFF_URL=http://localhost:3000 scripts/a2a_dev_smoke.sh
 ```
 
-The smoke script covers both `/rpc` and path-style compatibility routes while deprecation-only burn-in continues.
+The smoke script validates the configured A2A server through `/rpc`.
 
 Optional child-agent delegation smoke:
 
@@ -316,6 +300,5 @@ Use a separate child-agent process/port for this check. Do not point `CHILD_AGEN
 
 - `/rpc` supports single-request JSON-RPC only.
 - JSON-RPC batch requests are rejected.
-- Path-style A2A routes remain operational compatibility routes, but they are deprecated for new first-party client work.
-- Retry/resume are not currently reintroduced as public A2A routes.
+- Task approval resume is exposed as the `ResumeTask` JSON-RPC method.
 - The local default server has no authentication.

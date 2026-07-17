@@ -133,6 +133,12 @@ python -m pip install -e .
 
 需要 Python 3.11 或更高版本。
 
+需要运行测试的贡献者应安装开发依赖：
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
 ## CLI 快速开始
 
 ```bash
@@ -194,6 +200,30 @@ Web app 默认运行在 `http://localhost:3000/agent`，并将后端请求代理
 ```bash
 VERMAY_AGENT_API_BASE=http://127.0.0.1:8000 pnpm dev
 ```
+
+## 运行与发布边界
+
+`0.1.x` 当前支持的发布形式是源码 checkout 或源码归档。Python 后端和 private Next.js 前端分别构建、分别运行，后端不会托管前端 bundle。PyPI wheel、npm package、container image 和前后端合并 executable 暂时都不是维护中的发布物。
+
+生产式本地部署应让 `vermay-agent serve` 只监听 localhost，并通过 `pnpm build && pnpm start` 运行构建后的前端。后端没有内置认证，不能直接暴露到不可信网络。Secrets 应通过环境变量或未跟踪的 `.env` 注入；SQLite 数据库、checkpoints、traces 和生成的 proposals 属于运行时状态，不属于源码发布内容。
+
+支持的运行命令、持久化要求、公共服务边界和发布检查清单见 [运行与发布边界](docs/runtime-and-release.md)。
+
+在 clean working tree 中验证源码发布：
+
+```bash
+scripts/check_source_release.sh
+```
+
+## 全栈回归基线
+
+运行确定性的后端与迁移后前端回归 gate：
+
+```bash
+scripts/check_full_stack_regression.sh
+```
+
+默认 gate 不依赖真实模型或 MCP server。可选的 live E2E gate 和公共错误契约说明见 [全栈回归基线](docs/full-stack-regression.md)。
 
 ## 后端 Smoke Checks
 

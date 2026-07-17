@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+import pytest
+
 from vermay_agent.main_agent.models import MainAgentRequest, MessageRole, RegisteredAgentRecord
-from vermay_agent.main_agent.remote_agent import DirectA2ARemoteAgentClient
+from vermay_agent.main_agent.remote_agent import DirectA2ARemoteAgentClient, RemoteAgentProtocolError
 
 
 @dataclass
@@ -152,12 +154,144 @@ def test_direct_a2a_remote_agent_cancel_task_uses_rpc(monkeypatch):
     assert snapshot.status == "canceled"
 
 
-def _registered_agent() -> RegisteredAgentRecord:
+def test_direct_a2a_remote_agent_uses_jsonrpc_endpoint_declared_by_card(monkeypatch):
+    captured = []
+
+    def fake_urlopen(request, timeout):
+        captured.append(request.full_url)
+        return FakeResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": "get-remote-task-task-1",
+                "result": {"kind": "task", "id": "task-1", "status": {"state": "working"}},
+            }
+        )
+
+    monkeypatch.setattr("vermay_agent.main_agent.remote_agent.urlopen", fake_urlopen)
+    client = DirectA2ARemoteAgentClient()
+    agent = _registered_agent(
+        card_json={
+            "supportedInterfaces": [
+                {
+                    "url": "https://runtime.example/a2a/jsonrpc",
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "1.0",
+                }
+            ]
+        }
+    )
+
+    client.get_task(agent=agent, task_id="task-1")
+
+    assert captured == ["https://runtime.example/a2a/jsonrpc"]
+
+
+def test_direct_a2a_remote_agent_uses_legacy_card_url_as_complete_endpoint(monkeypatch):
+    captured = []
+
+    def fake_urlopen(request, timeout):
+        captured.append(request.full_url)
+        return FakeResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": "get-remote-task-task-1",
+                "result": {"kind": "task", "id": "task-1", "status": {"state": "working"}},
+            }
+        )
+
+    monkeypatch.setattr("vermay_agent.main_agent.remote_agent.urlopen", fake_urlopen)
+    client = DirectA2ARemoteAgentClient()
+    agent = _registered_agent(
+        card_json={
+            "url": "https://runtime.example/custom/jsonrpc",
+            "preferredTransport": "JSONRPC",
+        }
+    )
+
+    client.get_task(agent=agent, task_id="task-1")
+
+    assert captured == ["https://runtime.example/custom/jsonrpc"]
+
+
+def test_direct_a2a_remote_agent_raises_jsonrpc_error(monkeypatch):
+    def fake_urlopen(request, timeout):
+        return FakeResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": "get-remote-task-missing-task",
+                "error": {
+                    "code": -32001,
+                    "message": "Task not found",
+                    "data": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo"}],
+                },
+            }
+        )
+
+    monkeypatch.setattr("vermay_agent.main_agent.remote_agent.urlopen", fake_urlopen)
+    client = DirectA2ARemoteAgentClient()
+
+    with pytest.raises(RemoteAgentProtocolError, match="Task not found") as raised:
+        client.get_task(agent=_registered_agent(), task_id="missing-task")
+
+    assert raised.value.code == -32001
+    assert raised.value.data == [{"@type": "type.googleapis.com/google.rpc.ErrorInfo"}]
+
+
+@pytest.mark.parametrize(
+    "payload, message",
+    [
+        ({"id": "get-remote-task-task-1", "result": {}}, "must use JSON-RPC 2.0"),
+        ({"jsonrpc": "2.0", "id": "wrong", "result": {}}, "id does not match"),
+        ({"jsonrpc": "2.0", "id": "get-remote-task-task-1"}, "missing JSON-RPC result"),
+    ],
+)
+def test_direct_a2a_remote_agent_rejects_invalid_jsonrpc_response(monkeypatch, payload, message):
+    monkeypatch.setattr(
+        "vermay_agent.main_agent.remote_agent.urlopen",
+        lambda request, timeout: FakeResponse(payload),
+    )
+    client = DirectA2ARemoteAgentClient()
+
+    with pytest.raises(RemoteAgentProtocolError, match=message):
+        client.get_task(agent=_registered_agent(), task_id="task-1")
+
+
+def test_direct_a2a_remote_agent_rejects_card_without_jsonrpc_interface():
+    client = DirectA2ARemoteAgentClient()
+    agent = _registered_agent(
+        card_json={
+            "supportedInterfaces": [
+                {
+                    "url": "https://runtime.example/a2a/grpc",
+                    "protocolBinding": "GRPC",
+                    "protocolVersion": "1.0",
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="does not declare a JSON-RPC interface"):
+        client.get_task(agent=agent, task_id="task-1")
+
+
+def test_direct_a2a_remote_agent_rejects_invalid_legacy_card_url():
+    client = DirectA2ARemoteAgentClient()
+    agent = _registered_agent(card_url="file:///tmp/agent-card.json")
+
+    with pytest.raises(ValueError, match=r"must be an absolute HTTP\(S\) URL"):
+        client.get_task(agent=agent, task_id="task-1")
+
+
+def _registered_agent(
+    *,
+    card_json=None,
+    card_url="http://child-agent.local/.well-known/agent-card.json",
+) -> RegisteredAgentRecord:
     return RegisteredAgentRecord(
         agent_id="child-agent",
         name="Child Agent",
-        card_url="http://child-agent.local/.well-known/agent-card.json",
-        card_json={},
+        card_url=card_url,
+        card_json=card_json or {},
         enabled=True,
         metadata={},
         created_at="2026-06-08T00:00:00Z",

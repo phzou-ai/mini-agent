@@ -9,7 +9,7 @@ def weather_forecast(location: str, days: int = 3) -> dict:
     days = max(1, min(days, 3))
     encoded_location = urllib.parse.quote(location)
     url = f"https://wttr.in/{encoded_location}?format=j1"
-    request = urllib.request.Request(url, headers={"User-Agent": "vermay-agent-workbench/0.1"})
+    request = urllib.request.Request(url, headers={"User-Agent": "vermay-agent/0.1"})
 
     with urllib.request.urlopen(request, timeout=15) as response:
         payload = json.loads(response.read().decode("utf-8"))

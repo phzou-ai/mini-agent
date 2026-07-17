@@ -99,7 +99,7 @@ def jsonrpc_error_payload(request_id: Any, exc: Exception) -> dict[str, Any]:
         "error": {
             "code": _jsonrpc_error_code(error.code),
             "message": error.public_message,
-            "data": jsonrpc_error_data(error.code.value),
+            "data": jsonrpc_error_data(error.code.value, retryable=error.retryable),
         },
     }
 
@@ -125,9 +125,10 @@ def jsonrpc_protocol_error_response(
     )
 
 
-def jsonrpc_error_data(local_code: str) -> dict[str, Any]:
+def jsonrpc_error_data(local_code: str, *, retryable: bool = False) -> dict[str, Any]:
     return {
         "localCode": local_code,
+        "retryable": retryable,
         "errorInfo": {
             "reason": local_code,
             "domain": "vermay-agent",

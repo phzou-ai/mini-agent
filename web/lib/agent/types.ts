@@ -203,7 +203,11 @@ export type AgentA2AStreamEnvelope = {
     | AgentA2AArtifactUpdateEvent
     | AgentA2AMessage
     | AgentA2ATask
-  error?: unknown
+  error?: {
+    code?: unknown
+    message?: unknown
+    data?: unknown
+  }
 }
 
 export type AgentContextRecord = {

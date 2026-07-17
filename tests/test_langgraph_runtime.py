@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from urllib.error import URLError
+
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from pydantic import Field
 
 from vermay_agent.checkpointing import build_sqlite_checkpointer
-from vermay_agent.model_clients import OllamaModelClient
+from vermay_agent.errors import ModelProviderError
+from vermay_agent.model_clients import OllamaModelClient, OpenAICompatibleModelClient
 from vermay_agent.permission import PermissionGate
 from vermay_agent.progress import ProgressReporter
-from vermay_agent.langgraph_runtime import ModelInvocation, OllamaModelAdapter
+from vermay_agent.langgraph_runtime import ModelInvocation, OllamaModelAdapter, OpenAICompatibleModelAdapter
 from vermay_agent.langgraph_runtime.graph import build_graph
 from vermay_agent.langgraph_runtime.model_factory import ModelProviderConfig, build_model_client
 from vermay_agent.langgraph_runtime.nodes import GraphComponents
@@ -24,6 +28,7 @@ from vermay_agent.tooling import ToolArgs, structured_tool
 from vermay_agent.tool_schema import tool_schemas_from_tools
 from vermay_agent.tool_registry import ToolRegistry
 from vermay_agent.trace import TraceLogger
+from vermay_agent.types import ModelResponse, ToolCall
 
 
 class EchoArgs(ToolArgs):
@@ -69,6 +74,16 @@ def make_dangerous_tool(executed: dict[str, bool]):
         func=lambda: executed.__setitem__("value", True) or {"executed": True},
         name="dangerous",
         description="Dangerous tool.",
+        args_schema=EmptyArgs,
+        dangerous=True,
+    )
+
+
+def make_named_dangerous_tool(name: str, executed: list[str]):
+    return structured_tool(
+        func=lambda: executed.append(name) or {"executed": name},
+        name=name,
+        description=f"Dangerous tool {name}.",
         args_schema=EmptyArgs,
         dangerous=True,
     )
@@ -165,6 +180,24 @@ def test_langgraph_runtime_run_returns_final_answer():
     runtime = LangGraphAgentRuntime(model=FakeModel(AIMessage(content="final answer")))
 
     assert runtime.run("hello") == "final answer"
+
+
+def test_langgraph_runtime_propagates_model_provider_errors(monkeypatch):
+    def fake_urlopen(request, timeout):
+        raise URLError("connection refused")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    runtime = LangGraphAgentRuntime(
+        model=OpenAICompatibleModelAdapter(
+            client=OpenAICompatibleModelClient(
+                model="gpt-4o",
+                base_url="https://api.openai.com/v1",
+            )
+        )
+    )
+
+    with pytest.raises(ModelProviderError, match="connection refused"):
+        runtime.start("hello", thread_id="thread-model-failure")
 
 
 def test_langgraph_runtime_close_runs_callbacks_once():
@@ -325,6 +358,159 @@ def test_langgraph_runtime_resumes_approved_dangerous_tool():
     assert executed["value"] is True
     assert any(isinstance(message, ToolMessage) for message in result.state["messages"])
     assert result.state["approval"] == {"approved": True, "reason": "approved for test"}
+
+
+def test_langgraph_runtime_checks_every_tool_call_before_requesting_approval():
+    executed = {"value": False}
+    registry = ToolRegistry()
+    dangerous_tool = make_dangerous_tool(executed)
+    registry.register(dangerous_tool)
+    model = FakeModel(
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "dangerous",
+                    "args": {},
+                    "id": "call-dangerous",
+                    "type": "tool_call",
+                },
+                {
+                    "name": "unknown_tool",
+                    "args": {},
+                    "id": "call-unknown",
+                    "type": "tool_call",
+                },
+            ],
+        )
+    )
+    runtime = LangGraphAgentRuntime(
+        model=model,
+        tools=[dangerous_tool],
+        permission_gate=PermissionGate(registry),
+    )
+
+    result = runtime.start("run tools", thread_id="thread-multiple-tool-denied")
+
+    assert result.status == "completed"
+    assert result.final_answer == "Tool call rejected: unknown tool: unknown_tool"
+    assert result.state["permission"]["status"] == "denied"
+    assert [decision["status"] for decision in result.state["permission"]["decisions"]] == [
+        "approval_required",
+        "denied",
+    ]
+    assert executed["value"] is False
+    assert not any(isinstance(message, ToolMessage) for message in result.state["messages"])
+
+
+def test_langgraph_runtime_executes_checked_batch_only_after_approval():
+    executed = {"value": False}
+    registry = ToolRegistry()
+    echo_tool = make_echo_tool()
+    dangerous_tool = make_dangerous_tool(executed)
+    registry.register(echo_tool)
+    registry.register(dangerous_tool)
+    model = FakeModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "echo",
+                        "args": {"value": "hello"},
+                        "id": "call-echo",
+                        "type": "tool_call",
+                    },
+                    {
+                        "name": "dangerous",
+                        "args": {},
+                        "id": "call-dangerous",
+                        "type": "tool_call",
+                    },
+                ],
+            ),
+            AIMessage(content="tools completed"),
+        ]
+    )
+    runtime = LangGraphAgentRuntime(
+        model=model,
+        tools=[echo_tool, dangerous_tool],
+        permission_gate=PermissionGate(registry),
+    )
+
+    interrupted = runtime.start("run tools", thread_id="thread-multiple-tool-approved")
+
+    assert interrupted.status == "interrupted"
+    assert [decision["status"] for decision in interrupted.interrupt["permission"]["decisions"]] == [
+        "allowed",
+        "approval_required",
+    ]
+    assert executed["value"] is False
+
+    result = runtime.resume(interrupted.thread_id, approved=True, reason="approved batch")
+
+    assert result.status == "completed"
+    assert result.final_answer == "tools completed"
+    assert executed["value"] is True
+    assert {
+        message.tool_call_id for message in result.state["messages"] if isinstance(message, ToolMessage)
+    } == {"call-echo", "call-dangerous"}
+
+
+def test_langgraph_runtime_requires_separate_approval_for_each_dangerous_tool_call():
+    executed: list[str] = []
+    registry = ToolRegistry()
+    first_tool = make_named_dangerous_tool("dangerous_first", executed)
+    second_tool = make_named_dangerous_tool("dangerous_second", executed)
+    registry.register(first_tool)
+    registry.register(second_tool)
+    model = FakeModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "dangerous_first",
+                        "args": {},
+                        "id": "call-dangerous-first",
+                        "type": "tool_call",
+                    },
+                    {
+                        "name": "dangerous_second",
+                        "args": {},
+                        "id": "call-dangerous-second",
+                        "type": "tool_call",
+                    },
+                ],
+            ),
+            AIMessage(content="tools completed"),
+        ]
+    )
+    runtime = LangGraphAgentRuntime(
+        model=model,
+        tools=[first_tool, second_tool],
+        permission_gate=PermissionGate(registry),
+    )
+
+    first_interrupt = runtime.start("run tools", thread_id="thread-multiple-approvals")
+
+    assert first_interrupt.status == "interrupted"
+    assert first_interrupt.interrupt["tool_call"]["id"] == "call-dangerous-first"
+    assert first_interrupt.interrupt["approval_index"] == 1
+    assert first_interrupt.interrupt["approval_count"] == 2
+
+    second_interrupt = runtime.resume(first_interrupt.thread_id, approved=True, reason="approve first")
+
+    assert second_interrupt.status == "interrupted"
+    assert second_interrupt.interrupt["tool_call"]["id"] == "call-dangerous-second"
+    assert second_interrupt.interrupt["approval_index"] == 2
+    assert executed == []
+
+    result = runtime.resume(second_interrupt.thread_id, approved=True, reason="approve second")
+
+    assert result.status == "completed"
+    assert result.final_answer == "tools completed"
+    assert executed == ["dangerous_first", "dangerous_second"]
 
 
 def test_langgraph_runtime_resumes_approval_from_sqlite_checkpoint_across_runtime_instances(tmp_path):
@@ -499,6 +685,28 @@ def test_ollama_adapter_returns_thin_ai_message_wrapper():
     assert response.message.tool_calls[0]["name"] == "echo"
     assert response.message.tool_calls[0]["args"] == {"value": "hello"}
     assert project_client.calls[0][1] == tool_schemas_from_tools([tool])
+
+
+def test_openai_adapter_preserves_multiple_tool_calls_and_ids():
+    project_client = FakeProjectModelClient(
+        ModelResponse(
+            content="Calling tools.",
+            tool_calls=[
+                ToolCall(name="echo", arguments={"value": "first"}, id="call-1"),
+                ToolCall(name="echo", arguments={"value": "second"}, id="call-2"),
+            ],
+        )
+    )
+    adapter = OpenAICompatibleModelAdapter(client=project_client)
+    tool = make_echo_tool()
+
+    response = adapter.invoke([HumanMessage(content="hello")], tools=[tool])
+
+    assert [tool_call["id"] for tool_call in response.message.tool_calls] == ["call-1", "call-2"]
+    assert [tool_call["args"] for tool_call in response.message.tool_calls] == [
+        {"value": "first"},
+        {"value": "second"},
+    ]
 
 
 def test_ollama_adapter_extracts_embedded_json_tool_call():

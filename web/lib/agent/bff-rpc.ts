@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server"
 
+import { normalizeAgentError } from "@/lib/agent/error-contract"
+
 export type A2AJsonRpcResponse = {
   jsonrpc?: string
   id?: unknown
@@ -32,10 +34,10 @@ export function isJsonRpcMethodNotFound(body: A2AJsonRpcResponse) {
 export function staleResumeRouteResponse() {
   return NextResponse.json(
     {
-      status: 502,
+      code: "a2a_resume_method_not_found",
       message:
         "The running Vermay Agent API does not support task resume yet. Restart `vermay-agent serve` so the A2A ResumeTask route is loaded.",
-      code: "a2a_resume_method_not_found",
+      retryable: false,
     },
     { status: 502 }
   )
@@ -55,7 +57,7 @@ export function jsonRpcResultResponse(
   }
 ) {
   if (body.error) {
-    return NextResponse.json(body, { status: 502 })
+    return NextResponse.json(normalizeAgentError(502, body), { status: 502 })
   }
 
   if (body.result && typeof body.result === "object") {
@@ -68,7 +70,11 @@ export function jsonRpcResultResponse(
   }
 
   return NextResponse.json(
-    { status: 502, message: invalidMessage },
+    {
+      code: "invalid_a2a_response",
+      message: invalidMessage,
+      retryable: false,
+    },
     { status: 502 }
   )
 }

@@ -90,17 +90,31 @@ def check_permission_node(components: GraphComponents):
             return {"permission": permission}
 
         if components.permission_gate is None:
-            permission = {"status": "allowed", "reason": "no permission gate configured"}
+            permission = {
+                "status": "allowed",
+                "reason": "no permission gate configured",
+                "tool_calls": tool_calls,
+                "decisions": [
+                    {
+                        "status": "allowed",
+                        "reason": "no permission gate configured",
+                        "tool_call": raw_tool_call,
+                    }
+                    for raw_tool_call in tool_calls
+                ],
+            }
             _emit_permission(components, loop_index, permission)
             _emit_tool_execute_start(components, loop_index, tool_calls)
             return {"permission": permission}
 
+        decisions: list[dict[str, Any]] = []
         for raw_tool_call in tool_calls:
             tool_call = _to_project_tool_call(raw_tool_call)
             decision = components.permission_gate.check(tool_call)
-            if decision.requires_approval:
-                permission = {
-                    "status": "approval_required",
+            status = "approval_required" if decision.requires_approval else "allowed" if decision.allowed else "denied"
+            decisions.append(
+                {
+                    "status": status,
                     "reason": decision.reason,
                     "tool_call": raw_tool_call,
                     "decision": decision.decision,
@@ -109,18 +123,39 @@ def check_permission_node(components: GraphComponents):
                     "safe_argument_preview": decision.safe_argument_preview,
                     "policy_tags": decision.policy_tags,
                 }
-                _emit_permission(components, loop_index, permission)
-                return {"permission": permission}
-            if not decision.allowed:
-                permission = {
-                    "status": "denied",
-                    "reason": decision.reason,
-                    "tool_call": raw_tool_call,
-                }
-                _emit_permission(components, loop_index, permission)
-                return {"permission": permission}
+            )
 
-        permission = {"status": "allowed", "reason": "all tool calls allowed"}
+        denied = [decision for decision in decisions if decision["status"] == "denied"]
+        if denied:
+            first = denied[0]
+            permission = {
+                **first,
+                "status": "denied",
+                "tool_calls": tool_calls,
+                "decisions": decisions,
+            }
+            _emit_permission(components, loop_index, permission)
+            return {"permission": permission}
+
+        approval_required = [decision for decision in decisions if decision["status"] == "approval_required"]
+        if approval_required:
+            first = approval_required[0]
+            permission = {
+                **first,
+                "status": "approval_required",
+                "tool_calls": tool_calls,
+                "approval_required_tool_calls": [decision["tool_call"] for decision in approval_required],
+                "decisions": decisions,
+            }
+            _emit_permission(components, loop_index, permission)
+            return {"permission": permission}
+
+        permission = {
+            "status": "allowed",
+            "reason": "all tool calls allowed",
+            "tool_calls": tool_calls,
+            "decisions": decisions,
+        }
         _emit_permission(components, loop_index, permission)
         _emit_tool_execute_start(components, loop_index, tool_calls)
         return {"permission": permission}
@@ -157,45 +192,73 @@ def approval_required_node(components: GraphComponents):
     def node(state: AgentState) -> dict:
         loop_index = state["loop_index"]
         permission = state.get("permission") or {}
-        reason = permission.get("reason") or "approval required"
-        tool_call = permission.get("tool_call")
-        message = f"Approval required for tool call: {reason}"
-        tool_name = None
-        if isinstance(tool_call, dict):
+        approval_decisions = [
+            decision
+            for decision in permission.get("decisions", [])
+            if isinstance(decision, dict)
+            and decision.get("status") == "approval_required"
+            and isinstance(decision.get("tool_call"), dict)
+        ]
+        if not approval_decisions and isinstance(permission.get("tool_call"), dict):
+            approval_decisions = [permission]
+
+        approval = {"approved": False, "reason": "approval rejected"}
+        for index, decision in enumerate(approval_decisions, start=1):
+            tool_call = decision["tool_call"]
+            reason = decision.get("reason") or "approval required"
+            message = f"Approval required for tool call: {reason}"
             tool_name = tool_call.get("name")
 
-        _emit_progress(components, loop_index, "approval_required", tool=tool_name)
-        _log_trace(
-            components,
-            "langgraph_approval_required",
-            {
-                "loop": loop_index,
-                "tool_call": _tool_call_payload(tool_call) if isinstance(tool_call, dict) else None,
-                "permission": _permission_payload(permission),
-                "message": message,
-            },
-        )
+            _emit_progress(components, loop_index, "approval_required", tool=tool_name)
+            _log_trace(
+                components,
+                "langgraph_approval_required",
+                {
+                    "loop": loop_index,
+                    "tool_call": _tool_call_payload(tool_call),
+                    "permission": _permission_payload(permission),
+                    "approval_index": index,
+                    "approval_count": len(approval_decisions),
+                    "message": message,
+                },
+            )
 
-        resume = interrupt(
-            {
-                "kind": "approval_required",
-                "tool_call": tool_call,
-                "permission": permission,
-                "message": message,
-            }
-        )
-        if isinstance(resume, dict):
-            approved = bool(resume.get("approved"))
-            approval_reason = str(resume.get("reason") or ("approved" if approved else "approval rejected"))
-        else:
-            approved = bool(resume)
-            approval_reason = "approved" if approved else "approval rejected"
+            resume = interrupt(
+                {
+                    "kind": "approval_required",
+                    "tool_call": tool_call,
+                    "tool_calls": [tool_call],
+                    "permission": permission,
+                    "approval_index": index,
+                    "approval_count": len(approval_decisions),
+                    "message": message,
+                }
+            )
+            if isinstance(resume, dict):
+                approved = bool(resume.get("approved"))
+                approval_reason = str(resume.get("reason") or ("approved" if approved else "approval rejected"))
+            else:
+                approved = bool(resume)
+                approval_reason = "approved" if approved else "approval rejected"
 
-        approval = {"approved": approved, "reason": approval_reason}
-        _emit_progress(components, loop_index, "approval_resumed", tool=tool_name)
-        _log_trace(components, "langgraph_approval_resumed", {"loop": loop_index, "approval": approval})
-        if approved and isinstance(tool_call, dict):
-            _emit_tool_execute_start(components, loop_index, [tool_call])
+            approval = {"approved": approved, "reason": approval_reason}
+            _emit_progress(components, loop_index, "approval_resumed", tool=tool_name)
+            _log_trace(
+                components,
+                "langgraph_approval_resumed",
+                {
+                    "loop": loop_index,
+                    "approval": approval,
+                    "approval_index": index,
+                    "approval_count": len(approval_decisions),
+                },
+            )
+            if not approved:
+                return {"approval": approval}
+
+        executable_tool_calls = permission.get("tool_calls")
+        if approval["approved"] and isinstance(executable_tool_calls, list):
+            _emit_tool_execute_start(components, loop_index, executable_tool_calls)
         return {"approval": approval}
 
     return node
@@ -354,6 +417,18 @@ def _permission_payload(permission: dict[str, Any]) -> dict[str, Any]:
     tool_call = payload.get("tool_call")
     if isinstance(tool_call, dict):
         payload["tool_call"] = _tool_call_payload(tool_call)
+    for key in ("tool_calls", "approval_required_tool_calls"):
+        tool_calls = payload.get(key)
+        if isinstance(tool_calls, list):
+            payload[key] = [
+                _tool_call_payload(raw_tool_call) if isinstance(raw_tool_call, dict) else raw_tool_call
+                for raw_tool_call in tool_calls
+            ]
+    decisions = payload.get("decisions")
+    if isinstance(decisions, list):
+        payload["decisions"] = [
+            _permission_payload(decision) if isinstance(decision, dict) else decision for decision in decisions
+        ]
     return payload
 
 

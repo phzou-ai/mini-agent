@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 
+import pytest
 from langchain_core.messages import AIMessage
 
+from vermay_agent.errors import ModelProviderError
 from vermay_agent.main_agent import (
     DefaultMainAgentRouter,
     DirectModelRouterModelClient,
@@ -52,6 +55,18 @@ class FakeTaskRunner:
             status=TaskStatus.COMPLETED,
             parts=[{"kind": "text", "text": "resumed task answer"}],
         )
+
+
+@dataclass
+class DeferredTaskSubmitter:
+    pending: list[tuple[object, tuple[object, ...]]] = field(default_factory=list)
+
+    def submit(self, func, *args):
+        self.pending.append((func, args))
+
+    def run_next(self) -> None:
+        func, args = self.pending.pop(0)
+        func(*args)
 
 
 @dataclass
@@ -357,6 +372,152 @@ def test_main_agent_core_local_task_runner_persists_output_message_artifact_and_
     assert runner.calls[0][1] == task.runtime_thread_id
 
 
+def test_main_agent_core_background_task_returns_while_execution_is_queued(tmp_path):
+    store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
+    runner = FakeTaskRunner()
+    submitter = DeferredTaskSubmitter()
+    core = MainAgentCore(
+        store=store,
+        local_message_responder=FakeResponder(),
+        local_task_runner=runner,
+        task_submitter=submitter,
+    )
+    context = store.create_context(context_id="ctx-1")
+
+    result = core.handle_message(
+        MainAgentRequest(
+            context_id=context.context_id,
+            message_id="msg-user-1",
+            role=MessageRole.USER,
+            parts=[{"kind": "text", "text": "run in background"}],
+            metadata={"executionMode": "task"},
+        )
+    )
+
+    task = store.get_task(result.task_id)
+    assert task is not None
+    assert task.status == TaskStatus.QUEUED
+    assert runner.calls == []
+    assert [event.type for event in store.list_task_events(result.task_id)] == [
+        "task_created",
+        "task_queued",
+    ]
+
+    submitter.run_next()
+
+    task = store.get_task(result.task_id)
+    assert task is not None
+    assert task.status == TaskStatus.COMPLETED
+    assert [event.type for event in store.list_task_events(result.task_id)] == [
+        "task_created",
+        "task_queued",
+        "task_started",
+        "task_artifact_created",
+        "task_completed",
+    ]
+
+
+def test_main_agent_core_running_background_task_honors_cancel_at_safe_boundary(tmp_path):
+    class BlockingRunner:
+        def __init__(self) -> None:
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def run(self, messages: list[MessageRecord], *, thread_id: str) -> LocalTaskRunResult:
+            self.started.set()
+            assert self.release.wait(timeout=2)
+            return LocalTaskRunResult(
+                status=TaskStatus.COMPLETED,
+                parts=[{"kind": "text", "text": "late answer"}],
+            )
+
+    class ThreadTaskSubmitter:
+        def __init__(self) -> None:
+            self.threads: list[threading.Thread] = []
+
+        def submit(self, func, *args):
+            thread = threading.Thread(target=func, args=args)
+            self.threads.append(thread)
+            thread.start()
+            return thread
+
+    store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
+    runner = BlockingRunner()
+    submitter = ThreadTaskSubmitter()
+    core = MainAgentCore(
+        store=store,
+        local_message_responder=FakeResponder(),
+        local_task_runner=runner,
+        task_submitter=submitter,
+    )
+    context = store.create_context(context_id="ctx-1")
+
+    result = core.handle_message(
+        MainAgentRequest(
+            context_id=context.context_id,
+            message_id="msg-user-1",
+            role=MessageRole.USER,
+            parts=[{"kind": "text", "text": "run then cancel"}],
+            metadata={"executionMode": "task"},
+        )
+    )
+    assert runner.started.wait(timeout=2)
+
+    cancel_requested = core.cancel_task(result.task_id, reason="operator requested")
+    assert cancel_requested.status == TaskStatus.CANCEL_REQUESTED
+
+    runner.release.set()
+    for thread in submitter.threads:
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+    task = store.get_task(result.task_id)
+    assert task is not None
+    assert task.status == TaskStatus.CANCELED
+    assert task.output_message_id is None
+    assert store.list_task_artifacts(result.task_id) == []
+    assert [event.type for event in store.list_task_events(result.task_id)] == [
+        "task_created",
+        "task_queued",
+        "task_started",
+        "task_cancel_requested",
+        "task_cancelled",
+    ]
+
+
+def test_main_agent_core_background_resume_rejects_duplicate_request(tmp_path):
+    class ApprovalRunner(FakeTaskRunner):
+        def run(self, messages: list[MessageRecord], *, thread_id: str) -> LocalTaskRunResult:
+            return LocalTaskRunResult(status=TaskStatus.INPUT_REQUIRED)
+
+    store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
+    submitter = DeferredTaskSubmitter()
+    core = MainAgentCore(
+        store=store,
+        local_message_responder=FakeResponder(),
+        local_task_runner=ApprovalRunner(),
+        task_submitter=submitter,
+    )
+    context = store.create_context(context_id="ctx-1")
+    result = core.handle_message(
+        MainAgentRequest(
+            context_id=context.context_id,
+            message_id="msg-user-1",
+            role=MessageRole.USER,
+            parts=[{"kind": "text", "text": "approve"}],
+            metadata={"executionMode": "task"},
+        )
+    )
+    submitter.run_next()
+
+    resumed = core.resume_task(result.task_id, approved=True)
+
+    assert resumed.status == TaskStatus.QUEUED
+    with pytest.raises(ValueError, match="task is not waiting for approval"):
+        core.resume_task(result.task_id, approved=True)
+    assert len(submitter.pending) == 1
+
+
 def test_main_agent_core_does_not_overwrite_terminal_task_status_after_runner_returns(tmp_path):
     class CancelBeforeCompleteRunner:
         def __init__(self, store: MainAgentStore) -> None:
@@ -472,13 +633,52 @@ def test_main_agent_core_local_task_runner_failure_marks_task_failed(tmp_path):
     task = store.get_task(result.task_id)
     assert task is not None
     assert task.status == TaskStatus.FAILED
-    assert task.error_code == "RuntimeError"
-    assert task.error_message == "runtime failed"
+    assert task.error_code == "runtime_error"
+    assert task.error_message == "Agent execution failed."
     assert [event.type for event in store.list_task_events(result.task_id)] == [
         "task_created",
         "task_started",
         "task_failed",
     ]
+
+
+def test_main_agent_core_model_failure_uses_model_error_code_and_retryability(tmp_path):
+    class FailingRunner:
+        def run(self, messages: list[MessageRecord], *, thread_id: str) -> LocalTaskRunResult:
+            raise ModelProviderError(
+                "Ollama request failed: connection refused",
+                provider="ollama",
+                retryable=True,
+            )
+
+    store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
+    core = MainAgentCore(
+        store=store,
+        local_message_responder=FakeResponder(),
+        local_task_runner=FailingRunner(),
+    )
+    context = store.create_context(context_id="ctx-1")
+
+    result = core.handle_message(
+        MainAgentRequest(
+            context_id=context.context_id,
+            message_id="msg-user-1",
+            role=MessageRole.USER,
+            parts=[{"kind": "text", "text": "run"}],
+            metadata={"executionMode": "task"},
+        )
+    )
+
+    task = store.get_task(result.task_id)
+    assert task is not None
+    assert task.status == TaskStatus.FAILED
+    assert task.error_code == "model_error"
+    assert task.error_message == "Model request failed."
+    assert store.list_task_events(result.task_id)[-1].payload == {
+        "error_code": "model_error",
+        "error_message": "Model request failed.",
+        "retryable": True,
+    }
 
 
 def test_main_agent_core_local_task_runner_can_leave_task_running(tmp_path):

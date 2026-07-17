@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from vermay_agent.errors import error_info_from_exception
+from vermay_agent.errors import error_info_from_exception, public_error_payload
 
 from .adapter import A2AAdapter
 from .projection import is_terminal_a2a_state
@@ -62,12 +62,7 @@ def create_a2a_router(adapter: A2AAdapter) -> APIRouter:
                 else:
                     error = error_info_from_exception(exc)
                     yield _format_a2a_sse_event(
-                        {
-                            "error": {
-                                "code": error.code.value,
-                                "message": error.public_message,
-                            }
-                        }
+                        {"error": public_error_payload(error)}
                     )
 
         return StreamingResponse(
@@ -591,10 +586,7 @@ def _a2a_http_exception(exc: Exception) -> HTTPException:
     error = error_info_from_exception(exc)
     return HTTPException(
         status_code=error.http_status,
-        detail={
-            "code": error.code.value,
-            "message": error.public_message,
-        },
+        detail=public_error_payload(error),
     )
 
 

@@ -157,13 +157,7 @@ class A2AAdapter:
             if delegation is not None:
                 updated = self._cancel_remote_proxy_task(main_task, delegation=delegation, reason=reason)
                 return _jsonrpc_success(f"cancel-{task_id}", task_to_a2a_payload(updated))
-            updated = self.main_agent_core.store.update_task_status(task_id, MainAgentTaskStatus.CANCELED)
-            self.main_agent_core.store.append_task_event(
-                task_id=task_id,
-                type="task_cancelled",
-                status=MainAgentTaskStatus.CANCELED,
-                payload={"reason": reason} if reason else {},
-            )
+            updated = self.main_agent_core.cancel_task(task_id, reason=reason)
             return _jsonrpc_success(f"cancel-{task_id}", task_to_a2a_payload(updated))
         task = self.service.cancel_task(task_id, reason=reason)
         return self.project_task(task)
@@ -205,7 +199,11 @@ class A2AAdapter:
         main_task = self._get_main_agent_task(task_id)
         if main_task is not None:
             main_task = self._sync_remote_proxy_task(main_task)
-            events = self.main_agent_core.store.list_task_events(task_id, after_event_id=after_event_id)
+            events = self.main_agent_core.store.wait_for_task_events(
+                task_id,
+                after_event_id=after_event_id,
+                timeout_seconds=timeout_seconds,
+            )
             projected = [
                 _jsonrpc_success(
                     f"event-{event.event_id}",

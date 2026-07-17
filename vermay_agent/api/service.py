@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import threading
 from dataclasses import dataclass
 from typing import Callable
 from uuid import uuid4
@@ -56,7 +55,6 @@ class AgentService:
         self.runtime_builder = runtime_builder
         self.lifecycle_observer = lifecycle_observer or NullLifecycleObserver()
         self._default_runtime = runtime_builder(self.default_config)
-        self._default_runtime_lock = threading.RLock()
         self._execution_locks = TaskExecutionLocks(conflict_error=SessionConflictError)
         self._task_event_notifier = TaskEventNotifier()
         self.task_execution_service = task_execution_service or TaskExecutionService()
@@ -447,11 +445,7 @@ class AgentService:
         runtime = None
         try:
             runtime = self._runtime_for(options)
-            if runtime is self._default_runtime:
-                with self._default_runtime_lock:
-                    result = runtime.start(task.input, thread_id=task.thread_id)
-            else:
-                result = runtime.start(task.input, thread_id=task.thread_id)
+            result = runtime.start(task.input, thread_id=task.thread_id)
             return self._save_task_runtime_result(task, result, options, lifecycle)
         except Exception as exc:
             return self._mark_task_runtime_failed(task, lifecycle, exc)
@@ -471,11 +465,7 @@ class AgentService:
         runtime = None
         try:
             runtime = self._runtime_for(options)
-            if runtime is self._default_runtime:
-                with self._default_runtime_lock:
-                    result = runtime.resume(thread_id=task.thread_id, approved=approved, reason=reason)
-            else:
-                result = runtime.resume(thread_id=task.thread_id, approved=approved, reason=reason)
+            result = runtime.resume(thread_id=task.thread_id, approved=approved, reason=reason)
             return self._save_task_runtime_result(task, result, options, lifecycle)
         except Exception as exc:
             return self._mark_task_runtime_failed(task, lifecycle, exc)
@@ -542,13 +532,16 @@ class AgentService:
             error_code=error.code.value,
             error_message=error.message,
         )
+        failure_payload = {"error_code": error.code.value}
+        if hasattr(exc, "retryable"):
+            failure_payload["retryable"] = bool(exc.retryable)
         self._record_task_event(
             updated.task_id,
             Event.FAILED.value,
             status="failed",
-            payload={"error_code": error.code.value},
+            payload=failure_payload,
         )
-        self._emit_lifecycle(Event.FAILED.value, lifecycle, status="failed", error_code=error.code.value)
+        self._emit_lifecycle(Event.FAILED.value, lifecycle, status="failed", **failure_payload)
         raise exc
 
     def _mark_task_canceled_after_safe_boundary(
@@ -623,11 +616,12 @@ class AgentService:
         *,
         status: str,
         error_code: str | None = None,
+        retryable: bool | None = None,
     ) -> None:
         try:
             self.lifecycle_observer.emit(
                 event_type,
-                lifecycle_payload(context, status=status, error_code=error_code),
+                lifecycle_payload(context, status=status, error_code=error_code, retryable=retryable),
             )
         except Exception:
             return None

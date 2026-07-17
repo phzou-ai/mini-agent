@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
+from urllib.error import HTTPError, URLError
 
+import pytest
+
+from vermay_agent.errors import ModelProtocolError, ModelProviderError
 from vermay_agent.model_clients.openai_compatible import OpenAICompatibleModelClient
 from vermay_agent.types import Message
 
@@ -125,6 +130,140 @@ def test_openai_compatible_client_preserves_returned_tool_call_id(monkeypatch):
     assert response.tool_call.id == "call-1"
     assert response.tool_call.name == "echo"
     assert response.tool_call.arguments == {"value": "hi"}
+
+
+def test_openai_compatible_client_preserves_all_returned_tool_calls(monkeypatch):
+    def fake_urlopen(request, timeout):
+        return FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "type": "function",
+                                    "function": {"name": "echo", "arguments": "{\"value\":\"first\"}"},
+                                },
+                                {
+                                    "id": "call-2",
+                                    "type": "function",
+                                    "function": {"name": "echo", "arguments": "{\"value\":\"second\"}"},
+                                },
+                            ]
+                        }
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    client = OpenAICompatibleModelClient(model="gpt-4o", base_url="https://api.openai.com/v1")
+    response = client.invoke([Message(role="user", content="hello")], tools=[{"name": "echo"}])
+
+    assert response.content == "Calling tools: echo, echo."
+    assert [tool_call.id for tool_call in response.tool_calls] == ["call-1", "call-2"]
+    assert [tool_call.arguments for tool_call in response.tool_calls] == [
+        {"value": "first"},
+        {"value": "second"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "status_code, retryable",
+    [
+        (401, False),
+        (429, True),
+        (503, True),
+    ],
+)
+def test_openai_compatible_client_raises_typed_http_errors(monkeypatch, status_code, retryable):
+    def fake_urlopen(request, timeout):
+        raise HTTPError(
+            url=request.full_url,
+            code=status_code,
+            msg="request failed",
+            hdrs={},
+            fp=BytesIO(b'{"error":{"message":"provider unavailable"}}'),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = OpenAICompatibleModelClient(model="gpt-4o", base_url="https://api.openai.com/v1")
+
+    with pytest.raises(ModelProviderError, match=f"HTTP {status_code}") as raised:
+        client.invoke([Message(role="user", content="hello")], tools=[])
+
+    assert raised.value.provider == "openai_compatible"
+    assert raised.value.status_code == status_code
+    assert raised.value.retryable is retryable
+
+
+def test_openai_compatible_client_marks_connection_errors_retryable(monkeypatch):
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda request, timeout: (_ for _ in ()).throw(URLError("connection refused")),
+    )
+    client = OpenAICompatibleModelClient(model="gpt-4o", base_url="https://api.openai.com/v1")
+
+    with pytest.raises(ModelProviderError, match="connection refused") as raised:
+        client.invoke([Message(role="user", content="hello")], tools=[])
+
+    assert raised.value.retryable is True
+
+
+def test_openai_compatible_client_marks_timeout_errors_retryable(monkeypatch):
+    def fake_urlopen(request, timeout):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = OpenAICompatibleModelClient(model="gpt-4o", base_url="https://api.openai.com/v1")
+
+    with pytest.raises(ModelProviderError, match="timed out") as raised:
+        client.invoke([Message(role="user", content="hello")], tools=[])
+
+    assert raised.value.retryable is True
+
+
+def test_openai_compatible_client_raises_protocol_error_for_invalid_response(monkeypatch):
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda request, timeout: FakeResponse({"choices": []}),
+    )
+    client = OpenAICompatibleModelClient(model="gpt-4o", base_url="https://api.openai.com/v1")
+
+    with pytest.raises(ModelProtocolError, match="Invalid OpenAI-compatible response") as raised:
+        client.invoke([Message(role="user", content="hello")], tools=[])
+
+    assert raised.value.provider == "openai_compatible"
+    assert raised.value.retryable is False
+
+
+def test_openai_compatible_client_rejects_invalid_tool_arguments(monkeypatch):
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda request, timeout: FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "type": "function",
+                                    "function": {"name": "echo", "arguments": "not-json"},
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        ),
+    )
+    client = OpenAICompatibleModelClient(model="gpt-4o", base_url="https://api.openai.com/v1")
+
+    with pytest.raises(ModelProtocolError, match="arguments must be a JSON object"):
+        client.invoke([Message(role="user", content="hello")], tools=[{"name": "echo"}])
 
 
 def test_openai_compatible_client_parses_embedded_json_tool_action(monkeypatch):

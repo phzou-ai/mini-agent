@@ -39,7 +39,11 @@ export async function POST(request: NextRequest) {
         }
       }
       return NextResponse.json(
-        { status: 502, message: "Unsupported A2A result kind" },
+        {
+          code: "unsupported_a2a_result",
+          message: "Unsupported A2A result kind.",
+          retryable: false,
+        },
         { status: 502 }
       )
     },

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from vermay_agent.main_agent import (
@@ -78,6 +80,49 @@ def test_main_agent_store_persists_context_message_route_task_event_artifact(tmp
         "msg-user-1",
         "msg-agent-1",
     ]
+
+
+def test_main_agent_store_wait_for_task_events_is_notified_by_new_event(tmp_path):
+    store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
+    store.create_context(context_id="ctx-1")
+    message = store.append_message(
+        message_id="msg-1",
+        context_id="ctx-1",
+        role=MessageRole.USER,
+        parts=[{"kind": "text", "text": "run"}],
+    )
+    task = store.create_task(
+        task_id="task-1",
+        context_id="ctx-1",
+        input_message_id=message.message_id,
+        runtime_thread_id="thread-1",
+        status=TaskStatus.QUEUED,
+    )
+    waiting = threading.Event()
+    received = []
+
+    def wait_for_event() -> None:
+        waiting.set()
+        received.extend(
+            store.wait_for_task_events(
+                task.task_id,
+                after_event_id=0,
+                timeout_seconds=2,
+            )
+        )
+
+    thread = threading.Thread(target=wait_for_event)
+    thread.start()
+    assert waiting.wait(timeout=2)
+    event = store.append_task_event(
+        task_id=task.task_id,
+        type="task_started",
+        status=TaskStatus.RUNNING,
+    )
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert received == [event]
 
 
 def test_main_agent_store_message_idempotency_and_conflict(tmp_path):

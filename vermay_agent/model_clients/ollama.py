@@ -5,8 +5,13 @@ import urllib.error
 import urllib.request
 from typing import Iterator
 
-from .json_decision import parse_json_decision
+from vermay_agent.errors import ModelProtocolError, ModelProviderError
 from vermay_agent.types import Message, ModelResponse, ToolCall
+
+from .json_decision import parse_json_decision
+
+
+PROVIDER = "ollama"
 
 
 class OllamaModelClient:
@@ -41,17 +46,42 @@ class OllamaModelClient:
 
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                raw = response.read().decode("utf-8")
+                response_bytes = response.read()
         except urllib.error.HTTPError as exc:
-            return ModelResponse(content=self._format_http_error(exc))
+            raise ModelProviderError(
+                self._format_http_error(exc),
+                provider=PROVIDER,
+                status_code=exc.code,
+                retryable=_retryable_http_status(exc.code),
+            ) from exc
         except urllib.error.URLError as exc:
-            return ModelResponse(content=f"Ollama request failed: {exc}")
+            raise ModelProviderError(
+                f"Ollama request failed: {exc}",
+                provider=PROVIDER,
+                retryable=True,
+            ) from exc
+        except TimeoutError as exc:
+            raise ModelProviderError(
+                f"Ollama request timed out: {exc}",
+                provider=PROVIDER,
+                retryable=True,
+            ) from exc
+
+        try:
+            raw = response_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ModelProtocolError(
+                "Invalid Ollama response: response body is not UTF-8",
+                provider=PROVIDER,
+            ) from exc
 
         try:
             body = json.loads(raw)
             content = body["message"]["content"]
         except (KeyError, json.JSONDecodeError, TypeError) as exc:
-            return ModelResponse(content=f"Invalid Ollama response: {exc}; raw={raw[:1000]}")
+            raise _protocol_error(exc, raw) from exc
+        if not isinstance(content, str):
+            raise _protocol_error(TypeError("message.content must be a string"), raw)
 
         return self._parse_content(content)
 
@@ -81,17 +111,46 @@ class OllamaModelClient:
                         continue
                     try:
                         body = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    content = body.get("message", {}).get("content", "")
-                    if isinstance(content, str) and content:
+                    except json.JSONDecodeError as exc:
+                        raise _protocol_error(exc, line) from exc
+                    if not isinstance(body, dict):
+                        raise _protocol_error(TypeError("stream event must be an object"), line)
+                    error = body.get("error")
+                    if isinstance(error, str) and error:
+                        raise ModelProviderError(
+                            f"Ollama request failed: {error}",
+                            provider=PROVIDER,
+                            retryable=True,
+                        )
+                    message = body.get("message", {})
+                    if not isinstance(message, dict):
+                        raise _protocol_error(TypeError("stream message must be an object"), line)
+                    content = message.get("content", "")
+                    if not isinstance(content, str):
+                        raise _protocol_error(TypeError("stream message.content must be a string"), line)
+                    if content:
                         yield content
                     if body.get("done") is True:
                         break
         except urllib.error.HTTPError as exc:
-            yield self._format_http_error(exc)
+            raise ModelProviderError(
+                self._format_http_error(exc),
+                provider=PROVIDER,
+                status_code=exc.code,
+                retryable=_retryable_http_status(exc.code),
+            ) from exc
         except urllib.error.URLError as exc:
-            yield f"Ollama request failed: {exc}"
+            raise ModelProviderError(
+                f"Ollama request failed: {exc}",
+                provider=PROVIDER,
+                retryable=True,
+            ) from exc
+        except TimeoutError as exc:
+            raise ModelProviderError(
+                f"Ollama request timed out: {exc}",
+                provider=PROVIDER,
+                retryable=True,
+            ) from exc
 
     def _format_http_error(self, exc: urllib.error.HTTPError) -> str:
         detail = ""
@@ -175,7 +234,10 @@ class OllamaModelClient:
             arguments = decision.get("arguments", {})
             if not isinstance(name, str) or not isinstance(arguments, dict):
                 return ModelResponse(content=f"Invalid tool_call decision: {decision}")
-            return ModelResponse(content=f"Calling tool {name}.", tool_call=ToolCall(name=name, arguments=arguments))
+            return ModelResponse(
+                content=f"Calling tool {name}.",
+                tool_calls=[ToolCall(name=name, arguments=arguments)],
+            )
 
         if action == "final":
             content = decision.get("content")
@@ -193,3 +255,14 @@ class OllamaModelClient:
             return ModelResponse(content=json.dumps(decision, ensure_ascii=False))
 
         return ModelResponse(content=f"Invalid model action: {decision}")
+
+
+def _retryable_http_status(status_code: int) -> bool:
+    return status_code in {408, 409, 425, 429} or status_code >= 500
+
+
+def _protocol_error(exc: Exception, raw: str) -> ModelProtocolError:
+    return ModelProtocolError(
+        f"Invalid Ollama response: {exc}; raw={raw[:1000]}",
+        provider=PROVIDER,
+    )

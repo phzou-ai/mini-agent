@@ -133,6 +133,12 @@ python -m pip install -e .
 
 Python 3.11 or newer is required.
 
+Contributors running tests should install the development extra instead:
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
 ## CLI Quick Start
 
 ```bash
@@ -194,6 +200,30 @@ Override the backend URL when needed:
 ```bash
 VERMAY_AGENT_API_BASE=http://127.0.0.1:8000 pnpm dev
 ```
+
+## Runtime And Release Boundary
+
+The supported `0.1.x` release is a source checkout or source archive. The Python backend and private Next.js frontend are built and operated as separate processes; the backend does not serve the frontend bundle. PyPI wheels, npm publication, container images, and a combined executable are not maintained release artifacts yet.
+
+For a production-style local deployment, run `vermay-agent serve` on localhost and run the built frontend with `pnpm build && pnpm start`. The backend has no built-in authentication and must not be exposed directly to an untrusted network. Secrets belong in environment variables or an untracked `.env`, while SQLite databases, checkpoints, traces, and generated proposals are runtime state rather than source-release content.
+
+See [Runtime and Release Boundary](docs/runtime-and-release.md) for supported commands, persistence requirements, public service boundaries, and the release checklist.
+
+Validate a clean source release with:
+
+```bash
+scripts/check_source_release.sh
+```
+
+## Full-Stack Regression
+
+Run the deterministic backend and migrated-frontend regression gate:
+
+```bash
+scripts/check_full_stack_regression.sh
+```
+
+It does not require a live model or MCP server. See [Full-Stack Regression Baseline](docs/full-stack-regression.md) for the optional live E2E gate and the public error contract.
 
 ## Backend Smoke Checks
 

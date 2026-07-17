@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import logging
+import threading
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Callable, Iterator, Protocol
 from uuid import uuid4
+
+from vermay_agent.errors import error_info_from_exception
 
 from .context import recent_messages
 from .models import (
@@ -25,11 +29,18 @@ from .store import MainAgentStore
 from .task_runner import LocalTaskRunner
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass(frozen=True)
 class _PreparedMessageRoute:
     context_id: str
     input_message_id: str
     route_decision: MainAgentRouteDecision
+
+
+class TaskSubmitter(Protocol):
+    def submit(self, func: Callable[..., object], *args: object) -> object: ...
 
 
 class MainAgentCore:
@@ -41,12 +52,16 @@ class MainAgentCore:
         local_task_runner: LocalTaskRunner | None = None,
         remote_agent_client: RemoteAgentClient | None = None,
         router: MainAgentRouter | None = None,
+        task_submitter: TaskSubmitter | None = None,
     ) -> None:
         self.store = store
         self.local_message_responder = local_message_responder
         self.local_task_runner = local_task_runner
         self.remote_agent_client = remote_agent_client
         self.router = router or DefaultMainAgentRouter()
+        self.task_submitter = task_submitter
+        self._active_task_guard = threading.RLock()
+        self._active_task_ids: set[str] = set()
 
     def handle_message(self, request: MainAgentRequest) -> MainAgentResult:
         prepared = self._prepare_message_route(request)
@@ -157,32 +172,69 @@ class MainAgentCore:
         return context_id
 
     def resume_task(self, task_id: str, *, approved: bool, reason: str | None = None):
-        task = self.store.get_task(task_id)
-        if task is None:
+        if self.store.get_task(task_id) is None:
             raise ValueError(f"unknown task: {task_id}")
-        if task.status not in {TaskStatus.INPUT_REQUIRED, TaskStatus.AUTH_REQUIRED}:
-            raise ValueError(f"task is not waiting for approval: {task_id}")
         if self.local_task_runner is None:
             raise ValueError("local task runner is not configured")
 
+        if self.task_submitter is None:
+            return self._resume_local_task(task_id, approved=approved, reason=reason)
+
         with self.store.transaction():
+            task = self.store.get_task(task_id)
+            if task is None:
+                raise ValueError(f"unknown task: {task_id}")
+            if task.status not in {TaskStatus.INPUT_REQUIRED, TaskStatus.AUTH_REQUIRED}:
+                raise ValueError(f"task is not waiting for approval: {task_id}")
             self.store.append_task_event(
                 task_id=task_id,
                 type="task_resumed",
                 status=task.status,
                 payload={"approved": approved, **({"reason": reason} if reason else {})},
             )
-            task = self.store.update_task_status(task_id, TaskStatus.RUNNING)
-            self.store.append_task_event(task_id=task_id, type="task_started", status=TaskStatus.RUNNING)
+            task = self.store.update_task_status(task_id, TaskStatus.QUEUED)
+            self.store.append_task_event(task_id=task_id, type="task_queued", status=TaskStatus.QUEUED)
         try:
-            result = self.local_task_runner.resume(
-                thread_id=task.runtime_thread_id,
-                approved=approved,
-                reason=reason,
-            )
+            self.task_submitter.submit(self._resume_local_task_in_background, task_id, approved, reason)
         except Exception as exc:
             return self._mark_local_task_failed(task_id, exc)
-        return self._save_local_task_result(task_id, result)
+        return task
+
+    def cancel_task(self, task_id: str, *, reason: str | None = None):
+        with self.store.transaction():
+            task = self.store.get_task(task_id)
+            if task is None:
+                raise ValueError(f"unknown task: {task_id}")
+            if is_terminal_task_status(task.status):
+                raise ValueError(f"task is terminal and cannot be canceled: {task_id}")
+            if task.status == TaskStatus.CANCEL_REQUESTED:
+                return task
+
+            payload = {"reason": reason} if reason else {}
+            if task.status == TaskStatus.RUNNING and self._is_task_active(task_id):
+                task = self.store.update_task_status(task_id, TaskStatus.CANCEL_REQUESTED)
+                self.store.append_task_event(
+                    task_id=task_id,
+                    type="task_cancel_requested",
+                    status=TaskStatus.CANCEL_REQUESTED,
+                    payload=payload,
+                )
+                return task
+
+            self.store.append_task_event(
+                task_id=task_id,
+                type="task_cancel_requested",
+                status=TaskStatus.CANCEL_REQUESTED,
+                payload=payload,
+            )
+            task = self.store.update_task_status(task_id, TaskStatus.CANCELED)
+            self.store.append_task_event(
+                task_id=task_id,
+                type="task_cancelled",
+                status=TaskStatus.CANCELED,
+                payload=payload,
+            )
+            return task
 
     def _handle_local_message(
         self,
@@ -311,7 +363,29 @@ class MainAgentCore:
             )
             self.store.append_task_event(task_id=task.task_id, type="task_created", status=TaskStatus.CREATED)
         if self.local_task_runner is not None:
-            task = self._run_local_task(task.task_id, context_id=context_id, route_decision_id=decision.decision_id)
+            if self.task_submitter is None:
+                task = self._run_local_task(
+                    task.task_id,
+                    context_id=context_id,
+                    route_decision_id=decision.decision_id,
+                )
+            else:
+                with self.store.transaction():
+                    task = self.store.update_task_status(task.task_id, TaskStatus.QUEUED)
+                    self.store.append_task_event(
+                        task_id=task.task_id,
+                        type="task_queued",
+                        status=TaskStatus.QUEUED,
+                    )
+                try:
+                    self.task_submitter.submit(
+                        self._run_local_task_in_background,
+                        task.task_id,
+                        context_id,
+                        decision.decision_id,
+                    )
+                except Exception as exc:
+                    task = self._mark_local_task_failed(task.task_id, exc)
         return LocalTaskResult(
             kind=RouteDecisionKind.LOCAL_TASK,
             context_id=context_id,
@@ -321,14 +395,22 @@ class MainAgentCore:
         )
 
     def _run_local_task(self, task_id: str, *, context_id: str, route_decision_id: str):
-        with self.store.transaction():
-            task = self.store.update_task_status(task_id, TaskStatus.RUNNING)
-            self.store.append_task_event(task_id=task_id, type="task_started", status=TaskStatus.RUNNING)
         try:
-            result = self.local_task_runner.run(
-                recent_messages(self.store, context_id, limit=10),
-                thread_id=task.runtime_thread_id,
-            )
+            with self._track_active_task(task_id):
+                with self.store.transaction():
+                    task = self.store.get_task(task_id)
+                    if task is None:
+                        raise ValueError(f"unknown task: {task_id}")
+                    if is_terminal_task_status(task.status):
+                        return task
+                    if task.status == TaskStatus.CANCEL_REQUESTED:
+                        return self._mark_local_task_canceled_after_safe_boundary(task_id)
+                    task = self.store.update_task_status(task_id, TaskStatus.RUNNING)
+                    self.store.append_task_event(task_id=task_id, type="task_started", status=TaskStatus.RUNNING)
+                result = self.local_task_runner.run(
+                    recent_messages(self.store, context_id, limit=10),
+                    thread_id=task.runtime_thread_id,
+                )
         except Exception as exc:
             return self._mark_local_task_failed(task_id, exc)
 
@@ -338,14 +420,73 @@ class MainAgentCore:
             metadata={"routeDecisionId": route_decision_id},
         )
 
+    def _run_local_task_in_background(self, task_id: str, context_id: str, route_decision_id: str) -> None:
+        try:
+            self._run_local_task(task_id, context_id=context_id, route_decision_id=route_decision_id)
+        except Exception as exc:
+            self._mark_local_task_failed(task_id, exc)
+
+    def _resume_local_task(self, task_id: str, *, approved: bool, reason: str | None = None):
+        with self._track_active_task(task_id):
+            with self.store.transaction():
+                task = self.store.get_task(task_id)
+                if task is None:
+                    raise ValueError(f"unknown task: {task_id}")
+                if is_terminal_task_status(task.status):
+                    if self.task_submitter is None:
+                        raise ValueError(f"task is not waiting for approval: {task_id}")
+                    return task
+                if task.status == TaskStatus.CANCEL_REQUESTED:
+                    return self._mark_local_task_canceled_after_safe_boundary(task_id)
+                resumable_statuses = (
+                    {TaskStatus.INPUT_REQUIRED, TaskStatus.AUTH_REQUIRED}
+                    if self.task_submitter is None
+                    else {TaskStatus.QUEUED}
+                )
+                if task.status not in resumable_statuses:
+                    raise ValueError(f"task is not waiting for approval: {task_id}")
+                if self.task_submitter is None:
+                    self.store.append_task_event(
+                        task_id=task_id,
+                        type="task_resumed",
+                        status=task.status,
+                        payload={"approved": approved, **({"reason": reason} if reason else {})},
+                    )
+                task = self.store.update_task_status(task_id, TaskStatus.RUNNING)
+                self.store.append_task_event(task_id=task_id, type="task_started", status=TaskStatus.RUNNING)
+            try:
+                result = self.local_task_runner.resume(
+                    thread_id=task.runtime_thread_id,
+                    approved=approved,
+                    reason=reason,
+                )
+            except Exception as exc:
+                return self._mark_local_task_failed(task_id, exc)
+        return self._save_local_task_result(task_id, result)
+
+    def _resume_local_task_in_background(self, task_id: str, approved: bool, reason: str | None) -> None:
+        try:
+            self._resume_local_task(task_id, approved=approved, reason=reason)
+        except Exception as exc:
+            self._mark_local_task_failed(task_id, exc)
+
     def _save_local_task_result(self, task_id: str, result, *, metadata: dict | None = None):
         task = self.store.get_task(task_id)
         if task is None:
             raise ValueError(f"unknown task: {task_id}")
         if is_terminal_task_status(task.status):
             return task
+        if task.status == TaskStatus.CANCEL_REQUESTED:
+            return self._mark_local_task_canceled_after_safe_boundary(task_id)
         if result.status == TaskStatus.COMPLETED:
             with self.store.transaction():
+                task = self.store.get_task(task_id)
+                if task is None:
+                    raise ValueError(f"unknown task: {task_id}")
+                if is_terminal_task_status(task.status):
+                    return task
+                if task.status == TaskStatus.CANCEL_REQUESTED:
+                    return self._mark_local_task_canceled_after_safe_boundary(task_id)
                 assistant_message = self.store.append_message(
                     message_id=_new_id("msg"),
                     context_id=task.context_id,
@@ -387,6 +528,13 @@ class MainAgentCore:
             if result.status == TaskStatus.RUNNING:
                 return task
             with self.store.transaction():
+                task = self.store.get_task(task_id)
+                if task is None:
+                    raise ValueError(f"unknown task: {task_id}")
+                if is_terminal_task_status(task.status):
+                    return task
+                if task.status == TaskStatus.CANCEL_REQUESTED:
+                    return self._mark_local_task_canceled_after_safe_boundary(task_id)
                 active = self.store.update_task_status(task_id, result.status)
                 self.store.append_task_event(
                     task_id=task_id,
@@ -397,6 +545,13 @@ class MainAgentCore:
             return active
 
         with self.store.transaction():
+            task = self.store.get_task(task_id)
+            if task is None:
+                raise ValueError(f"unknown task: {task_id}")
+            if is_terminal_task_status(task.status):
+                return task
+            if task.status == TaskStatus.CANCEL_REQUESTED:
+                return self._mark_local_task_canceled_after_safe_boundary(task_id)
             failed = self.store.update_task_status(
                 task_id,
                 TaskStatus.FAILED,
@@ -412,23 +567,58 @@ class MainAgentCore:
         return failed
 
     def _mark_local_task_failed(self, task_id: str, exc: Exception):
-        task = self.store.get_task(task_id)
-        if task is not None and is_terminal_task_status(task.status):
-            return task
+        error = error_info_from_exception(exc)
+        error_code = error.code.value
+        error_message = error.public_message
+        failure_payload = {
+            "error_code": error_code,
+            "error_message": error_message,
+            "retryable": error.retryable,
+        }
+        logger.exception("Local task %s failed: %s", task_id, error.message)
         with self.store.transaction():
+            task = self.store.get_task(task_id)
+            if task is None:
+                raise ValueError(f"unknown task: {task_id}")
+            if is_terminal_task_status(task.status):
+                return task
+            if task.status == TaskStatus.CANCEL_REQUESTED:
+                return self._mark_local_task_canceled_after_safe_boundary(task_id)
             failed = self.store.update_task_status(
                 task_id,
                 TaskStatus.FAILED,
-                error_code=exc.__class__.__name__,
-                error_message=str(exc),
+                error_code=error_code,
+                error_message=error_message,
             )
             self.store.append_task_event(
                 task_id=task_id,
                 type="task_failed",
                 status=TaskStatus.FAILED,
-                payload={"error_code": failed.error_code, "error_message": failed.error_message},
+                payload=failure_payload,
             )
         return failed
+
+    def _mark_local_task_canceled_after_safe_boundary(self, task_id: str):
+        with self.store.transaction():
+            task = self.store.get_task(task_id)
+            if task is None:
+                raise ValueError(f"unknown task: {task_id}")
+            if task.status == TaskStatus.CANCELED or is_terminal_task_status(task.status):
+                return task
+            task = self.store.update_task_status(task_id, TaskStatus.CANCELED)
+            self.store.append_task_event(
+                task_id=task_id,
+                type="task_cancelled",
+                status=TaskStatus.CANCELED,
+            )
+            return task
+
+    def _track_active_task(self, task_id: str):
+        return _ActiveTaskExecution(self._active_task_guard, self._active_task_ids, task_id)
+
+    def _is_task_active(self, task_id: str) -> bool:
+        with self._active_task_guard:
+            return task_id in self._active_task_ids
 
     def _handle_remote_agent(
         self,
@@ -603,3 +793,18 @@ def _target_agent_id_from_metadata(metadata: dict) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
+
+
+class _ActiveTaskExecution:
+    def __init__(self, guard: threading.RLock, active_task_ids: set[str], task_id: str) -> None:
+        self._guard = guard
+        self._active_task_ids = active_task_ids
+        self._task_id = task_id
+
+    def __enter__(self) -> None:
+        with self._guard:
+            self._active_task_ids.add(self._task_id)
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        with self._guard:
+            self._active_task_ids.discard(self._task_id)

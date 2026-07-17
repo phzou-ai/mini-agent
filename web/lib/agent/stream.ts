@@ -3,6 +3,7 @@ import type {
   AgentA2AMessagePayload,
   AgentA2AStreamEnvelope,
 } from "@/lib/agent/types"
+import { RequestError, requestErrorFromResponse } from "@/lib/request"
 
 type AgentA2AStreamHandlers = {
   after?: number
@@ -66,8 +67,20 @@ export async function openAgentA2AMessageStream(
       body: JSON.stringify(payload),
       signal,
     })
-    if (!response.ok || !response.body) {
-      throw new Error(`A2A message stream failed (${response.status})`)
+    if (!response.ok) {
+      throw await requestErrorFromResponse(
+        response,
+        `A2A message stream failed (${response.status})`
+      )
+    }
+    if (!response.body) {
+      throw new RequestError(
+        "A2A message stream returned no response body.",
+        502,
+        undefined,
+        "invalid_a2a_stream",
+        false
+      )
     }
 
     await readSseStream(response.body, onEvent, signal)

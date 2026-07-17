@@ -1,3 +1,5 @@
+import { normalizeAgentError } from "@/lib/agent/error-contract"
+
 type RequestMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
 
 type RequestOptions = {
@@ -8,36 +10,24 @@ type RequestOptions = {
 
 export class RequestError extends Error {
   status: number
+  code: string
+  retryable: boolean
   details?: unknown
 
-  constructor(message: string, status: number, details?: unknown) {
+  constructor(
+    message: string,
+    status: number,
+    details?: unknown,
+    code = "request_error",
+    retryable = false
+  ) {
     super(message)
     this.name = "RequestError"
     this.status = status
+    this.code = code
+    this.retryable = retryable
     this.details = details
   }
-}
-
-function extractErrorMessage(details: unknown, fallback: string) {
-  if (details && typeof details === "object") {
-    if ("msg" in details && typeof details.msg === "string" && details.msg.trim()) {
-      return details.msg
-    }
-
-    if (
-      "message" in details &&
-      typeof details.message === "string" &&
-      details.message.trim()
-    ) {
-      return details.message
-    }
-
-    if ("title" in details && typeof details.title === "string" && details.title.trim()) {
-      return details.title
-    }
-  }
-
-  return fallback
 }
 
 export function getRequestErrorMessage(error: unknown, fallback = "Request failed") {
@@ -82,11 +72,7 @@ async function requestJson<T>(
       }
     }
 
-    throw new RequestError(
-      extractErrorMessage(details, fallbackMessage),
-      response.status,
-      details
-    )
+    throw requestErrorFromDetails(response.status, details, fallbackMessage)
   }
 
   if (response.status === 204) {
@@ -94,6 +80,36 @@ async function requestJson<T>(
   }
 
   return response.json() as Promise<T>
+}
+
+export async function requestErrorFromResponse(
+  response: Response,
+  fallbackMessage = `Request failed (${response.status})`
+) {
+  let details: unknown
+  try {
+    details = await response.clone().json()
+  } catch {
+    details = undefined
+  }
+  return requestErrorFromDetails(response.status, details, fallbackMessage)
+}
+
+function requestErrorFromDetails(
+  status: number,
+  details: unknown,
+  fallbackMessage: string
+) {
+  const error = normalizeAgentError(status, details, {
+    message: fallbackMessage,
+  })
+  return new RequestError(
+    error.message,
+    status,
+    details,
+    error.code,
+    error.retryable
+  )
 }
 
 const requestGet = async <T = any>(

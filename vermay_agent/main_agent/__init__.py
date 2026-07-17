@@ -26,6 +26,7 @@ from .responder import DirectModelLocalMessageResponder, LocalMessageResponder
 from .remote_agent import (
     DirectA2ARemoteAgentClient,
     RemoteAgentClient,
+    RemoteAgentProtocolError,
     RemoteAgentSendResult,
     RemoteAgentTaskSnapshot,
     fetch_agent_card,
@@ -70,6 +71,7 @@ __all__ = [
     "MessageRole",
     "RegisteredAgentRecord",
     "RemoteAgentClient",
+    "RemoteAgentProtocolError",
     "RemoteAgentResult",
     "RemoteAgentSendResult",
     "RemoteAgentTaskSnapshot",

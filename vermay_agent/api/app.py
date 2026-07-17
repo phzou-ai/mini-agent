@@ -8,7 +8,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from vermay_agent.app_factory import DEFAULT_AGENT_STORE_PATH, DEFAULT_MODEL_CONFIG_PATH, RuntimeFactoryConfig, build_runtime
-from vermay_agent.errors import error_info_from_exception
+from vermay_agent.errors import error_info_from_exception, public_error_payload
 from vermay_agent.env_config import load_prefixed_env
 from vermay_agent.langgraph_runtime import build_model_client
 from vermay_agent.main_agent import (
@@ -80,6 +80,7 @@ def create_app(
                 local_task_runner=owned_task_runner,
                 remote_agent_client=DirectA2ARemoteAgentClient(),
                 router=router,
+                task_submitter=owned_service.task_execution_service,
             )
 
     @asynccontextmanager
@@ -87,10 +88,10 @@ def create_app(
         try:
             yield
         finally:
-            if owned_task_runner is not None:
-                owned_task_runner.close()
             if owns_service:
                 owned_service.close()
+            if owned_task_runner is not None:
+                owned_task_runner.close()
             if owned_store is not None:
                 owned_store.close()
 
@@ -256,7 +257,11 @@ def create_app(
         except Exception as exc:
             raise HTTPException(
                 status_code=502,
-                detail={"code": "agent_card_refresh_failed", "message": str(exc)},
+                detail={
+                    "code": "agent_card_refresh_failed",
+                    "message": "Agent card refresh failed.",
+                    "retryable": True,
+                },
             ) from exc
         if refreshed is None:
             raise HTTPException(
@@ -315,10 +320,7 @@ def _http_exception(exc: Exception) -> HTTPException:
     error = error_info_from_exception(exc)
     return HTTPException(
         status_code=error.http_status,
-        detail={
-            "code": error.code.value,
-            "message": error.public_message,
-        },
+        detail=public_error_payload(error),
     )
 
 

@@ -61,8 +61,13 @@ class PermissionDecision:
 @dataclass
 class ModelResponse:
     content: str
-    tool_call: ToolCall | None = None
+    tool_calls: list[ToolCall] = field(default_factory=list)
+
+    @property
+    def tool_call(self) -> ToolCall | None:
+        """Compatibility view for callers that only support one tool call."""
+        return self.tool_calls[0] if self.tool_calls else None
 
     @property
     def has_tool_call(self) -> bool:
-        return self.tool_call is not None
+        return bool(self.tool_calls)

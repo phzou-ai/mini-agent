@@ -27,6 +27,7 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
 import {
+  errorFromA2AStreamEnvelope,
   isA2AFinalMessage,
   isA2APartialMessage,
   textFromA2AParts as textFromParts,
@@ -1130,7 +1131,7 @@ export function AgentConsole() {
           onEvent: (envelope) => {
             receivedStreamEvent = true
             if (envelope.error) {
-              setError("A2A message stream returned an error")
+              setError(errorFromA2AStreamEnvelope(envelope).message)
               return
             }
 
@@ -1774,7 +1775,11 @@ export function AgentConsole() {
 
       <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
         {error && (
-          <div className="border-b border-[#FECACA] bg-[#FEF2F2] px-4 py-2 text-[13px] leading-5 text-[#991B1B] md:px-8">
+          <div
+            role="alert"
+            data-testid="agent-error-banner"
+            className="border-b border-[#FECACA] bg-[#FEF2F2] px-4 py-2 text-[13px] leading-5 text-[#991B1B] md:px-8"
+          >
             {error}
           </div>
         )}

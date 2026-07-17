@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server"
 
+import {
+  agentApiUnavailableError,
+  normalizeAgentError,
+} from "@/lib/agent/error-contract"
+
 const DEFAULT_VERMAY_AGENT_API_BASE = "http://127.0.0.1:8000"
 
 function vermayAgentBaseUrl() {
@@ -12,58 +17,6 @@ function vermayAgentBaseUrl() {
 
 function buildVermayAgentUrl(path: string) {
   return `${vermayAgentBaseUrl()}${path}`
-}
-
-function normalizeJsonRpcErrorCode(data: unknown) {
-  if (!data || typeof data !== "object") return null
-  if ("localCode" in data && typeof data.localCode === "string") {
-    return data.localCode
-  }
-  const errorInfo = "errorInfo" in data ? data.errorInfo : null
-  if (errorInfo && typeof errorInfo === "object" && "reason" in errorInfo) {
-    return typeof errorInfo.reason === "string" ? errorInfo.reason : null
-  }
-  return null
-}
-
-function normalizeErrorPayload(status: number, payload: unknown) {
-  if (payload && typeof payload === "object") {
-    const detail = "detail" in payload ? payload.detail : null
-    if (typeof detail === "string") {
-      return { status, message: detail }
-    }
-    if (detail && typeof detail === "object") {
-      const message = "message" in detail ? detail.message : null
-      const code = "code" in detail ? detail.code : null
-      if (typeof message === "string") {
-        return {
-          status,
-          message,
-          ...(typeof code === "string" ? { code } : {}),
-        }
-      }
-    }
-
-    const error = "error" in payload ? payload.error : null
-    if (error && typeof error === "object") {
-      const message = "message" in error ? error.message : null
-      const data = "data" in error ? error.data : null
-      const code = normalizeJsonRpcErrorCode(data)
-      if (typeof message === "string") {
-        return {
-          status,
-          message,
-          ...(typeof code === "string" ? { code } : {}),
-        }
-      }
-    }
-
-    if ("message" in payload && typeof payload.message === "string") {
-      return { status, message: payload.message }
-    }
-  }
-
-  return { status, message: `Vermay Agent request failed (${status})` }
 }
 
 export function buildAgentPath(path: string, searchParams?: URLSearchParams) {
@@ -93,12 +46,12 @@ export async function proxyAgentJson(path: string, init?: RequestInit) {
       try {
         payload = JSON.parse(text)
       } catch {
-        payload = { message: text }
+        payload = null
       }
     }
 
     if (!response.ok) {
-      return NextResponse.json(normalizeErrorPayload(response.status, payload), {
+      return NextResponse.json(normalizeAgentError(response.status, payload), {
         status: response.status,
       })
     }
@@ -108,17 +61,8 @@ export async function proxyAgentJson(path: string, init?: RequestInit) {
     }
 
     return NextResponse.json(payload)
-  } catch (error) {
-    return NextResponse.json(
-      {
-        status: 502,
-        message:
-          error instanceof Error
-            ? error.message
-            : "Vermay Agent API is unreachable",
-      },
-      { status: 502 },
-    )
+  } catch {
+    return NextResponse.json(agentApiUnavailableError(), { status: 502 })
   }
 }
 
@@ -138,7 +82,7 @@ export async function proxyAgentStream(path: string, init?: RequestInit) {
       },
     })
 
-    if (!response.ok || !response.body) {
+    if (!response.ok) {
       let payload: unknown = null
       try {
         payload = await response.json()
@@ -146,9 +90,19 @@ export async function proxyAgentStream(path: string, init?: RequestInit) {
         payload = null
       }
 
-      return NextResponse.json(normalizeErrorPayload(response.status, payload), {
+      return NextResponse.json(normalizeAgentError(response.status, payload), {
         status: response.status,
       })
+    }
+    if (!response.body) {
+      return NextResponse.json(
+        {
+          code: "invalid_a2a_stream",
+          message: "Vermay Agent returned an empty event stream.",
+          retryable: false,
+        },
+        { status: 502 }
+      )
     }
 
     return new Response(response.body, {
@@ -160,17 +114,8 @@ export async function proxyAgentStream(path: string, init?: RequestInit) {
         "X-Accel-Buffering": "no",
       },
     })
-  } catch (error) {
-    return NextResponse.json(
-      {
-        status: 502,
-        message:
-          error instanceof Error
-            ? error.message
-            : "Vermay Agent event stream is unreachable",
-      },
-      { status: 502 },
-    )
+  } catch {
+    return NextResponse.json(agentApiUnavailableError(), { status: 502 })
   }
 }
 

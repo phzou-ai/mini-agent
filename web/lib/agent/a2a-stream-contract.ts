@@ -1,4 +1,5 @@
 import type { AgentA2AStreamEnvelope } from "@/lib/agent/types"
+import { normalizeAgentError } from "@/lib/agent/error-contract"
 
 export const A2A_STREAM_EVENT_NAMES = [
   "status-update",
@@ -43,4 +44,13 @@ export function a2aFinalMessageMetadata() {
     append: false,
     final: true,
   }
+}
+
+export function errorFromA2AStreamEnvelope(
+  envelope: AgentA2AStreamEnvelope
+) {
+  return normalizeAgentError(502, envelope, {
+    code: "a2a_stream_error",
+    message: "A2A message stream returned an error.",
+  })
 }

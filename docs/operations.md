@@ -1,5 +1,7 @@
 # Operations
 
+The supported process topology, secret handling, persistence boundary, and release checklist are defined in [Runtime and Release Boundary](runtime-and-release.md).
+
 ## Install
 
 ```bash
@@ -52,26 +54,9 @@ Current public A2A service boundary:
 GET  /health
 GET  /.well-known/agent-card.json
 POST /rpc
-POST /message:send
-POST /message:stream
-GET  /tasks/{task_id}
-POST /tasks/{task_id}:subscribe
-POST /tasks/{task_id}:cancel
 ```
 
-Prefer `/rpc` for new integrations. Path-style A2A routes remain operational for compatibility, but they are deprecated for new first-party client work.
-
-Current compatibility routes kept for burn-in:
-
-```text
-POST /message:send
-POST /message:stream
-GET  /tasks/{task_id}
-POST /tasks/{task_id}:subscribe
-POST /tasks/{task_id}:cancel
-```
-
-Keep smoke coverage for both `/rpc` and path-style routes until a later cleanup milestone explicitly changes route behavior.
+Agent-to-agent operations use A2A JSON-RPC methods through `/rpc`. The `/api` prefix is reserved for first-party Web UI management and diagnostics and is not the external A2A integration contract.
 
 Run the default smoke against one local main-agent server:
 
