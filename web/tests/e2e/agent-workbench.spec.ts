@@ -788,6 +788,191 @@ test.describe("Agent Workbench", () => {
     expect(approvedPayload).toMatchObject({ approved: true })
   })
 
+  test("submits model-requested task input and continues the same task", async ({
+    page,
+  }) => {
+    const now = Date.now()
+    const contextId = `ctx-e2e-input-${now}`
+    const taskId = `task-e2e-input-${now}`
+    const prompt = `check deployment ${now}`
+    const answer = `Staging is healthy ${now}`
+    const startedAt = new Date(now).toISOString()
+    const completedAt = new Date(now + 1000).toISOString()
+    const inputRequest = {
+      kind: "user_input_required",
+      prompt: "Which environment should I inspect?",
+      choices: ["staging", "production"],
+      inputSchema: { type: "string", enum: ["staging", "production"] },
+    }
+    let submittedPayload: Record<string, unknown> | null = null
+
+    await mockAgentBootstrap(page)
+    await page.route("**/api/bff/agent/a2a/message-stream", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: `event: task\ndata: ${JSON.stringify({
+          jsonrpc: "2.0",
+          id: "e2e-input-task",
+          result: {
+            kind: "task",
+            id: taskId,
+            contextId,
+            status: { state: "input-required", timestamp: startedAt },
+            metadata: {
+              localThreadId: `thread-${now}`,
+              runtimeThreadId: `thread-${now}`,
+              inputRequest,
+            },
+          },
+        })}\n\n`,
+      })
+    })
+    await page.route("**/api/bff/agent/a2a/message", async (route) => {
+      submittedPayload = JSON.parse(route.request().postData() || "{}")
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          kind: "task",
+          contextId,
+          task: {
+            kind: "task",
+            id: taskId,
+            contextId,
+            status: { state: "completed", timestamp: completedAt },
+            metadata: {
+              localThreadId: `thread-${now}`,
+              runtimeThreadId: `thread-${now}`,
+            },
+          },
+          raw: {},
+        }),
+      })
+    })
+    await page.route(
+      `**/api/bff/agent/contexts/${contextId}/route-decisions`,
+      async (route) => {
+        await route.fulfill({ status: 200, contentType: "application/json", body: "[]" })
+      }
+    )
+    await page.route(
+      `**/api/bff/agent/contexts/${contextId}/delegations`,
+      async (route) => {
+        await route.fulfill({ status: 200, contentType: "application/json", body: "[]" })
+      }
+    )
+    await page.route(`**/api/bff/agent/a2a/tasks/${taskId}`, async (route) => {
+      const completed = submittedPayload !== null
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          kind: "task",
+          id: taskId,
+          contextId,
+          status: {
+            state: completed ? "completed" : "input-required",
+            timestamp: completed ? completedAt : startedAt,
+          },
+          metadata: {
+            localThreadId: `thread-${now}`,
+            runtimeThreadId: `thread-${now}`,
+            ...(completed ? {} : { inputRequest }),
+          },
+        }),
+      })
+    })
+    await page.route(
+      `**/api/bff/agent/a2a/tasks/${taskId}/events**`,
+      async (route) => {
+        await route.fulfill({ status: 200, contentType: "text/event-stream", body: "" })
+      }
+    )
+    await page.route(
+      `**/api/bff/agent/contexts/${contextId}/messages`,
+      async (route) => {
+        const completed = submittedPayload !== null
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              message_id: `msg-user-${now}`,
+              context_id: contextId,
+              role: "user",
+              parts: [{ kind: "text", text: prompt }],
+              task_id: taskId,
+              metadata: {},
+              created_at: startedAt,
+            },
+            ...(completed
+              ? [
+                  {
+                    message_id: `msg-input-${now}`,
+                    context_id: contextId,
+                    role: "user",
+                    parts: [{ kind: "text", text: "staging" }],
+                    task_id: taskId,
+                    metadata: {},
+                    created_at: completedAt,
+                  },
+                  {
+                    message_id: `msg-agent-${now}`,
+                    context_id: contextId,
+                    role: "agent",
+                    parts: [{ kind: "text", text: answer }],
+                    task_id: taskId,
+                    metadata: {},
+                    created_at: completedAt,
+                  },
+                ]
+              : []),
+          ]),
+        })
+      }
+    )
+    await page.route(
+      `**/api/bff/agent/contexts/${contextId}/tasks`,
+      async (route) => {
+        const completed = submittedPayload !== null
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              task_id: taskId,
+              context_id: contextId,
+              status: completed ? "completed" : "interrupted",
+              input_message_id: `msg-user-${now}`,
+              output_message_id: completed ? `msg-agent-${now}` : null,
+              runtime_thread_id: `thread-${now}`,
+              attempt: 1,
+              created_at: startedAt,
+              updated_at: completed ? completedAt : startedAt,
+            },
+          ]),
+        })
+      }
+    )
+
+    await page.goto("/agent")
+    await page.getByTestId("agent-mode-task").click()
+    await page.getByTestId("agent-composer-input").fill(prompt)
+    await page.getByTestId("agent-composer-send").click()
+
+    await expect(page.getByTestId("agent-task-input-card")).toBeVisible()
+    await expect(page.getByText("Which environment should I inspect?")).toBeVisible()
+    await page.getByRole("button", { name: "staging", exact: true }).click()
+
+    await expect(assistantMessages(page).filter({ hasText: answer })).toBeVisible()
+    expect(submittedPayload).toMatchObject({
+      taskId,
+      contextId,
+      text: "staging",
+    })
+  })
+
   test("deletes the selected session from the sidebar", async ({ page }) => {
     const prompt = `delete e2e session ${Date.now()}`
 

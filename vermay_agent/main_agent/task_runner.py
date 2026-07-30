@@ -18,6 +18,7 @@ class LocalTaskRunResult:
     artifact_parts: list[dict] = field(default_factory=list)
     error_code: str | None = None
     error_message: str | None = None
+    input_request: dict | None = None
 
 
 class LocalTaskRunner(Protocol):
@@ -26,6 +27,15 @@ class LocalTaskRunner(Protocol):
 
     def resume(self, *, thread_id: str, approved: bool, reason: str | None = None) -> LocalTaskRunResult:
         """Resume a paused local task after human approval input."""
+
+    def resume_input(
+        self,
+        *,
+        thread_id: str,
+        parts: list[dict],
+        metadata: dict | None = None,
+    ) -> LocalTaskRunResult:
+        """Resume a paused local task with requested user input."""
 
 
 class DirectLangGraphLocalTaskRunner:
@@ -46,6 +56,17 @@ class DirectLangGraphLocalTaskRunner:
     def resume(self, *, thread_id: str, approved: bool, reason: str | None = None) -> LocalTaskRunResult:
         with self._acquire_thread(thread_id):
             result = self.runtime.resume(thread_id=thread_id, approved=approved, reason=reason)
+        return _run_result_to_local_task_result(result)
+
+    def resume_input(
+        self,
+        *,
+        thread_id: str,
+        parts: list[dict],
+        metadata: dict | None = None,
+    ) -> LocalTaskRunResult:
+        with self._acquire_thread(thread_id):
+            result = self.runtime.resume_input(thread_id=thread_id, parts=parts, metadata=metadata)
         return _run_result_to_local_task_result(result)
 
     def close(self) -> None:
@@ -89,12 +110,19 @@ def _run_result_to_local_task_result(result) -> LocalTaskRunResult:
         parts = [{"kind": "text", "text": result.final_answer or ""}]
         return LocalTaskRunResult(status=TaskStatus.COMPLETED, parts=parts)
     if result.status == "interrupted":
-        parts = [{"kind": "text", "text": result.interrupt_message or "Approval required."}]
+        input_request = result.interrupt if isinstance(result.interrupt, dict) else None
+        message = (
+            str(input_request.get("message"))
+            if input_request and input_request.get("message")
+            else result.interrupt_message or "Additional input is required."
+        )
+        parts = [{"kind": "text", "text": message}]
         return LocalTaskRunResult(
             status=TaskStatus.INPUT_REQUIRED,
             parts=parts,
             error_code="input_required",
-            error_message=result.interrupt_message,
+            error_message=message,
+            input_request=input_request,
         )
     return LocalTaskRunResult(
         status=TaskStatus.FAILED,

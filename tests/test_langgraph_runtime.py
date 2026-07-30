@@ -27,6 +27,7 @@ from vermay_agent.langgraph_runtime.state import build_initial_state
 from vermay_agent.tooling import ToolArgs, structured_tool
 from vermay_agent.tool_schema import tool_schemas_from_tools
 from vermay_agent.tool_registry import ToolRegistry
+from vermay_agent.tools.user_input import register_user_input_tool
 from vermay_agent.trace import TraceLogger
 from vermay_agent.types import ModelResponse, ToolCall
 
@@ -139,6 +140,10 @@ def test_langgraph_permission_routing():
         route_after_permission({**build_initial_state("hello"), "permission": {"status": "approval_required"}})
         == "approval_required"
     )
+    assert (
+        route_after_permission({**build_initial_state("hello"), "permission": {"status": "input_required"}})
+        == "input_required"
+    )
     assert route_after_permission({**build_initial_state("hello"), "permission": {"status": "denied"}}) == "denied"
 
 
@@ -180,6 +185,53 @@ def test_langgraph_runtime_run_returns_final_answer():
     runtime = LangGraphAgentRuntime(model=FakeModel(AIMessage(content="final answer")))
 
     assert runtime.run("hello") == "final answer"
+
+
+def test_langgraph_runtime_resumes_model_requested_user_input_on_same_thread():
+    registry = ToolRegistry()
+    register_user_input_tool(registry)
+    model = FakeModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "request_user_input",
+                        "args": {"prompt": "Which environment?", "choices": ["staging", "production"]},
+                        "id": "call-input",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="Checking staging."),
+        ]
+    )
+    runtime = LangGraphAgentRuntime(
+        model=model,
+        tools=registry.tools_for_model(),
+        permission_gate=PermissionGate(registry),
+    )
+
+    interrupted = runtime.start("Check the deployment", thread_id="thread-input")
+
+    assert interrupted.status == "interrupted"
+    assert interrupted.thread_id == "thread-input"
+    assert interrupted.interrupt["kind"] == "user_input_required"
+    assert interrupted.interrupt["prompt"] == "Which environment?"
+    assert interrupted.interrupt["choices"] == ["staging", "production"]
+
+    completed = runtime.resume_input(
+        "thread-input",
+        parts=[{"kind": "text", "text": "staging"}],
+    )
+
+    assert completed.status == "completed"
+    assert completed.thread_id == "thread-input"
+    assert completed.final_answer == "Checking staging."
+    resumed_messages = model.calls[1][0]
+    assert isinstance(resumed_messages[-1], ToolMessage)
+    assert resumed_messages[-1].tool_call_id == "call-input"
+    assert resumed_messages[-1].content == "staging"
 
 
 def test_langgraph_runtime_propagates_model_provider_errors(monkeypatch):

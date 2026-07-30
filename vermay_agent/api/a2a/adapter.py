@@ -97,15 +97,19 @@ class A2AAdapter:
         params = _jsonrpc_params(payload)
         message = _jsonrpc_message(params)
         _validate_jsonrpc_user_message(message)
-        metadata = _merged_metadata(params)
-        for result in self.main_agent_core.stream_message(
-            MainAgentRequest(
-                context_id=message.context_id,
-                message_id=message.message_id,
-                role=MessageRole(str(message.role or "user")),
-                parts=message.parts,
-                metadata=metadata,
+        metadata = _merged_metadata(params, message=message)
+        if message.task_id is not None:
+            task = self.main_agent_core.submit_task_input(
+                message.task_id,
+                _main_agent_request(message, metadata=metadata),
             )
+            yield _jsonrpc_success(
+                request_id,
+                _main_task_payload(task, store=self.main_agent_core.store),
+            )
+            return
+        for result in self.main_agent_core.stream_message(
+            _main_agent_request(message, metadata=metadata)
         ):
             if isinstance(result, LocalMessageDelta):
                 yield _jsonrpc_success(request_id, _local_message_delta_payload(result))
@@ -122,15 +126,18 @@ class A2AAdapter:
         params = _jsonrpc_params(payload)
         message = _jsonrpc_message(params)
         _validate_jsonrpc_user_message(message)
-        metadata = _merged_metadata(params)
-        result = self.main_agent_core.handle_message(
-            MainAgentRequest(
-                context_id=message.context_id,
-                message_id=message.message_id,
-                role=MessageRole(str(message.role or "user")),
-                parts=message.parts,
-                metadata=metadata,
+        metadata = _merged_metadata(params, message=message)
+        if message.task_id is not None:
+            task = self.main_agent_core.submit_task_input(
+                message.task_id,
+                _main_agent_request(message, metadata=metadata),
             )
+            return _jsonrpc_success(
+                payload.get("id"),
+                _main_task_payload(task, store=self.main_agent_core.store),
+            )
+        result = self.main_agent_core.handle_message(
+            _main_agent_request(message, metadata=metadata)
         )
         return {
             "jsonrpc": "2.0",
@@ -142,7 +149,10 @@ class A2AAdapter:
         main_task = self._get_main_agent_task(task_id)
         if main_task is not None:
             main_task = self._sync_remote_proxy_task(main_task)
-            return _jsonrpc_success(f"task-get-{task_id}", task_to_a2a_payload(main_task))
+            return _jsonrpc_success(
+                f"task-get-{task_id}",
+                _main_task_payload(main_task, store=self.main_agent_core.store),
+            )
         task = self.service.get_task(task_id)
         if task is None:
             raise TaskNotFoundError(task_id)
@@ -439,8 +449,12 @@ def _jsonrpc_validation_message(exc: ValidationError) -> str:
     return f"JSON-RPC {location} is invalid: {error_type}"
 
 
-def _merged_metadata(params: dict[str, Any]) -> dict[str, Any]:
-    metadata: dict[str, Any] = {}
+def _merged_metadata(
+    params: dict[str, Any],
+    *,
+    message: A2AMessage | None = None,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = dict(message.metadata) if message is not None else {}
     request_metadata = params.get("metadata")
     if isinstance(request_metadata, dict):
         metadata.update(request_metadata)
@@ -448,6 +462,27 @@ def _merged_metadata(params: dict[str, Any]) -> dict[str, Any]:
     if isinstance(configuration, dict) and "executionMode" in configuration and "executionMode" not in metadata:
         metadata["executionMode"] = configuration["executionMode"]
     return metadata
+
+
+def _main_agent_request(
+    message: A2AMessage,
+    *,
+    metadata: dict[str, Any],
+) -> MainAgentRequest:
+    return MainAgentRequest(
+        context_id=message.context_id,
+        message_id=message.message_id,
+        role=MessageRole(str(message.role or "user")),
+        parts=message.parts,
+        metadata=metadata,
+    )
+
+
+def _main_task_payload(task, *, store) -> dict[str, Any]:
+    return task_to_a2a_payload(
+        task,
+        input_request=store.get_pending_input_request(task.task_id),
+    )
 
 
 def _main_agent_result_payload(result: LocalMessageResult | LocalTaskResult | RemoteAgentResult, *, store) -> dict[str, Any]:
@@ -473,7 +508,7 @@ def _main_agent_result_payload(result: LocalMessageResult | LocalTaskResult | Re
         task = store.get_task(result.task_id)
         if task is None:
             raise TaskNotFoundError(result.task_id)
-        payload = task_to_a2a_payload(task)
+        payload = _main_task_payload(task, store=store)
         payload["metadata"].update(
             {
                 "routeDecisionId": result.route_decision_id,
@@ -506,7 +541,7 @@ def _main_agent_result_payload(result: LocalMessageResult | LocalTaskResult | Re
             task = store.get_task(result.task_id)
             if task is None:
                 raise TaskNotFoundError(result.task_id)
-            payload = task_to_a2a_payload(task)
+            payload = _main_task_payload(task, store=store)
             payload["metadata"].update(
                 {
                     "routeDecisionId": result.route_decision_id,

@@ -4,17 +4,18 @@
 
 This directory contains stable project-facing documentation for Vermay Agent.
 
-The project is positioned as an agent validation and practice workbench. It provides a concrete runtime for testing agent orchestration, tool execution, approval control, memory, skills, evaluation replay, model adapters, MCP client integration, local API integration, and real-world tool patterns.
+The project is positioned as an A2A-native main-agent runtime and inspectable process host, with a practical workbench for validating orchestration, tool execution, approvals, memory, skills, model adapters, MCP integration, delegation, and real-world tool patterns.
 
 ## Reading Order
 
 1. [overview.md](overview.md) - project purpose, current capabilities, and operating model.
-2. [modules.md](modules.md) - key packages and module responsibilities.
-3. [operations.md](operations.md) - CLI usage, runtime options, environment configuration, and traces.
-4. [runtime-and-release.md](runtime-and-release.md) - supported runtime topology, secrets and persistence boundaries, and release gate.
-5. [langgraph-interrupt-resume.md](langgraph-interrupt-resume.md) - approval interrupt, checkpoint, and resume flow.
-6. [server-api-readiness.md](server-api-readiness.md) - local API surface, session metadata, and approval resume contract.
-7. [code-organization-review.md](code-organization-review.md) - current code organization assessment and cleanup order.
+2. [agent-os-architecture.md](agent-os-architecture.md) - strategic positioning against assistant-style runtimes, Agent OS process model, A2A boundary, router policy, Context causality, state ownership, security boundaries, and incremental migration direction.
+3. [modules.md](modules.md) - key packages and module responsibilities.
+4. [operations.md](operations.md) - CLI usage, runtime options, environment configuration, and traces.
+5. [runtime-and-release.md](runtime-and-release.md) - supported runtime topology, secrets and persistence boundaries, and release gate.
+6. [langgraph-interrupt-resume.md](langgraph-interrupt-resume.md) - approval interrupt, checkpoint, and resume flow.
+7. [server-api-readiness.md](server-api-readiness.md) - local API surface, session metadata, and approval resume contract.
+8. [code-organization-review.md](code-organization-review.md) - current code organization assessment and cleanup order.
 
 ## Documentation Boundary
 

@@ -35,15 +35,27 @@ def task_status_to_a2a_state(status: object) -> A2ATaskState:
     return _STATUS_TO_A2A[normalize_task_status(status)]
 
 
-def task_to_a2a_payload(task: TaskRecord) -> dict[str, Any]:
+def task_to_a2a_payload(
+    task: TaskRecord,
+    *,
+    input_request: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    status: dict[str, Any] = {
+        "state": task_status_to_a2a_state(task.status).value,
+        "timestamp": task.updated_at,
+    }
+    if input_request is not None:
+        status["message"] = _input_request_message(
+            task_id=task.task_id,
+            context_id=task.context_id,
+            input_request=input_request,
+            message_id=f"input-{task.task_id}",
+        )
     return {
         "kind": "task",
         "id": task.task_id,
         "contextId": task.context_id,
-        "status": {
-            "state": task_status_to_a2a_state(task.status).value,
-            "timestamp": task.updated_at,
-        },
+        "status": status,
         "metadata": {
             "localContextId": task.context_id,
             "localTaskId": task.task_id,
@@ -52,6 +64,7 @@ def task_to_a2a_payload(task: TaskRecord) -> dict[str, Any]:
             "outputMessageId": task.output_message_id,
             "localStatus": task.status.value,
             "localAttempt": task.attempt,
+            **({"inputRequest": input_request} if input_request is not None else {}),
         },
     }
 
@@ -59,14 +72,23 @@ def task_to_a2a_payload(task: TaskRecord) -> dict[str, Any]:
 def task_event_to_a2a_status_update(event: TaskEventRecord, *, task: TaskRecord) -> dict[str, Any] | None:
     if event.status is None:
         return None
+    input_request = event.payload.get("input_request")
+    status: dict[str, Any] = {
+        "state": task_status_to_a2a_state(event.status).value,
+        "timestamp": event.created_at,
+    }
+    if isinstance(input_request, dict):
+        status["message"] = _input_request_message(
+            task_id=task.task_id,
+            context_id=task.context_id,
+            input_request=input_request,
+            message_id=f"input-event-{event.event_id}",
+        )
     return {
         "kind": "status-update",
         "taskId": event.task_id,
         "contextId": task.context_id,
-        "status": {
-            "state": task_status_to_a2a_state(event.status).value,
-            "timestamp": event.created_at,
-        },
+        "status": status,
         "final": task_status_to_a2a_state(event.status) in {
             A2ATaskState.COMPLETED,
             A2ATaskState.CANCELED,
@@ -78,7 +100,27 @@ def task_event_to_a2a_status_update(event: TaskEventRecord, *, task: TaskRecord)
             "localEventCreatedAt": event.created_at,
             **thread_metadata(task.runtime_thread_id, include_runtime_alias=True),
             "localStatus": event.status.value,
+            **({"inputRequest": input_request} if isinstance(input_request, dict) else {}),
         },
+    }
+
+
+def _input_request_message(
+    *,
+    task_id: str,
+    context_id: str,
+    input_request: dict[str, Any],
+    message_id: str,
+) -> dict[str, Any]:
+    prompt = str(input_request.get("prompt") or input_request.get("message") or "Additional input is required.")
+    return {
+        "kind": "message",
+        "role": "agent",
+        "messageId": message_id,
+        "taskId": task_id,
+        "contextId": context_id,
+        "parts": [{"kind": "text", "text": prompt}],
+        "metadata": {"inputRequest": input_request},
     }
 
 

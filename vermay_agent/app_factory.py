@@ -19,6 +19,7 @@ from .skills import SkillStore
 from .storage import AgentStore
 from .tool_registry import ToolRegistry
 from .tools.devops import register_devops_tools
+from .tools.user_input import register_user_input_tool
 from .tools.weather import register_weather_tools
 from .trace import TraceLogger
 
@@ -55,6 +56,7 @@ def build_runtime(config: RuntimeFactoryConfig | None = None) -> LangGraphAgentR
     active_model = active_config.model or resolve_model_selection(config_path=active_config.model_config_path)
     registry = ToolRegistry()
     register_devops_tools(registry)
+    register_user_input_tool(registry)
     register_weather_tools(registry)
     progress = ProgressReporter(enabled=active_config.show_progress)
     trace = TraceLogger(active_config.trace_path)

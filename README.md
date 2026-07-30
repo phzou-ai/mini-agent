@@ -85,9 +85,9 @@ sequenceDiagram
   M-->>C: A2A message, task snapshot, or stream event
 ```
 
-### Approval Resume Flow
+### Input-Required Resume Flow
 
-Approval interrupts keep `task_id` and `thread_id` separate. The caller resumes the externally visible `task_id`; the main-agent layer looks up the internal checkpoint thread and resumes the runtime.
+Approval and model-requested input interrupts keep `task_id` and `thread_id` separate. The caller continues the externally visible `task_id`; the main-agent layer looks up the internal checkpoint thread and resumes the runtime.
 
 ```mermaid
 sequenceDiagram
@@ -101,13 +101,13 @@ sequenceDiagram
   M->>S: create task record
   M->>R: start execution with thread_id
   R->>K: checkpoint interrupted state
-  R-->>M: approval required
+  R-->>M: approval or user input required
   M->>S: mark task input-required/interrupted
   M-->>C: input-required task status
 
-  C->>M: resume task_id with approval decision
+  C->>M: continue task_id with approval or requested input
   M->>S: load task and runtime thread_id
-  M->>R: resume checkpoint with approval
+  M->>R: resume checkpoint with user response
   R->>K: load checkpoint state
   R-->>M: final answer or failure
   M->>S: persist final status, artifacts, events
@@ -385,11 +385,13 @@ Selected MCP tools are wrapped as LangChain `StructuredTool` instances with name
 
 The local Kubernetes MCP example is under `examples/mcp_servers/k8s/`. It uses the `VERMAY_AGENT_SSH_*` environment configuration.
 
-## Approval And Resume
+## Human Input And Approval
 
-Dangerous tools pause execution and require explicit approval.
+Dangerous tools pause execution and require explicit approval. When the model cannot continue without missing information, it can call the built-in `request_user_input` tool and pause with a structured prompt and optional choices.
 
-In the Web UI, an input-required task renders approval controls directly in the transcript.
+In the Web UI, an input-required task renders either approval controls or a requested-input form directly in the transcript.
+
+An A2A caller supplies requested input with another `SendMessage` request carrying the existing `taskId`. The main agent resumes the same LangGraph `thread_id` without routing or creating a new task.
 
 In an interactive terminal, approval is prompted automatically:
 

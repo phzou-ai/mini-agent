@@ -122,10 +122,12 @@ export type AgentA2AAgentCard = {
 export type AgentA2AMessagePayload = {
   contextId?: string
   messageId?: string
+  taskId?: string
   text: string
   executionMode?: AgentA2AExecutionMode
   route?: AgentA2ARoute
   targetAgentId?: string
+  metadata?: Record<string, unknown>
 }
 
 export type AgentA2APart = {
@@ -139,6 +141,7 @@ export type AgentA2AMessage = {
   role: "user" | "agent" | "system"
   messageId: string
   contextId: string
+  taskId?: string
   parts: AgentA2APart[]
   metadata?: Record<string, unknown>
 }
@@ -150,6 +153,7 @@ export type AgentA2ATask = {
   status: {
     state: string
     timestamp?: string
+    message?: AgentA2AMessage
   }
   metadata?: Record<string, unknown>
 }
@@ -175,6 +179,7 @@ export type AgentA2AStatusUpdateEvent = {
   status: {
     state: string
     timestamp?: string
+    message?: AgentA2AMessage
   }
   final?: boolean
   metadata?: Record<string, unknown>

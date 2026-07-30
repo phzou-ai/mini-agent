@@ -26,7 +26,7 @@ from .remote_agent import RemoteAgentClient
 from .responder import LocalMessageResponder
 from .router import DefaultMainAgentRouter, MainAgentRouteDecision, MainAgentRouter
 from .store import MainAgentStore
-from .task_runner import LocalTaskRunner
+from .task_runner import LocalTaskRunResult, LocalTaskRunner
 
 
 logger = logging.getLogger(__name__)
@@ -196,6 +196,75 @@ class MainAgentCore:
             self.store.append_task_event(task_id=task_id, type="task_queued", status=TaskStatus.QUEUED)
         try:
             self.task_submitter.submit(self._resume_local_task_in_background, task_id, approved, reason)
+        except Exception as exc:
+            return self._mark_local_task_failed(task_id, exc)
+        return task
+
+    def submit_task_input(self, task_id: str, request: MainAgentRequest):
+        if request.role != MessageRole.USER:
+            raise ValueError("task input role must be user")
+        if not request.parts:
+            raise ValueError("task input parts are required")
+        if self.local_task_runner is None:
+            raise ValueError("local task runner is not configured")
+
+        with self.store.transaction():
+            task = self.store.get_task(task_id)
+            if task is None:
+                raise ValueError(f"unknown task: {task_id}")
+            if task.assigned_agent_id is not None:
+                raise ValueError(f"delegated task input continuation is not supported yet: {task_id}")
+            if request.context_id is not None and request.context_id != task.context_id:
+                raise ValueError(f"task context mismatch: {task_id}")
+            if task.status != TaskStatus.INPUT_REQUIRED:
+                raise ValueError(f"task is not waiting for input: {task_id}")
+            input_request = self.store.get_pending_input_request(task_id)
+            if input_request is None:
+                raise ValueError(f"task has no pending input request: {task_id}")
+            if input_request.get("kind") != "user_input_required":
+                raise ValueError(f"task is waiting for approval, not general input: {task_id}")
+
+            message = self.store.append_message(
+                message_id=request.message_id or _new_id("msg"),
+                context_id=task.context_id,
+                role=MessageRole.USER,
+                parts=request.parts,
+                task_id=task_id,
+                metadata={**request.metadata, "inputRequestKind": input_request.get("kind")},
+            )
+            self.store.append_task_event(
+                task_id=task_id,
+                type="task_input_submitted",
+                status=task.status,
+                payload={"message_id": message.message_id},
+            )
+            self.store.append_task_event(
+                task_id=task_id,
+                type="task_resumed",
+                status=task.status,
+                payload={"input_message_id": message.message_id},
+            )
+            if self.task_submitter is not None:
+                task = self.store.update_task_status(task_id, TaskStatus.QUEUED)
+                self.store.append_task_event(
+                    task_id=task_id,
+                    type="task_queued",
+                    status=TaskStatus.QUEUED,
+                )
+
+        if self.task_submitter is None:
+            return self._resume_local_task_with_input(
+                task_id,
+                parts=request.parts,
+                metadata=request.metadata,
+            )
+        try:
+            self.task_submitter.submit(
+                self._resume_local_task_with_input_in_background,
+                task_id,
+                request.parts,
+                request.metadata,
+            )
         except Exception as exc:
             return self._mark_local_task_failed(task_id, exc)
         return task
@@ -453,7 +522,11 @@ class MainAgentCore:
                         payload={"approved": approved, **({"reason": reason} if reason else {})},
                     )
                 task = self.store.update_task_status(task_id, TaskStatus.RUNNING)
-                self.store.append_task_event(task_id=task_id, type="task_started", status=TaskStatus.RUNNING)
+                self.store.append_task_event(
+                    task_id=task_id,
+                    type="task_started",
+                    status=TaskStatus.RUNNING,
+                )
             try:
                 result = self.local_task_runner.resume(
                     thread_id=task.runtime_thread_id,
@@ -467,6 +540,58 @@ class MainAgentCore:
     def _resume_local_task_in_background(self, task_id: str, approved: bool, reason: str | None) -> None:
         try:
             self._resume_local_task(task_id, approved=approved, reason=reason)
+        except Exception as exc:
+            self._mark_local_task_failed(task_id, exc)
+
+    def _resume_local_task_with_input(
+        self,
+        task_id: str,
+        *,
+        parts: list[dict],
+        metadata: dict | None = None,
+    ):
+        with self._track_active_task(task_id):
+            with self.store.transaction():
+                task = self.store.get_task(task_id)
+                if task is None:
+                    raise ValueError(f"unknown task: {task_id}")
+                if is_terminal_task_status(task.status):
+                    if self.task_submitter is None:
+                        raise ValueError(f"task is not waiting for input: {task_id}")
+                    return task
+                if task.status == TaskStatus.CANCEL_REQUESTED:
+                    return self._mark_local_task_canceled_after_safe_boundary(task_id)
+                resumable_statuses = (
+                    {TaskStatus.INPUT_REQUIRED}
+                    if self.task_submitter is None
+                    else {TaskStatus.QUEUED}
+                )
+                if task.status not in resumable_statuses:
+                    raise ValueError(f"task is not waiting for input: {task_id}")
+                task = self.store.update_task_status(task_id, TaskStatus.RUNNING)
+                self.store.append_task_event(task_id=task_id, type="task_started", status=TaskStatus.RUNNING)
+            try:
+                result = self.local_task_runner.resume_input(
+                    thread_id=task.runtime_thread_id,
+                    parts=parts,
+                    metadata=metadata,
+                )
+            except Exception as exc:
+                return self._mark_local_task_failed(task_id, exc)
+        return self._save_local_task_result(task_id, result)
+
+    def _resume_local_task_with_input_in_background(
+        self,
+        task_id: str,
+        parts: list[dict],
+        metadata: dict | None,
+    ) -> None:
+        try:
+            self._resume_local_task_with_input(
+                task_id,
+                parts=parts,
+                metadata=metadata,
+            )
         except Exception as exc:
             self._mark_local_task_failed(task_id, exc)
 
@@ -774,6 +899,8 @@ def _task_result_error_payload(result: LocalTaskRunResult) -> dict:
         payload["error_code"] = result.error_code
     if result.error_message:
         payload["error_message"] = result.error_message
+    if result.input_request:
+        payload["input_request"] = result.input_request
     return payload
 
 

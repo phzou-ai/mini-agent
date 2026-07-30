@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Vermay Agent is a Python agent runtime for validating agent system behavior in realistic command-line and local API workflows.
+Vermay Agent is an A2A-native main-agent runtime and inspectable process host for direct answers, durable local execution, and delegation to external child agents. It also provides command-line and Web UI surfaces for validating agent-system behavior.
 
 The current implementation focuses on:
 
@@ -28,11 +28,26 @@ The current implementation focuses on:
 
 ## Current Runtime Position
 
-The CLI runtime is `vermay_agent/langgraph_runtime/`.
+The primary service path is the A2A main-agent boundary implemented by `vermay_agent/api/a2a/` and `vermay_agent/main_agent/`. It classifies incoming Messages as direct replies, locally owned durable Tasks, or delegated child-agent work.
+
+The LangGraph executor is implemented by `vermay_agent/langgraph_runtime/`. The CLI calls this layer directly as a development and operations harness; it does not represent the complete A2A main-agent lifecycle.
 
 The earlier hands-on runtime has been archived under `archive/hands_on_langgraph_runtime/`. It remains useful as historical reference material for explicit harness mechanics, but it is not an active runtime path.
 
-## Primary Runtime Flow
+The architectural direction for separating A2A protocol resources, durable local process lifecycle, LangGraph continuation, and direct Message execution is documented in [agent-os-architecture.md](agent-os-architecture.md). The Agent OS model is a responsibility and lifecycle abstraction; it does not replace A2A or LangGraph and does not require an immediate code or database rename.
+
+## Primary Service Flow
+
+```text
+A2A Message
+  -> persist Context input
+  -> route to direct Message, local Task, or child A2A agent
+  -> execute or delegate
+  -> persist Message / Task / event / artifact state
+  -> project A2A response and stream updates
+```
+
+## LangGraph Harness Flow
 
 ```text
 CLI input

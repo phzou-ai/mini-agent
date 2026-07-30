@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,6 +10,7 @@ from vermay_agent.api.a2a import A2AAdapter, create_a2a_router
 from vermay_agent.api.app import create_app
 from vermay_agent.api.service import AgentService
 from vermay_agent.api.session_store import SessionStore
+from vermay_agent.api.task_execution import TaskExecutionService
 from vermay_agent.errors import ModelProviderError
 from vermay_agent.langgraph_runtime.results import RunResult
 from vermay_agent.main_agent import (
@@ -80,6 +82,42 @@ class FakeLocalTaskRunner:
         return LocalTaskRunResult(
             status=MainAgentTaskStatus.COMPLETED,
             parts=[{"kind": "text", "text": "resumed task answer"}],
+        )
+
+    def resume_input(self, *, thread_id: str, parts: list[dict], metadata: dict | None = None) -> LocalTaskRunResult:
+        return LocalTaskRunResult(
+            status=MainAgentTaskStatus.COMPLETED,
+            parts=[{"kind": "text", "text": "input resumed answer"}],
+        )
+
+
+class SlowFakeLocalTaskRunner(FakeLocalTaskRunner):
+    def run(self, messages: list[MessageRecord], *, thread_id: str) -> LocalTaskRunResult:
+        time.sleep(0.05)
+        return super().run(messages, thread_id=thread_id)
+
+
+class FakeInputTaskRunner(FakeLocalTaskRunner):
+    def __init__(self) -> None:
+        self.resume_input_calls = []
+
+    def run(self, messages: list[MessageRecord], *, thread_id: str) -> LocalTaskRunResult:
+        return LocalTaskRunResult(
+            status=MainAgentTaskStatus.INPUT_REQUIRED,
+            parts=[{"kind": "text", "text": "Which environment?"}],
+            input_request={
+                "kind": "user_input_required",
+                "prompt": "Which environment?",
+                "choices": ["staging", "production"],
+                "inputSchema": {"type": "string", "enum": ["staging", "production"]},
+            },
+        )
+
+    def resume_input(self, *, thread_id: str, parts: list[dict], metadata: dict | None = None) -> LocalTaskRunResult:
+        self.resume_input_calls.append((thread_id, parts, metadata))
+        return LocalTaskRunResult(
+            status=MainAgentTaskStatus.COMPLETED,
+            parts=[{"kind": "text", "text": "staging is healthy"}],
         )
 
 
@@ -1443,6 +1481,102 @@ def test_a2a_rpc_resume_task_supports_pascal_case_method(tmp_path):
     agent_store.close()
 
 
+def test_a2a_send_message_continues_input_required_task_without_router(tmp_path):
+    agent_store = AgentStore(tmp_path / "agent.sqlite")
+    main_store = MainAgentStore(agent_store)
+    runner = FakeInputTaskRunner()
+    core = MainAgentCore(
+        store=main_store,
+        local_message_responder=FakeLocalMessageResponder(),
+        local_task_runner=runner,
+    )
+    service = AgentService(
+        session_store=SessionStore(agent_store),
+        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
+    )
+    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+
+    started = client.post(
+        "/rpc",
+        json={
+            "jsonrpc": "2.0",
+            "id": "rpc-input-start",
+            "method": "SendMessage",
+            "params": {
+                "message": {
+                    "kind": "message",
+                    "role": "user",
+                    "messageId": "msg-input-start",
+                    "parts": [{"kind": "text", "text": "check deployment"}],
+                },
+                "metadata": {"executionMode": "task"},
+            },
+        },
+    )
+    started_result = started.json()["result"]
+    task_id = started_result["id"]
+    context_id = started_result["contextId"]
+
+    assert started_result["status"]["state"] == "input-required"
+    assert started_result["status"]["message"]["parts"] == [
+        {"kind": "text", "text": "Which environment?"}
+    ]
+    assert started_result["metadata"]["inputRequest"]["choices"] == ["staging", "production"]
+
+    mismatched = client.post(
+        "/rpc",
+        json={
+            "jsonrpc": "2.0",
+            "id": "rpc-input-mismatch",
+            "method": "SendMessage",
+            "params": {
+                "message": {
+                    "kind": "message",
+                    "role": "user",
+                    "messageId": "msg-input-mismatch",
+                    "taskId": task_id,
+                    "contextId": "ctx-wrong",
+                    "parts": [{"kind": "text", "text": "production"}],
+                }
+            },
+        },
+    )
+    assert mismatched.json()["error"]["code"] == -32602
+    assert "context mismatch" in mismatched.json()["error"]["message"]
+
+    continued = client.post(
+        "/rpc",
+        json={
+            "jsonrpc": "2.0",
+            "id": "rpc-input-continue",
+            "method": "SendMessage",
+            "params": {
+                "message": {
+                    "kind": "message",
+                    "role": "user",
+                    "messageId": "msg-input-answer",
+                    "taskId": task_id,
+                    "parts": [{"kind": "text", "text": "staging"}],
+                    "metadata": {"source": "a2a-test"},
+                }
+            },
+        },
+    )
+
+    continued_result = continued.json()["result"]
+    task = main_store.get_task(task_id)
+    assert task is not None
+    assert continued_result["id"] == task_id
+    assert continued_result["contextId"] == context_id
+    assert continued_result["status"]["state"] == "completed"
+    assert runner.resume_input_calls == [
+        (task.runtime_thread_id, [{"kind": "text", "text": "staging"}], {"source": "a2a-test"})
+    ]
+    assert len(main_store.list_context_route_decisions(context_id)) == 1
+    service.close()
+    agent_store.close()
+
+
 def test_a2a_rpc_accepts_current_slash_method_aliases(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
@@ -1697,6 +1831,50 @@ def test_a2a_rpc_send_streaming_message_emits_local_task_events(tmp_path):
     assert '"artifactId": "final_answer"' in response.text
     assert '"state": "completed"' in response.text
     assert "task answer" in response.text
+    service.close()
+    agent_store.close()
+
+
+def test_a2a_rpc_send_streaming_message_follows_background_task_to_terminal_state(tmp_path):
+    agent_store = AgentStore(tmp_path / "agent.sqlite")
+    main_store = MainAgentStore(agent_store)
+    executor = TaskExecutionService(max_workers=1)
+    core = MainAgentCore(
+        store=main_store,
+        local_message_responder=FakeLocalMessageResponder(),
+        local_task_runner=SlowFakeLocalTaskRunner(),
+        task_submitter=executor,
+    )
+    service = AgentService(
+        session_store=SessionStore(agent_store),
+        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
+    )
+    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+
+    response = client.post(
+        "/rpc",
+        json={
+            "jsonrpc": "2.0",
+            "id": "rpc-stream-background-task",
+            "method": "SendStreamingMessage",
+            "params": {
+                "message": {
+                    "kind": "message",
+                    "role": "user",
+                    "messageId": "msg-user-background-task",
+                    "parts": [{"kind": "text", "text": "run"}],
+                },
+                "metadata": {"executionMode": "task"},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert '"state": "completed"' in response.text
+    assert '"artifactId": "final_answer"' in response.text
+    assert "task answer" in response.text
+
+    executor.shutdown()
     service.close()
     agent_store.close()
 

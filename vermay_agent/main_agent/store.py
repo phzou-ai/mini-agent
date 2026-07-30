@@ -385,6 +385,23 @@ class MainAgentStore:
         )
         return [_task_event_from_row(row) for row in rows]
 
+    def get_pending_input_request(self, task_id: str) -> dict[str, Any] | None:
+        if self.get_task(task_id) is None:
+            raise ValueError(f"unknown task: {task_id}")
+        for event in reversed(self.list_task_events(task_id)):
+            if event.type in {
+                "task_input_submitted",
+                "task_resumed",
+                "task_completed",
+                "task_failed",
+                "task_cancelled",
+            }:
+                return None
+            if event.type == "task_interrupted":
+                request = event.payload.get("input_request")
+                return dict(request) if isinstance(request, dict) else None
+        return None
+
     def wait_for_task_events(
         self,
         task_id: str,

@@ -17,7 +17,9 @@ function buildA2AMessageEnvelope(
         role: "user",
         messageId,
         ...(payload.contextId ? { contextId: payload.contextId } : {}),
+        ...(payload.taskId ? { taskId: payload.taskId } : {}),
         parts: [{ kind: "text", text: payload.text }],
+        ...(payload.metadata ? { metadata: payload.metadata } : {}),
       },
       metadata: {
         executionMode: payload.executionMode || "auto",

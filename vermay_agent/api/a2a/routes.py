@@ -161,7 +161,7 @@ def create_a2a_router(adapter: A2AAdapter) -> APIRouter:
                     yield _format_a2a_sse_event(event)
                 task = adapter.get_task(task_id)
                 state = _task_state(task)
-                if _is_terminal_state(state):
+                if _is_stream_end_state(state):
                     trailing_batch = await asyncio.to_thread(
                         adapter.wait_for_task_events,
                         task_id,
@@ -285,17 +285,37 @@ async def _stream_message_result_events(
         task_id = _task_id_from_message_result(event)
         if not task_id:
             continue
-        batch = await asyncio.to_thread(
-            adapter.wait_for_task_events,
-            task_id,
-            after_event_id=0,
-            timeout_seconds=0.0,
-        )
-        for task_event in batch.events:
-            if wrap_task_events:
-                yield _jsonrpc_success_payload(task_event_request_id, task_event)
-            else:
-                yield task_event
+        last_event_id = 0
+        while True:
+            batch = await asyncio.to_thread(
+                adapter.wait_for_task_events,
+                task_id,
+                after_event_id=last_event_id,
+                timeout_seconds=1.0,
+            )
+            last_event_id = max(last_event_id, batch.last_event_id)
+            for task_event in batch.events:
+                if wrap_task_events:
+                    yield _jsonrpc_success_payload(task_event_request_id, task_event)
+                else:
+                    yield task_event
+
+            task = adapter.get_task(task_id)
+            if not _is_stream_end_state(_task_state(task)):
+                continue
+
+            trailing_batch = await asyncio.to_thread(
+                adapter.wait_for_task_events,
+                task_id,
+                after_event_id=last_event_id,
+                timeout_seconds=0.0,
+            )
+            for task_event in trailing_batch.events:
+                if wrap_task_events:
+                    yield _jsonrpc_success_payload(task_event_request_id, task_event)
+                else:
+                    yield task_event
+            break
 
 
 async def _iterate_blocking(iterator):
@@ -334,7 +354,7 @@ async def _rpc_subscribe_task_events(adapter: A2AAdapter, payload: dict[str, Any
             yield _format_a2a_sse_event(_jsonrpc_success_payload(request_id, event))
         task = adapter.get_task(task_id)
         state = _task_state(task)
-        if _is_terminal_state(state):
+        if _is_stream_end_state(state):
             trailing_batch = await asyncio.to_thread(
                 adapter.wait_for_task_events,
                 task_id,
@@ -655,7 +675,14 @@ def _task_state(task: dict[str, Any]) -> Any:
     return None
 
 
-def _is_terminal_state(state: Any) -> bool:
+def _is_stream_end_state(state: Any) -> bool:
     if is_terminal_a2a_state(state):
         return True
-    return state in {"completed", "failed", "canceled", "rejected"}
+    return state in {
+        "completed",
+        "failed",
+        "canceled",
+        "rejected",
+        "input-required",
+        "auth-required",
+    }

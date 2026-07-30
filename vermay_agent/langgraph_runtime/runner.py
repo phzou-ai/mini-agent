@@ -75,10 +75,24 @@ class LangGraphAgentRuntime:
             "langgraph_run_resumed",
             {"thread_id": thread_id, "approved": approved, "reason": reason},
         )
-        final_state = self.graph.invoke(
-            Command(resume={"approved": approved, "reason": reason}),
-            config=self._config(thread_id),
+        return self._resume(thread_id, {"approved": approved, "reason": reason})
+
+    def resume_input(
+        self,
+        thread_id: str,
+        parts: list[dict],
+        metadata: dict | None = None,
+    ) -> RunResult:
+        if not thread_id:
+            raise ValueError("thread_id is required to resume an input interrupt")
+        self._log_trace(
+            "langgraph_run_input_submitted",
+            {"thread_id": thread_id, "parts": parts, "metadata": metadata or {}},
         )
+        return self._resume(thread_id, {"parts": parts, "metadata": metadata or {}})
+
+    def _resume(self, thread_id: str, payload: dict) -> RunResult:
+        final_state = self.graph.invoke(Command(resume=payload), config=self._config(thread_id))
         interrupt = self._extract_interrupt(final_state, thread_id)
         if interrupt is not None:
             return interrupt
@@ -120,7 +134,7 @@ class LangGraphAgentRuntime:
         message = None
         if isinstance(interrupt_value, dict):
             message = interrupt_value.get("message")
-        message = message or "Approval required."
+        message = message or "Additional input is required."
         interrupt_message = f"{message}\nthread_id: {thread_id}"
         return RunResult(
             thread_id=thread_id,

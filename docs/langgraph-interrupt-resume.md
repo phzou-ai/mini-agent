@@ -2,7 +2,7 @@
 
 ## Scope
 
-This document describes the current approval interrupt and resume flow in the LangGraph runtime.
+This document describes the current approval and model-requested-input interrupt/resume flows in the LangGraph runtime.
 
 The implementation is centered on:
 
@@ -118,6 +118,30 @@ message=<human-readable approval message>
 ```
 
 At this point LangGraph pauses graph execution and stores the current graph state through the configured checkpointer.
+
+## Model-Requested Input
+
+The built-in `request_user_input` tool lets the model pause a task when required information is missing. `check_permission_node()` intercepts this tool before normal tool execution and routes it to `user_input_required_node()`.
+
+The interrupt payload contains:
+
+```text
+kind=user_input_required
+prompt=<human-readable question>
+choices=<optional fixed choices>
+inputSchema=<text input schema>
+toolCallId=<original model tool-call id>
+```
+
+The public A2A continuation uses another `SendMessage` with the existing `taskId`. `MainAgentCore.submit_task_input()` validates the task and context, persists the user message, and resumes the same runtime `thread_id`. The router is not called again.
+
+The runtime resumes with:
+
+```python
+Command(resume={"parts": parts, "metadata": metadata})
+```
+
+`user_input_required_node()` converts the submitted text into a `ToolMessage` associated with the original tool call. The graph then continues the ReAct loop from the existing checkpoint.
 
 ## `__interrupt__`
 
@@ -252,7 +276,7 @@ Command(resume=...)
 
 ## Summary
 
-The approval mechanism has two layers:
+The interrupt mechanism has two layers:
 
 ```text
 LangGraph layer:
@@ -266,6 +290,12 @@ CLI/runtime layer:
   RunResult.interrupt_message
   interactive yes/no prompt
   resume()
+
+Main-agent/A2A layer:
+  task event input_request payload
+  SendMessage with existing taskId
+  submit_task_input()
+  resume_input()
 ```
 
 `graph.invoke(...)` is suitable for approval interrupt scenarios. Graph stream inspection is not required for interrupt/resume correctness.

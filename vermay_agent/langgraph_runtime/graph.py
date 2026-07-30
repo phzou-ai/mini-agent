@@ -12,6 +12,7 @@ from .nodes import (
     max_loops_node,
     record_tool_messages_node,
     reject_tool_node,
+    user_input_required_node,
 )
 from .routing import route_after_approval, route_after_model, route_after_permission, route_loop_limit
 from .state import AgentState
@@ -22,6 +23,7 @@ def build_graph(components: GraphComponents, checkpointer=None):
     graph.add_node("call_model", call_model_node(components))
     graph.add_node("check_permission", check_permission_node(components))
     graph.add_node("approval_required", approval_required_node(components))
+    graph.add_node("user_input_required", user_input_required_node(components))
     graph.add_node("reject_tool", reject_tool_node(components))
     graph.add_node("tools", ToolNode(components.tools, handle_tool_errors=True))
     graph.add_node("record_tool_messages", record_tool_messages_node(components))
@@ -42,6 +44,7 @@ def build_graph(components: GraphComponents, checkpointer=None):
         route_after_permission,
         {
             "allowed": "tools",
+            "input_required": "user_input_required",
             "approval_required": "approval_required",
             "denied": "reject_tool",
         },
@@ -54,6 +57,7 @@ def build_graph(components: GraphComponents, checkpointer=None):
             "rejected": "reject_tool",
         },
     )
+    graph.add_edge("user_input_required", "increment_loop")
     graph.add_edge("reject_tool", END)
     graph.add_edge("tools", "record_tool_messages")
     graph.add_edge("record_tool_messages", "increment_loop")

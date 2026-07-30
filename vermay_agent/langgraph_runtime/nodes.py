@@ -11,6 +11,7 @@ from vermay_agent.permission import PermissionGate
 from vermay_agent.progress import ProgressReporter
 from vermay_agent.trace import TraceLogger
 from vermay_agent.types import ToolCall
+from vermay_agent.tools.user_input import REQUEST_USER_INPUT_TOOL_NAME
 
 from .model_adapters import ModelInvocation
 from .routing import latest_ai_message
@@ -86,6 +87,24 @@ def check_permission_node(components: GraphComponents):
         tool_calls = ai_message.tool_calls if ai_message else []
         if not tool_calls:
             permission = {"status": "denied", "reason": "missing tool call"}
+            _emit_permission(components, loop_index, permission)
+            return {"permission": permission}
+
+        input_request = next(
+            (
+                raw_tool_call
+                for raw_tool_call in tool_calls
+                if raw_tool_call.get("name") == REQUEST_USER_INPUT_TOOL_NAME
+            ),
+            None,
+        )
+        if input_request is not None:
+            permission = {
+                "status": "input_required",
+                "reason": "the model requires additional user input",
+                "tool_call": input_request,
+                "tool_calls": tool_calls,
+            }
             _emit_permission(components, loop_index, permission)
             return {"permission": permission}
 
@@ -260,6 +279,67 @@ def approval_required_node(components: GraphComponents):
         if approval["approved"] and isinstance(executable_tool_calls, list):
             _emit_tool_execute_start(components, loop_index, executable_tool_calls)
         return {"approval": approval}
+
+    return node
+
+
+def user_input_required_node(components: GraphComponents):
+    def node(state: AgentState) -> dict:
+        loop_index = state["loop_index"]
+        permission = state.get("permission") or {}
+        tool_call = permission.get("tool_call") or {}
+        arguments = dict(tool_call.get("args") or {})
+        prompt = str(arguments.get("prompt") or "Please provide the information required to continue.")
+        raw_choices = arguments.get("choices") or []
+        choices = [str(choice) for choice in raw_choices if str(choice).strip()]
+        tool_call_id = str(tool_call.get("id") or "request-user-input")
+
+        request = {
+            "kind": "user_input_required",
+            "message": prompt,
+            "prompt": prompt,
+            "choices": choices,
+            "inputSchema": {
+                "type": "string",
+                **({"enum": choices} if choices else {}),
+            },
+            "toolCallId": tool_call_id,
+            "toolName": REQUEST_USER_INPUT_TOOL_NAME,
+        }
+        _emit_progress(components, loop_index, "user_input_required", tool=REQUEST_USER_INPUT_TOOL_NAME)
+        _log_trace(components, "langgraph_user_input_required", {"loop": loop_index, **request})
+
+        resume = interrupt(request)
+        parts = resume.get("parts") if isinstance(resume, dict) else None
+        text = _text_from_input_parts(parts)
+        if not text and isinstance(resume, dict):
+            text = str(resume.get("text") or "")
+        if not text:
+            text = str(resume or "")
+
+        _emit_progress(components, loop_index, "user_input_resumed", tool=REQUEST_USER_INPUT_TOOL_NAME)
+        _log_trace(
+            components,
+            "langgraph_user_input_resumed",
+            {"loop": loop_index, "tool_call_id": tool_call_id, "text": text},
+        )
+        tool_messages: list[ToolMessage] = []
+        for pending_tool_call in permission.get("tool_calls") or [tool_call]:
+            pending_name = str(pending_tool_call.get("name") or "tool")
+            pending_id = str(pending_tool_call.get("id") or pending_name)
+            pending_content = (
+                text
+                if pending_name == REQUEST_USER_INPUT_TOOL_NAME
+                else "Tool call deferred because additional user input was required."
+            )
+            tool_messages.append(
+                ToolMessage(
+                    content=pending_content,
+                    tool_call_id=pending_id,
+                    name=pending_name,
+                )
+            )
+        return {"messages": tool_messages}
 
     return node
 
@@ -462,3 +542,13 @@ def _message_preview(message: BaseMessage) -> dict[str, str | None]:
         "name": getattr(message, "name", None),
         "content": str(message.content),
     }
+
+
+def _text_from_input_parts(parts: Any) -> str:
+    if not isinstance(parts, list):
+        return ""
+    return "\n".join(
+        str(part.get("text"))
+        for part in parts
+        if isinstance(part, dict) and part.get("text") is not None
+    )

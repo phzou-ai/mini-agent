@@ -26,6 +26,15 @@ export function sendAgentA2AMessage(payload: AgentA2AMessagePayload) {
   return requestPost<AgentA2ASendResult>("/api/bff/agent/a2a/message", payload)
 }
 
+export function submitAgentA2ATaskInput(
+  taskId: string,
+  contextId: string,
+  text: string,
+  metadata?: Record<string, unknown>
+) {
+  return sendAgentA2AMessage({ taskId, contextId, text, metadata })
+}
+
 export function getAgentA2ATask(taskId: string) {
   return requestGet<AgentA2ATask>(
     `/api/bff/agent/a2a/tasks/${encodeURIComponent(taskId)}`

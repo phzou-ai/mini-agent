@@ -47,6 +47,7 @@ import {
   listAgentRegisteredAgents,
   refreshAgentRegisteredAgent,
   resumeAgentA2ATask,
+  submitAgentA2ATaskInput,
   updateAgentContext,
   upsertAgentRegisteredAgent,
 } from "@/lib/agent/client"
@@ -128,7 +129,7 @@ const EVENT_LABELS: Record<
   },
   task_interrupted: {
     title: "Task interrupted",
-    detail: "Waiting for human approval",
+    detail: "Waiting for user input or approval",
     icon: Pause,
   },
   task_resumed: {
@@ -211,6 +212,46 @@ function isActiveStatus(status?: AgentTaskStatus | null) {
 
 function isApprovalRequiredStatus(status?: AgentTaskStatus | null) {
   return status === "interrupted"
+}
+
+type TaskInputRequest = {
+  kind: string
+  prompt: string
+  choices: string[]
+}
+
+function taskInputRequest(task?: AgentTask): TaskInputRequest | null {
+  const value = task?.metadata?.inputRequest
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const request = value as Record<string, unknown>
+  const kind = typeof request.kind === "string" ? request.kind : ""
+  const promptValue = request.prompt ?? request.message
+  const prompt =
+    typeof promptValue === "string" && promptValue.trim()
+      ? promptValue.trim()
+      : "Please provide the information required to continue."
+  const directChoices = Array.isArray(request.choices) ? request.choices : []
+  const inputSchema =
+    request.inputSchema &&
+    typeof request.inputSchema === "object" &&
+    !Array.isArray(request.inputSchema)
+      ? (request.inputSchema as Record<string, unknown>)
+      : undefined
+  const schemaChoices = Array.isArray(inputSchema?.enum)
+    ? inputSchema.enum
+    : []
+  const choices = (directChoices.length ? directChoices : schemaChoices).filter(
+    (choice): choice is string =>
+      typeof choice === "string" && Boolean(choice.trim())
+  )
+  return { kind, prompt, choices }
+}
+
+function isGeneralInputRequiredTask(task?: AgentTask) {
+  return (
+    isApprovalRequiredStatus(task?.status) &&
+    taskInputRequest(task)?.kind === "user_input_required"
+  )
 }
 
 function normalizeStatus(status?: string | null): AgentTaskStatus {
@@ -510,6 +551,7 @@ function storedTaskToAgentTask(
     model: task.model,
     max_loops: task.max_loops,
     mcp: task.mcp,
+    metadata: snapshot?.metadata ?? {},
     created_at: task.created_at,
     updated_at: updatedAt,
   }
@@ -680,6 +722,7 @@ export function AgentConsole() {
   const [editingSessionTitle, setEditingSessionTitle] = useState("")
   const [updatingSessionId, setUpdatingSessionId] = useState("")
   const [resumingTaskId, setResumingTaskId] = useState("")
+  const [submittingTaskInputId, setSubmittingTaskInputId] = useState("")
   const [error, setError] = useState("")
   const messageStreamAbortRef = useRef<AbortController | null>(null)
   const hydratingTaskEventsRef = useRef(new Set<string>())
@@ -1336,12 +1379,24 @@ export function AgentConsole() {
               setTasks((previous) => {
                 const task = previous[event.task_id]
                 if (!task) return previous
+                const inputRequest = result.metadata?.inputRequest
+                const metadata = { ...(task.metadata ?? {}) }
+                if (
+                  event.status === "interrupted" &&
+                  inputRequest &&
+                  typeof inputRequest === "object"
+                ) {
+                  metadata.inputRequest = inputRequest
+                } else if (event.status !== "interrupted") {
+                  delete metadata.inputRequest
+                }
                 return {
                   ...previous,
                   [event.task_id]: {
                     ...task,
                     status: event.status ?? task.status,
                     updated_at: event.created_at,
+                    metadata,
                   },
                 }
               })
@@ -1631,6 +1686,67 @@ export function AgentConsole() {
     }
   }
 
+  async function submitTaskInput(taskId: string, value: string) {
+    const task = tasks[taskId]
+    const text = value.trim()
+    if (
+      !task ||
+      !text ||
+      !isGeneralInputRequiredTask(task) ||
+      submittingTaskInputId
+    )
+      return
+
+    setError("")
+    setSubmittingTaskInputId(taskId)
+    try {
+      const result = await submitAgentA2ATaskInput(
+        taskId,
+        task.session_id,
+        text,
+        { source: "web-ui" }
+      )
+      if (result.kind !== "task") {
+        throw new Error("Task input continuation returned a message result.")
+      }
+
+      const snapshot = result.task
+      const nextStatus = normalizeStatus(snapshot.status.state)
+      const updatedAt = snapshot.status.timestamp || new Date().toISOString()
+      const runtimeThreadId = threadIdFromMetadata(snapshot.metadata)
+      setTasks((previous) => ({
+        ...previous,
+        [taskId]: {
+          ...task,
+          thread_id: runtimeThreadId || task.thread_id,
+          status: nextStatus,
+          updated_at: updatedAt,
+          metadata: snapshot.metadata ?? {},
+        },
+      }))
+      setSessions((previous) =>
+        previous.map((session) =>
+          session.session_id === snapshot.contextId
+            ? {
+                ...session,
+                status: nextStatus,
+                updated_at: updatedAt,
+              }
+            : session
+        )
+      )
+      setCurrentTaskId(taskId)
+      hydrateTaskEvents(taskId)
+      await loadContextMessages(snapshot.contextId)
+    } catch (submitError) {
+      setError(
+        getRequestErrorMessage(submitError, "Failed to submit task input")
+      )
+    } finally {
+      setSubmittingTaskInputId("")
+    }
+  }
+
   async function saveRegisteredAgent() {
     const agentId = agentRegistryForm.agentId.trim()
     const name = agentRegistryForm.name.trim()
@@ -1798,7 +1914,9 @@ export function AgentConsole() {
                 onCopyMessage={copyMessage}
                 onSelectMessage={selectMessage}
                 onResumeTask={resumeTask}
+                onSubmitTaskInput={submitTaskInput}
                 resumingTaskId={resumingTaskId}
+                submittingTaskInputId={submittingTaskInputId}
                 busy={busy}
               />
             ) : (
@@ -2328,7 +2446,9 @@ function MessageList({
   onCopyMessage,
   onSelectMessage,
   onResumeTask,
+  onSubmitTaskInput,
   resumingTaskId,
+  submittingTaskInputId,
 }: {
   messages: AgentMessage[]
   tasks: Record<string, AgentTask>
@@ -2338,7 +2458,9 @@ function MessageList({
   onCopyMessage: (message: AgentMessage) => void
   onSelectMessage: (message: AgentMessage) => void
   onResumeTask: (taskId: string, approved: boolean) => void
+  onSubmitTaskInput: (taskId: string, value: string) => void
   resumingTaskId: string
+  submittingTaskInputId: string
 }) {
   return (
     <div
@@ -2360,10 +2482,14 @@ function MessageList({
                 copied={copiedMessageId === message.id}
                 busy={busy}
                 resuming={message.taskId === resumingTaskId}
+                submittingInput={message.taskId === submittingTaskInputId}
                 onSelect={() => onSelectMessage(message)}
                 onCopy={() => onCopyMessage(message)}
                 onResume={(approved) => {
                   if (message.taskId) onResumeTask(message.taskId, approved)
+                }}
+                onSubmitInput={(value) => {
+                  if (message.taskId) onSubmitTaskInput(message.taskId, value)
                 }}
               />
             )
@@ -2385,9 +2511,11 @@ function MessageItem({
   copied,
   busy,
   resuming,
+  submittingInput,
   onSelect,
   onCopy,
   onResume,
+  onSubmitInput,
 }: {
   message: AgentMessage
   task?: AgentTask
@@ -2395,16 +2523,18 @@ function MessageItem({
   copied: boolean
   busy: boolean
   resuming: boolean
+  submittingInput: boolean
   onSelect: () => void
   onCopy: () => void
   onResume: (approved: boolean) => void
+  onSubmitInput: (value: string) => void
 }) {
   const isUser = message.role === "user"
-  const isApprovalPending = Boolean(
+  const isInputPending = Boolean(
     !isUser && task && isApprovalRequiredStatus(task.status) && !message.content
   )
   const isLoadingOnly =
-    message.loading && !message.content && !isApprovalPending
+    message.loading && !message.content && !isInputPending
   const hasTaskEvents = Boolean(task && !isMessageDisplayTask(task))
 
   return (
@@ -2453,12 +2583,20 @@ function MessageItem({
               }
             }}
           >
-            {isApprovalPending && task ? (
-              <ApprovalRequiredCard
-                task={task}
-                resuming={resuming}
-                onResume={onResume}
-              />
+            {isInputPending && task ? (
+              isGeneralInputRequiredTask(task) ? (
+                <TaskInputRequiredCard
+                  task={task}
+                  submitting={submittingInput}
+                  onSubmit={onSubmitInput}
+                />
+              ) : (
+                <ApprovalRequiredCard
+                  task={task}
+                  resuming={resuming}
+                  onResume={onResume}
+                />
+              )
             ) : isLoadingOnly ? (
               <TypingIndicator />
             ) : message.content ? (
@@ -2482,7 +2620,7 @@ function MessageItem({
                 {hasTaskEvents ? `task · ${task.status}` : "message"}
               </button>
             )}
-            {busy && message.loading && !isApprovalPending && (
+            {busy && message.loading && !isInputPending && (
               <span className="rounded-full bg-[#F1F5F9] px-2 py-0.5 text-[11px] font-medium leading-4 text-[#64748B]">
                 Updating
               </span>
@@ -2534,7 +2672,7 @@ function ApprovalRequiredCard({
     "This task is waiting for operator approval before it can continue."
 
   return (
-    <div className="min-w-[320px] max-w-[640px]">
+    <div className="w-[min(640px,calc(100vw-7rem))] min-w-0">
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
           <p className="m-0 text-[13px] font-semibold leading-5 text-[#1F0013]">
@@ -2585,6 +2723,89 @@ function ApprovalRequiredCard({
         )}
       </div>
     </div>
+  )
+}
+
+function TaskInputRequiredCard({
+  task,
+  submitting,
+  onSubmit,
+}: {
+  task: AgentTask
+  submitting: boolean
+  onSubmit: (value: string) => void
+}) {
+  const request = taskInputRequest(task)
+  const [value, setValue] = useState("")
+
+  useEffect(() => {
+    setValue("")
+  }, [request?.prompt])
+
+  if (!request) return null
+
+  return (
+    <form
+      className="w-[min(640px,calc(100vw-7rem))] min-w-0"
+      data-testid="agent-task-input-card"
+      onClick={(event) => event.stopPropagation()}
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (!submitting && value.trim()) onSubmit(value)
+      }}
+    >
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="m-0 text-[13px] font-semibold leading-5 text-[#1F0013]">
+            Input required
+          </p>
+          <p className="m-0 mt-1 text-[12px] leading-5 text-[#64748B]">
+            The task is paused until you provide this information.
+          </p>
+        </div>
+        <span className="shrink-0 rounded-full bg-[#F3E8FF] px-2 py-0.5 text-[11px] font-semibold leading-4 text-[#6B21A8]">
+          waiting
+        </span>
+      </div>
+      <div className="mb-3 rounded-[4px] border border-[#E7E5E8] bg-[#F8FAFC] px-3 py-2 text-[12px] leading-5 text-[#54465C]">
+        {request.prompt}
+      </div>
+      {request.choices.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-2" data-testid="agent-task-input-choices">
+          {request.choices.map((choice) => (
+            <button
+              key={choice}
+              className="min-h-8 rounded-full border border-[#CBD5E1] bg-white px-3 text-[12px] font-medium text-[#334155] transition hover:border-[#3768C7] hover:bg-[#EFF6FF] hover:text-[#1E3A8A] disabled:cursor-not-allowed disabled:opacity-60"
+              type="button"
+              disabled={submitting}
+              onClick={() => onSubmit(choice)}
+            >
+              {choice}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="flex min-w-0 items-center gap-2">
+        <input
+          className="h-9 min-w-0 flex-1 rounded-[4px] border border-[#CBD5E1] bg-white px-3 text-[12px] text-[#1F0013] outline-none transition focus:border-[#8F2BB8] focus:shadow-[0_0_0_2px_rgba(143,43,184,0.12)]"
+          type="text"
+          value={value}
+          disabled={submitting}
+          placeholder="Type your answer"
+          aria-label="Task input"
+          data-testid="agent-task-input-field"
+          onChange={(event) => setValue(event.target.value)}
+        />
+        <button
+          className="h-9 shrink-0 rounded-[4px] bg-[#1E3A8A] px-3 text-[12px] font-semibold text-white transition hover:bg-[#264AA6] disabled:cursor-not-allowed disabled:opacity-50"
+          type="submit"
+          disabled={submitting || !value.trim()}
+          data-testid="agent-task-input-submit"
+        >
+          {submitting ? "Submitting..." : "Continue"}
+        </button>
+      </div>
+    </form>
   )
 }
 

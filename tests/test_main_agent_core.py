@@ -41,6 +41,7 @@ class FakeResponder:
 class FakeTaskRunner:
     calls: list[tuple[list[MessageRecord], str]] = field(default_factory=list)
     resume_calls: list[tuple[str, bool, str | None]] = field(default_factory=list)
+    resume_input_calls: list[tuple[str, list[dict], dict | None]] = field(default_factory=list)
 
     def run(self, messages: list[MessageRecord], *, thread_id: str) -> LocalTaskRunResult:
         self.calls.append((messages, thread_id))
@@ -55,6 +56,85 @@ class FakeTaskRunner:
             status=TaskStatus.COMPLETED,
             parts=[{"kind": "text", "text": "resumed task answer"}],
         )
+
+    def resume_input(
+        self,
+        *,
+        thread_id: str,
+        parts: list[dict],
+        metadata: dict | None = None,
+    ) -> LocalTaskRunResult:
+        self.resume_input_calls.append((thread_id, parts, metadata))
+        return LocalTaskRunResult(
+            status=TaskStatus.COMPLETED,
+            parts=[{"kind": "text", "text": "input resumed answer"}],
+        )
+
+
+def test_main_agent_core_submits_requested_input_without_rerouting(tmp_path):
+    class InputRunner(FakeTaskRunner):
+        def run(self, messages: list[MessageRecord], *, thread_id: str) -> LocalTaskRunResult:
+            self.calls.append((messages, thread_id))
+            return LocalTaskRunResult(
+                status=TaskStatus.INPUT_REQUIRED,
+                parts=[{"kind": "text", "text": "Which environment?"}],
+                input_request={
+                    "kind": "user_input_required",
+                    "prompt": "Which environment?",
+                    "choices": ["staging", "production"],
+                    "inputSchema": {"type": "string", "enum": ["staging", "production"]},
+                },
+            )
+
+    store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
+    runner = InputRunner()
+    core = MainAgentCore(
+        store=store,
+        local_message_responder=FakeResponder(),
+        local_task_runner=runner,
+    )
+    started = core.handle_message(
+        MainAgentRequest(
+            context_id=None,
+            message_id="msg-user-1",
+            role=MessageRole.USER,
+            parts=[{"kind": "text", "text": "check deployment"}],
+            metadata={"executionMode": "task"},
+        )
+    )
+    task = store.get_task(started.task_id)
+    assert task is not None
+    assert task.status == TaskStatus.INPUT_REQUIRED
+
+    resumed = core.submit_task_input(
+        task.task_id,
+        MainAgentRequest(
+            context_id=task.context_id,
+            message_id="msg-user-input",
+            role=MessageRole.USER,
+            parts=[{"kind": "text", "text": "staging"}],
+            metadata={"source": "test"},
+        ),
+    )
+
+    assert resumed.status == TaskStatus.COMPLETED
+    assert runner.resume_input_calls == [
+        (task.runtime_thread_id, [{"kind": "text", "text": "staging"}], {"source": "test"})
+    ]
+    submitted = store.get_message("msg-user-input")
+    assert submitted is not None
+    assert submitted.task_id == task.task_id
+    assert store.get_pending_input_request(task.task_id) is None
+    assert [event.type for event in store.list_task_events(task.task_id)] == [
+        "task_created",
+        "task_started",
+        "task_interrupted",
+        "task_input_submitted",
+        "task_resumed",
+        "task_started",
+        "task_artifact_created",
+        "task_completed",
+    ]
 
 
 @dataclass

@@ -27,6 +27,8 @@ def route_after_permission(state: AgentState) -> str:
     permission = state.get("permission") or {}
     if permission.get("status") == "allowed":
         return "allowed"
+    if permission.get("status") == "input_required":
+        return "input_required"
     if permission.get("status") == "approval_required":
         return "approval_required"
     return "denied"

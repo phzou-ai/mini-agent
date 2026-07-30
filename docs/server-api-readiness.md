@@ -49,16 +49,6 @@ SubscribeToTask
 ResumeTask
 ```
 
-Transitional aliases remain accepted during burn-in, but canonical method names should be used for new callers:
-
-```text
-message/send
-message/stream
-tasks/get
-tasks/cancel
-tasks/subscribe
-```
-
 Batch arrays are intentionally rejected until single-request usage has completed one review and burn-in pass.
 
 ## Identity Model
@@ -132,18 +122,33 @@ task
 
 Registered child-agent routing can be requested with route metadata such as `targetAgentId`.
 
+If a task is in `input-required` because the model requested missing information, continue it with another `SendMessage`. Put the existing `taskId` on the user message; `contextId` may be omitted and will be inferred from the task.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-input-1",
+  "method": "SendMessage",
+  "params": {
+    "message": {
+      "kind": "message",
+      "role": "user",
+      "messageId": "msg-input-1",
+      "taskId": "<task-id>",
+      "parts": [{"kind": "text", "text": "staging"}]
+    }
+  }
+}
+```
+
+This resumes the existing LangGraph checkpoint and bypasses routing. A supplied `contextId` must match the task context.
+
 ## Task Get
 
 ```bash
 curl -X POST http://127.0.0.1:8000/rpc \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":"req-get-1","method":"GetTask","params":{"id":"<task-id>"}}'
-```
-
-Path-style compatibility remains available for existing callers, but new clients should use `/rpc` `GetTask`:
-
-```bash
-curl http://127.0.0.1:8000/tasks/<task-id>
 ```
 
 ## Task Events
@@ -156,13 +161,7 @@ curl -N -X POST http://127.0.0.1:8000/rpc \
   -d '{"jsonrpc":"2.0","id":"req-subscribe-1","method":"SubscribeToTask","params":{"id":"<task-id>","afterEventId":0}}'
 ```
 
-Path-style compatibility remains available for existing callers, but new clients should use `/rpc` `SubscribeToTask`:
-
-```bash
-curl -N -X POST http://127.0.0.1:8000/tasks/<task-id>:subscribe
-```
-
-SSE streams replay persisted task events and then stop at terminal task state.
+SSE streams replay persisted task events and then stop at a terminal, `input-required`, or `auth-required` task state.
 
 Expected SSE event names:
 
@@ -181,14 +180,6 @@ Streams do not expose raw graph state, raw prompts, raw model output, or full to
 curl -X POST http://127.0.0.1:8000/rpc \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":"req-cancel-1","method":"CancelTask","params":{"id":"<task-id>","reason":"operator requested"}}'
-```
-
-Path-style compatibility remains available for existing callers, but new clients should use `/rpc` `CancelTask`:
-
-```bash
-curl -X POST http://127.0.0.1:8000/tasks/<task-id>:cancel \
-  -H 'Content-Type: application/json' \
-  -d '{"reason":"operator requested"}'
 ```
 
 Terminal tasks return `invalid_session_state` when cancellation is no longer allowed.

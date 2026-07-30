@@ -85,9 +85,9 @@ sequenceDiagram
   M-->>C: A2A message, task snapshot, or stream event
 ```
 
-### Approval Resume 流程
+### Input-Required Resume 流程
 
-Approval interrupt 会保持 `task_id` 和 `thread_id` 分离。调用方恢复外部可见的 `task_id`；main-agent 层查找内部 checkpoint thread 并恢复 runtime。
+Approval 和模型请求补充信息的 interrupt 都会保持 `task_id` 和 `thread_id` 分离。调用方继续外部可见的 `task_id`；main-agent 层查找内部 checkpoint thread 并恢复 runtime。
 
 ```mermaid
 sequenceDiagram
@@ -101,13 +101,13 @@ sequenceDiagram
   M->>S: create task record
   M->>R: start execution with thread_id
   R->>K: checkpoint interrupted state
-  R-->>M: approval required
+  R-->>M: approval or user input required
   M->>S: mark task input-required/interrupted
   M-->>C: input-required task status
 
-  C->>M: resume task_id with approval decision
+  C->>M: continue task_id with approval or requested input
   M->>S: load task and runtime thread_id
-  M->>R: resume checkpoint with approval
+  M->>R: resume checkpoint with user response
   R->>K: load checkpoint state
   R-->>M: final answer or failure
   M->>S: persist final status, artifacts, events
@@ -385,11 +385,13 @@ vermay-agent "debug phzou-core service" --mcp-server k8s --mcp-prompt 'k8s-servi
 
 本地 Kubernetes MCP 示例位于 `examples/mcp_servers/k8s/`。它使用 `VERMAY_AGENT_SSH_*` 环境配置。
 
-## Approval 和 Resume
+## Human Input 和 Approval
 
-危险工具会暂停执行，并要求显式 approval。
+危险工具会暂停执行，并要求显式 approval。当模型缺少继续执行所必需的信息时，可以调用内建的 `request_user_input` 工具，以结构化 prompt 和可选 choices 暂停任务。
 
-在 Web UI 中，input-required task 会直接在 transcript 中渲染 approval controls。
+在 Web UI 中，input-required task 会直接在 transcript 中渲染 approval controls 或补充信息表单。
+
+A2A 调用方通过新的 `SendMessage` 请求提交补充信息，并携带已有 `taskId`。main agent 会恢复同一个 LangGraph `thread_id`，不会再次路由，也不会创建新 task。
 
 在交互式 terminal 中，approval 会自动提示：
 
