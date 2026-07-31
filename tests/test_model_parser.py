@@ -22,6 +22,21 @@ def test_parse_tool_call_action():
     assert response.tool_call.arguments == {"resource": "pods"}
 
 
+def test_parse_request_user_input_shorthand_as_tool_call():
+    response = parse(
+        '{"action":"request_user_input","prompt":"Proceed?",'
+        '"choices":["yes","no"]}'
+    )
+
+    assert response.content == "Calling tool request_user_input."
+    assert response.tool_call is not None
+    assert response.tool_call.name == "request_user_input"
+    assert response.tool_call.arguments == {
+        "prompt": "Proceed?",
+        "choices": ["yes", "no"],
+    }
+
+
 def test_parse_embedded_tool_call_action():
     response = parse(
         'I will read the cluster state.\n\n'
@@ -107,3 +122,4 @@ def test_ollama_protocol_prompt_uses_standard_tool_message_error_language():
 
     assert "TOOL_ERROR" not in protocol
     assert "tool message indicates an error or failed execution" in protocol
+    assert "Use request_user_input only for missing tool arguments" in protocol

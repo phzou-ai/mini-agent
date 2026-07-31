@@ -797,77 +797,17 @@ export function AgentConsole() {
     tasksRef.current = tasks
   }, [tasks])
 
-  const hydrateTaskEvents = useCallback((taskId: string) => {
-    if (!taskId || hydratingTaskEventsRef.current.has(taskId)) return
-
-    hydratingTaskEventsRef.current.add(taskId)
-    let finished = false
-    let source: EventSource | null = null
-
-    const finish = () => {
-      if (finished) return
-      finished = true
-      source?.close()
-      hydratingTaskEventsRef.current.delete(taskId)
-    }
-
-    const timeout = window.setTimeout(finish, 1800)
-
-    source = openAgentA2ATaskEventStream(taskId, {
-      after: 0,
-      onEvent: (envelope) => {
-        const projectedEvent = a2aEnvelopeToTaskEvent(envelope)
-        if (!projectedEvent) return
-        const event = eventWithTaskThreadId(
-          projectedEvent,
-          tasksRef.current[projectedEvent.task_id]
-        )
-
-        const merged = mergeEvents(
-          eventsByTaskRef.current[event.task_id] ?? [],
-          [event]
-        )
-        eventsByTaskRef.current = {
-          ...eventsByTaskRef.current,
-          [event.task_id]: merged,
-        }
-        setEventsByTask((previous) => {
-          return { ...previous, [event.task_id]: merged }
-        })
-        setSelectedEventId(preferredEventId(merged))
-        if (isTerminalStatus(event.status)) {
-          window.clearTimeout(timeout)
-          finish()
-        }
-      },
-      onDone: () => {
-        window.clearTimeout(timeout)
-        finish()
-      },
-    })
-  }, [])
-
-  const reconcileA2ATaskSnapshot = useCallback(async (taskId: string) => {
-    let snapshot: AgentA2ATask
-    try {
-      snapshot = await getAgentA2ATask(taskId)
-    } catch (taskError) {
-      setError(
-        getRequestErrorMessage(taskError, "Failed to refresh task snapshot")
-      )
-      return
-    }
-
+  const applyA2ATaskSnapshot = useCallback((snapshot: AgentA2ATask) => {
     const status = normalizeStatus(snapshot.status.state)
     const updatedAt = snapshot.status.timestamp || new Date().toISOString()
     const runtimeThreadId = threadIdFromMetadata(snapshot.metadata)
 
     setTasks((previous) => {
-      const task = previous[taskId]
+      const task = previous[snapshot.id]
       if (!task) return previous
       return {
         ...previous,
-        [taskId]: {
+        [snapshot.id]: {
           ...task,
           thread_id: runtimeThreadId || task.thread_id,
           status,
@@ -889,6 +829,108 @@ export function AgentConsole() {
       )
     )
   }, [])
+
+  const reconcileA2ATaskSnapshot = useCallback(
+    async (taskId: string) => {
+      let snapshot: AgentA2ATask
+      try {
+        snapshot = await getAgentA2ATask(taskId)
+      } catch (taskError) {
+        setError(
+          getRequestErrorMessage(taskError, "Failed to refresh task snapshot")
+        )
+        return
+      }
+
+      applyA2ATaskSnapshot(snapshot)
+    },
+    [applyA2ATaskSnapshot]
+  )
+
+  const hydrateTaskEvents = useCallback((taskId: string) => {
+    if (!taskId || hydratingTaskEventsRef.current.has(taskId)) return
+
+    hydratingTaskEventsRef.current.add(taskId)
+    const afterEventId = Math.max(
+      0,
+      ...(eventsByTaskRef.current[taskId] ?? []).map(
+        (event) => event.event_id
+      )
+    )
+    let finished = false
+    let source: EventSource | null = null
+
+    const finish = () => {
+      if (finished) return
+      finished = true
+      source?.close()
+      hydratingTaskEventsRef.current.delete(taskId)
+    }
+
+    const timeout = window.setTimeout(finish, 1800)
+
+    source = openAgentA2ATaskEventStream(taskId, {
+      after: afterEventId,
+      onEvent: (envelope) => {
+        const projectedEvent = a2aEnvelopeToTaskEvent(envelope)
+        if (!projectedEvent) return
+        const event = eventWithTaskThreadId(
+          projectedEvent,
+          tasksRef.current[projectedEvent.task_id]
+        )
+
+        const merged = mergeEvents(
+          eventsByTaskRef.current[event.task_id] ?? [],
+          [event]
+        )
+        eventsByTaskRef.current = {
+          ...eventsByTaskRef.current,
+          [event.task_id]: merged,
+        }
+        setEventsByTask((previous) => {
+          return { ...previous, [event.task_id]: merged }
+        })
+        setSelectedEventId(preferredEventId(merged))
+
+        if (event.status) {
+          const status = event.status
+          setTasks((previous) => {
+            const task = previous[event.task_id]
+            if (!task) return previous
+            return {
+              ...previous,
+              [event.task_id]: {
+                ...task,
+                status,
+                updated_at: event.created_at,
+              },
+            }
+          })
+          setSessions((previous) =>
+            previous.map((session) =>
+              session.session_id === event.session_id
+                ? {
+                    ...session,
+                    status,
+                    updated_at: event.created_at,
+                  }
+                : session
+            )
+          )
+        }
+
+        if (event.status === "interrupted" || isTerminalStatus(event.status)) {
+          void reconcileA2ATaskSnapshot(event.task_id)
+          window.clearTimeout(timeout)
+          finish()
+        }
+      },
+      onDone: () => {
+        window.clearTimeout(timeout)
+        finish()
+      },
+    })
+  }, [reconcileA2ATaskSnapshot])
 
   const loadContextDiagnostics = useCallback(async (contextId: string) => {
     const [routeDecisions, delegations] = await Promise.all([
@@ -1054,6 +1096,25 @@ export function AgentConsole() {
   async function sendMessage() {
     const prompt = input.trim()
     if (!prompt || busy || isCurrentSessionTaskActive) return
+
+    if (currentTask && isApprovalRequiredStatus(currentTask.status)) {
+      setInput("")
+      if (isGeneralInputRequiredTask(currentTask)) {
+        await submitTaskInput(currentTask.task_id, prompt)
+        return
+      }
+
+      const approval = prompt.toLowerCase()
+      if (approval === "yes" || approval === "no") {
+        await resumeTask(currentTask.task_id, approval === "yes")
+        return
+      }
+
+      setError(
+        "This task is waiting for approval. Use the approval controls or type yes or no."
+      )
+      return
+    }
 
     const abortController = new AbortController()
     let streamedTaskId = ""
@@ -2462,9 +2523,35 @@ function MessageList({
   resumingTaskId: string
   submittingTaskInputId: string
 }) {
+  const listRef = useRef<HTMLDivElement>(null)
+  const latestMessage = messages.at(-1)
+
+  useEffect(() => {
+    const list = listRef.current
+    if (!list) return
+
+    const frame = window.requestAnimationFrame(() => {
+      list.scrollTo({
+        top: list.scrollHeight,
+        behavior: latestMessage?.loading ? "auto" : "smooth",
+      })
+    })
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [
+    latestMessage?.id,
+    latestMessage?.content,
+    latestMessage?.loading,
+    latestMessage?.taskId
+      ? tasks[latestMessage.taskId]?.status
+      : undefined,
+    messages.length,
+  ])
+
   return (
     <div
-      className="min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-8"
+      ref={listRef}
+      className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-6 md:px-8"
       data-testid="agent-message-list"
     >
       <div className="mx-auto grid w-full max-w-[980px] gap-5">
@@ -2557,6 +2644,7 @@ function MessageItem({
         <div
           className={cn(
             "flex min-w-0 flex-col",
+            !isUser && isInputPending ? "w-full" : "",
             isUser ? "items-end" : "items-start"
           )}
         >
@@ -2568,7 +2656,10 @@ function MessageItem({
               isLoadingOnly ? "px-3 py-2.5" : "px-4 py-4",
               isUser
                 ? "max-w-[520px] rounded-[4px_0_4px_4px] border border-[#E2E8F0] bg-[#EFF6FF] text-[#0F172A]"
-                : "w-fit max-w-[844px] rounded-[0_4px_4px_4px] border border-[#E7E5E8] bg-white text-[#1F0013]",
+                : cn(
+                    "max-w-[844px] rounded-[0_4px_4px_4px] border border-[#E7E5E8] bg-white text-[#1F0013]",
+                    isInputPending ? "w-full" : "w-fit"
+                  ),
               selected &&
                 "border-[#8F2BB8] shadow-[0_0_0_2px_rgba(143,43,184,0.14)]"
             )}
@@ -2672,7 +2763,7 @@ function ApprovalRequiredCard({
     "This task is waiting for operator approval before it can continue."
 
   return (
-    <div className="w-[min(640px,calc(100vw-7rem))] min-w-0">
+    <div className="w-full max-w-[640px] min-w-0 overflow-hidden">
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
           <p className="m-0 text-[13px] font-semibold leading-5 text-[#1F0013]">
@@ -2686,7 +2777,7 @@ function ApprovalRequiredCard({
           input required
         </span>
       </div>
-      <div className="mb-4 rounded-[4px] border border-[#E7E5E8] bg-[#F8FAFC] px-3 py-2 text-[12px] leading-5 text-[#54465C]">
+      <div className="mb-4 break-words rounded-[4px] border border-[#E7E5E8] bg-[#F8FAFC] px-3 py-2 text-[12px] leading-5 text-[#54465C] [overflow-wrap:anywhere]">
         {message}
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -2746,7 +2837,7 @@ function TaskInputRequiredCard({
 
   return (
     <form
-      className="w-[min(640px,calc(100vw-7rem))] min-w-0"
+      className="w-full max-w-[640px] min-w-0 overflow-hidden"
       data-testid="agent-task-input-card"
       onClick={(event) => event.stopPropagation()}
       onSubmit={(event) => {
@@ -2767,7 +2858,7 @@ function TaskInputRequiredCard({
           waiting
         </span>
       </div>
-      <div className="mb-3 rounded-[4px] border border-[#E7E5E8] bg-[#F8FAFC] px-3 py-2 text-[12px] leading-5 text-[#54465C]">
+      <div className="mb-3 break-words rounded-[4px] border border-[#E7E5E8] bg-[#F8FAFC] px-3 py-2 text-[12px] leading-5 text-[#54465C] [overflow-wrap:anywhere]">
         {request.prompt}
       </div>
       {request.choices.length > 0 && (
@@ -2775,7 +2866,7 @@ function TaskInputRequiredCard({
           {request.choices.map((choice) => (
             <button
               key={choice}
-              className="min-h-8 rounded-full border border-[#CBD5E1] bg-white px-3 text-[12px] font-medium text-[#334155] transition hover:border-[#3768C7] hover:bg-[#EFF6FF] hover:text-[#1E3A8A] disabled:cursor-not-allowed disabled:opacity-60"
+              className="min-h-8 max-w-full break-words whitespace-normal rounded-full border border-[#CBD5E1] bg-white px-3 text-[12px] font-medium text-[#334155] transition hover:border-[#3768C7] hover:bg-[#EFF6FF] hover:text-[#1E3A8A] disabled:cursor-not-allowed disabled:opacity-60 [overflow-wrap:anywhere]"
               type="button"
               disabled={submitting}
               onClick={() => onSubmit(choice)}

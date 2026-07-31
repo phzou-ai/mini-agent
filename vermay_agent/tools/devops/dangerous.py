@@ -4,7 +4,3 @@ def exec_shell(command: str) -> dict:
 
 def kubectl_apply(manifest: str) -> dict:
     return {"manifest": manifest, "status": "placeholder_not_applied"}
-
-
-def delete_resource(resource: str, name: str) -> dict:
-    return {"resource": resource, "name": name, "status": "placeholder_not_deleted"}

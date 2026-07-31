@@ -26,7 +26,11 @@ class ContextBuilder:
                     "state is needed. Do not claim that a tool action completed "
                     "unless a tool observation confirms it. For current or real "
                     "Kubernetes cluster state, use SSH-backed read-only tools. "
-                    "For weather or forecast questions, use weather_forecast."
+                    "For weather or forecast questions, use weather_forecast. "
+                    "Use request_user_input only when information required to "
+                    "form a tool call is missing. Do not use it to ask permission "
+                    "for dangerous tools; call the tool and let the runtime's "
+                    "permission gate request approval."
                 ),
             )
         ]

@@ -160,6 +160,10 @@ def test_permission_policy_enriches_delete_resource_approval_prompt():
 
     assert decision.requires_approval is True
     assert decision.risk_level == "high"
-    assert decision.approval_summary == "Delete Kubernetes deployment: api"
-    assert decision.safe_argument_preview == {"resource": "deployment", "name": "api"}
+    assert decision.approval_summary == "Delete Kubernetes deployment: default/api"
+    assert decision.safe_argument_preview == {
+        "resource": "deployment",
+        "name": "api",
+        "namespace": "default",
+    }
     assert "destructive" in decision.policy_tags

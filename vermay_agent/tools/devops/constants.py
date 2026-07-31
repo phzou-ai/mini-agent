@@ -19,5 +19,16 @@ class KubectlDescribeResource(str, Enum):
     node = "node"
 
 
+class KubectlDeleteResource(str, Enum):
+    pod = "pod"
+    service = "service"
+    deployment = "deployment"
+    statefulset = "statefulset"
+    daemonset = "daemonset"
+    job = "job"
+    cronjob = "cronjob"
+
+
 KUBECTL_GET_RESOURCES = [resource.value for resource in KubectlGetResource]
 KUBECTL_DESCRIBE_RESOURCES = [resource.value for resource in KubectlDescribeResource]
+KUBECTL_DELETE_RESOURCES = [resource.value for resource in KubectlDeleteResource]

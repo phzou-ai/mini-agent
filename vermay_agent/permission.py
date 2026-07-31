@@ -85,7 +85,8 @@ def _approval_summary(tool_call: ToolCall, metadata: ToolMetadata) -> str:
     if tool_call.name == "delete_resource" and metadata.category == ToolCategory.KUBERNETES:
         resource = _argument_text(tool_call, "resource", fallback="resource")
         name = _argument_text(tool_call, "name", fallback="unknown")
-        return f"Delete Kubernetes {resource}: {name}"
+        namespace = _argument_text(tool_call, "namespace", fallback="default")
+        return f"Delete Kubernetes {resource}: {namespace}/{name}"
 
     if tool_call.name == "kubectl_apply" and metadata.category == ToolCategory.KUBERNETES:
         manifest = _argument_text(tool_call, "manifest")
@@ -119,6 +120,7 @@ def _safe_argument_preview(tool_call: ToolCall, metadata: ToolMetadata) -> dict[
         return {
             "resource": _argument_text(tool_call, "resource"),
             "name": _argument_text(tool_call, "name"),
+            "namespace": _argument_text(tool_call, "namespace", fallback="default"),
         }
 
     if metadata.category == ToolCategory.SHELL:

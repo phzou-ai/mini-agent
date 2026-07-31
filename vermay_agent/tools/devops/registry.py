@@ -5,9 +5,9 @@ from vermay_agent.tooling import ToolArgs, structured_tool
 from vermay_agent.tool_metadata import ApprovalPolicy, ExecutionScope, SideEffectLevel, ToolCategory
 from pydantic import Field
 
-from .constants import KubectlDescribeResource, KubectlGetResource
-from .dangerous import delete_resource, exec_shell, kubectl_apply
-from .remote_kubernetes import ssh_kubectl_describe, ssh_kubectl_get
+from .constants import KubectlDeleteResource, KubectlDescribeResource, KubectlGetResource
+from .dangerous import exec_shell, kubectl_apply
+from .remote_kubernetes import delete_resource, ssh_kubectl_describe, ssh_kubectl_get
 
 
 class SshKubectlGetArgs(ToolArgs):
@@ -30,8 +30,9 @@ class KubectlApplyArgs(ToolArgs):
 
 
 class DeleteResourceArgs(ToolArgs):
-    resource: str = Field(description="Kubernetes resource type.")
+    resource: KubectlDeleteResource = Field(description="Kubernetes resource type.")
     name: str = Field(description="Kubernetes resource name.")
+    namespace: str = Field(default="default", description="Kubernetes namespace.")
 
 
 def register_devops_tools(registry: ToolRegistry) -> None:
@@ -108,7 +109,10 @@ def register_devops_tools(registry: ToolRegistry) -> None:
         structured_tool(
             func=delete_resource,
             name="delete_resource",
-            description="Delete a Kubernetes resource. Dangerous and requires approval.",
+            description=(
+                "Delete a real Kubernetes resource over SSH. Dangerous and requires "
+                "explicit operator approval."
+            ),
             args_schema=DeleteResourceArgs,
             dangerous=True,
             category=ToolCategory.KUBERNETES,

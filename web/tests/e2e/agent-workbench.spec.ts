@@ -780,12 +780,227 @@ test.describe("Agent Workbench", () => {
     await page.getByTestId("agent-composer-send").click()
 
     await expect(page.getByTestId("agent-approval-approve")).toBeVisible()
-    await page.getByTestId("agent-approval-approve").click()
+    await page.getByTestId("agent-composer-input").fill("yes")
+    await page.getByTestId("agent-composer-send").click()
 
     await expect(
       assistantMessages(page).filter({ hasText: answer })
     ).toBeVisible()
     expect(approvedPayload).toMatchObject({ approved: true })
+  })
+
+  test("reconciles a repeated approval interrupt after task resume", async ({
+    page,
+  }) => {
+    const now = Date.now()
+    const contextId = `ctx-e2e-repeat-approval-${now}`
+    const taskId = `task-e2e-repeat-approval-${now}`
+    const threadId = `thread-e2e-repeat-approval-${now}`
+    const prompt = `repeat approval e2e task ${now}`
+    const startedAt = new Date(now).toISOString()
+    const resumedAt = new Date(now + 1000).toISOString()
+    let resumed = false
+    const resumeAfterEventIds: string[] = []
+
+    const statusEvent = (
+      eventId: number,
+      eventType: string,
+      state: "working" | "input-required",
+      timestamp: string
+    ) => ({
+      jsonrpc: "2.0",
+      id: `e2e-repeat-approval-event-${eventId}`,
+      result: {
+        kind: "status-update",
+        taskId,
+        contextId,
+        status: { state, timestamp },
+        metadata: {
+          localEventId: eventId,
+          localEventType: eventType,
+          localEventCreatedAt: timestamp,
+          localThreadId: threadId,
+          runtimeThreadId: threadId,
+        },
+      },
+    })
+
+    await mockAgentBootstrap(page)
+    await page.route("**/api/bff/agent/a2a/message-stream", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: [
+          `event: task\ndata: ${JSON.stringify({
+            jsonrpc: "2.0",
+            id: "e2e-repeat-approval-task",
+            result: {
+              kind: "task",
+              id: taskId,
+              contextId,
+              status: { state: "input-required", timestamp: startedAt },
+              metadata: {
+                localThreadId: threadId,
+                runtimeThreadId: threadId,
+              },
+            },
+          })}\n\n`,
+          `event: status-update\ndata: ${JSON.stringify(
+            statusEvent(10, "task_interrupted", "input-required", startedAt)
+          )}\n\n`,
+        ].join(""),
+      })
+    })
+    await page.route(
+      `**/api/bff/agent/contexts/${contextId}/route-decisions`,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: "[]",
+        })
+      }
+    )
+    await page.route(
+      `**/api/bff/agent/contexts/${contextId}/delegations`,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: "[]",
+        })
+      }
+    )
+    await page.route(`**/api/bff/agent/a2a/tasks/${taskId}`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          kind: "task",
+          id: taskId,
+          contextId,
+          status: {
+            state: "input-required",
+            timestamp: resumed ? resumedAt : startedAt,
+          },
+          metadata: {
+            localThreadId: threadId,
+            runtimeThreadId: threadId,
+          },
+        }),
+      })
+    })
+    await page.route(
+      `**/api/bff/agent/a2a/tasks/${taskId}/events**`,
+      async (route) => {
+        const url = new URL(route.request().url())
+        if (!resumed) {
+          await route.fulfill({
+            status: 200,
+            contentType: "text/event-stream",
+            body: "",
+          })
+          return
+        }
+
+        resumeAfterEventIds.push(url.searchParams.get("after") ?? "")
+        await route.fulfill({
+          status: 200,
+          contentType: "text/event-stream",
+          body: [
+            `event: status-update\ndata: ${JSON.stringify(
+              statusEvent(12, "task_started", "working", resumedAt)
+            )}\n\n`,
+            `event: status-update\ndata: ${JSON.stringify(
+              statusEvent(
+                13,
+                "task_interrupted",
+                "input-required",
+                resumedAt
+              )
+            )}\n\n`,
+          ].join(""),
+        })
+      }
+    )
+    await page.route(
+      `**/api/bff/agent/a2a/tasks/${taskId}/resume`,
+      async (route) => {
+        resumed = true
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            kind: "task",
+            id: taskId,
+            contextId,
+            status: { state: "submitted", timestamp: resumedAt },
+            metadata: {
+              localThreadId: threadId,
+              runtimeThreadId: threadId,
+            },
+          }),
+        })
+      }
+    )
+    await page.route(
+      `**/api/bff/agent/contexts/${contextId}/messages`,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              message_id: `msg-user-${now}`,
+              context_id: contextId,
+              role: "user",
+              parts: [{ kind: "text", text: prompt }],
+              task_id: taskId,
+              metadata: {},
+              created_at: startedAt,
+            },
+          ]),
+        })
+      }
+    )
+    await page.route(
+      `**/api/bff/agent/contexts/${contextId}/tasks`,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              task_id: taskId,
+              context_id: contextId,
+              status: "interrupted",
+              input_message_id: `msg-user-${now}`,
+              output_message_id: null,
+              runtime_thread_id: threadId,
+              attempt: 1,
+              error_code: "input_required",
+              error_message: "approval required",
+              created_at: startedAt,
+              updated_at: resumed ? resumedAt : startedAt,
+            },
+          ]),
+        })
+      }
+    )
+
+    await page.goto("/agent")
+    await page.getByTestId("agent-mode-task").click()
+    await page.getByTestId("agent-composer-input").fill(prompt)
+    await page.getByTestId("agent-composer-send").click()
+
+    await expect(page.getByTestId("agent-approval-approve")).toBeVisible()
+    await page.getByTestId("agent-approval-approve").click()
+
+    await expect(page.getByTestId("agent-approval-approve")).toBeVisible()
+    await expectLatestTaskStatus(page, "interrupted")
+    expect(resumeAfterEventIds).toContain("10")
+    expect(resumeAfterEventIds).not.toContain("")
+    expect(resumeAfterEventIds).not.toContain("0")
   })
 
   test("submits model-requested task input and continues the same task", async ({
@@ -963,9 +1178,28 @@ test.describe("Agent Workbench", () => {
 
     await expect(page.getByTestId("agent-task-input-card")).toBeVisible()
     await expect(page.getByText("Which environment should I inspect?")).toBeVisible()
-    await page.getByRole("button", { name: "staging", exact: true }).click()
+    const messageList = page.getByTestId("agent-message-list")
+    const inputCard = page.getByTestId("agent-task-input-card")
+    const [messageListWidth, messageListScrollWidth, inputCardBox] =
+      await Promise.all([
+        messageList.evaluate((element) => element.clientWidth),
+        messageList.evaluate((element) => element.scrollWidth),
+        inputCard.boundingBox(),
+      ])
+    expect(messageListScrollWidth).toBeLessThanOrEqual(messageListWidth + 1)
+    expect(inputCardBox?.width).toBeLessThanOrEqual(messageListWidth)
+    await page.getByTestId("agent-composer-input").fill("staging")
+    await page.getByTestId("agent-composer-send").click()
 
     await expect(assistantMessages(page).filter({ hasText: answer })).toBeVisible()
+    await expect
+      .poll(() =>
+        messageList.evaluate(
+          (element) =>
+            element.scrollHeight - element.scrollTop - element.clientHeight
+        )
+      )
+      .toBeLessThanOrEqual(2)
     expect(submittedPayload).toMatchObject({
       taskId,
       contextId,

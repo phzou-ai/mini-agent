@@ -187,6 +187,8 @@ class OllamaModelClient:
                 "Final answer: {\"action\":\"final\",\"content\":\"...\"}\n"
                 "Tool call: {\"action\":\"tool_call\",\"name\":\"tool_name\",\"arguments\":{...}}\n"
                 "Only call tools listed below. Dangerous tools may require approval.\n"
+                "Use request_user_input only for missing tool arguments, never for permission. "
+                "Call dangerous tools directly and let the runtime request approval.\n"
                 "If a tool message indicates an error or failed execution, either choose a corrected tool call "
                 "or return a final answer explaining the failure. Do not repeat the same failing call.\n"
                 f"Available tools:\n{json.dumps(tools, ensure_ascii=False, indent=2)}"

@@ -22,6 +22,11 @@ def test_ssh_kubectl_describe_rejects_unsupported_resource():
         remote_kubernetes.ssh_kubectl_describe("secret", "api-key")
 
 
+def test_delete_resource_rejects_unsupported_resource():
+    with pytest.raises(ValueError, match="unsupported resource: node"):
+        remote_kubernetes.delete_resource("node", "worker-1")
+
+
 def test_ssh_kubectl_get_builds_read_only_command_without_live_ssh(monkeypatch):
     calls = []
 
@@ -61,3 +66,27 @@ def test_ssh_kubectl_describe_node_omits_namespace_without_live_ssh(monkeypatch)
     assert "kubectl describe node phzou-nuc" in calls[0]
     assert "kubectl describe node phzou-nuc -n" not in calls[0]
     assert "microk8s kubectl describe node phzou-nuc -n" not in calls[0]
+
+
+def test_delete_resource_builds_namespace_scoped_command_without_live_ssh(monkeypatch):
+    calls = []
+
+    class FakeSshClient:
+        def __init__(self, timeout_seconds: int = 20) -> None:
+            self.timeout_seconds = timeout_seconds
+
+        def run(self, command: str) -> dict:
+            calls.append(command)
+            return {"ok": True, "command": command, "stdout": "pod deleted", "stderr": "", "exit_code": 0}
+
+    monkeypatch.setattr(remote_kubernetes, "SshClient", FakeSshClient)
+
+    result = remote_kubernetes.delete_resource(
+        "pod",
+        "nginx-5869d7778c-687rb",
+        namespace="default",
+    )
+
+    assert result["ok"] is True
+    assert len(calls) == 1
+    assert "kubectl delete pod nginx-5869d7778c-687rb -n default" in calls[0]

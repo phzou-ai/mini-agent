@@ -4,7 +4,7 @@ import shlex
 
 from vermay_agent.infra.ssh import SshClient
 
-from .constants import KubectlDescribeResource, KubectlGetResource
+from .constants import KubectlDeleteResource, KubectlDescribeResource, KubectlGetResource
 
 
 def ssh_kubectl_get(resource: str | KubectlGetResource, namespace: str = "all") -> dict:
@@ -32,6 +32,21 @@ def ssh_kubectl_describe(resource: str | KubectlDescribeResource, name: str, nam
     else:
         args = ["describe", resource_value, name, "-n", namespace]
     command = remote_kubectl_command(args)
+    return SshClient(timeout_seconds=30).run(command)
+
+
+def delete_resource(
+    resource: str | KubectlDeleteResource,
+    name: str,
+    namespace: str = "default",
+) -> dict:
+    try:
+        resource_value = KubectlDeleteResource(resource).value
+    except ValueError as exc:
+        raise ValueError(f"unsupported resource: {resource}") from exc
+    command = remote_kubectl_command(
+        ["delete", resource_value, name, "-n", namespace]
+    )
     return SshClient(timeout_seconds=30).run(command)
 
 

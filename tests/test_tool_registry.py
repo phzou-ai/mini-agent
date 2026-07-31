@@ -7,6 +7,7 @@ from vermay_agent.tool_metadata import ApprovalPolicy, ExecutionScope, SideEffec
 from vermay_agent.tool_schema import DEFAULT_OUTPUT_MAX_CHARS
 from vermay_agent.tools.devops import register_devops_tools
 from vermay_agent.tools.devops.constants import (
+    KUBECTL_DELETE_RESOURCES,
     KUBECTL_DESCRIBE_RESOURCES,
     KUBECTL_GET_RESOURCES,
 )
@@ -153,9 +154,11 @@ def test_devops_tool_schemas_use_single_source_resource_enums():
 
     get_resource_schema = schemas["ssh_kubectl_get"]["parameters"]["$defs"]["KubectlGetResource"]
     describe_resource_schema = schemas["ssh_kubectl_describe"]["parameters"]["$defs"]["KubectlDescribeResource"]
+    delete_resource_schema = schemas["delete_resource"]["parameters"]["$defs"]["KubectlDeleteResource"]
 
     assert get_resource_schema["enum"] == KUBECTL_GET_RESOURCES
     assert describe_resource_schema["enum"] == KUBECTL_DESCRIBE_RESOURCES
+    assert delete_resource_schema["enum"] == KUBECTL_DELETE_RESOURCES
 
 
 def test_devops_tools_have_explicit_metadata_classification():
