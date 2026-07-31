@@ -6,7 +6,6 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-from vermay_agent.api.task_contract import ARTIFACT_TASK_EVENT_TYPES
 from vermay_agent.errors import InvalidRequestError, InvalidSessionStateError, TaskNotFoundError
 from vermay_agent.main_agent import (
     LocalMessageDelta,
@@ -26,17 +25,13 @@ from vermay_agent.main_agent.projection import (
     task_to_a2a_payload,
 )
 
-from ..service import AgentService
-from ..session_store import SessionRecord, TaskEventRecord, TaskRecord
 from .agent_card import A2AAgentCardConfig, build_agent_card
 from .models import A2AJsonRpcMessageSendRequest, A2AMessage, A2ASendMessageRequest
-from .projection import A2AProjectionKind, project_task, project_task_artifact_event, project_task_event
 
 
 @dataclass(frozen=True)
 class A2AAdapterConfig:
     agent_card: A2AAgentCardConfig = field(default_factory=A2AAgentCardConfig)
-    message_metadata_allowlist: frozenset[str] = frozenset({"tenant", "client"})
 
 
 @dataclass(frozen=True)
@@ -49,11 +44,9 @@ class A2AAdapter:
     def __init__(
         self,
         *,
-        service: AgentService,
         config: A2AAdapterConfig | None = None,
         main_agent_core: MainAgentCore | None = None,
     ) -> None:
-        self.service = service
         self.config = config or A2AAdapterConfig()
         self.main_agent_core = main_agent_core
 
@@ -71,15 +64,22 @@ class A2AAdapter:
         return card
 
     def send_message(self, request: A2ASendMessageRequest, *, wait: bool = True) -> dict[str, Any]:
-        user_input = _extract_user_input(request.message)
-        session = self._resolve_session(request.message.context_id, request=request)
-        task = self.service.start_task(
-            session.session_id,
-            user_input,
-            task_id=request.message.task_id,
-            wait=wait,
-        )
-        return self.project_task(task)
+        core = self._require_main_agent_core("A2A message/send")
+        # Path-style bindings are only a transport compatibility surface. They
+        # must use the same lifecycle as the JSON-RPC binding.
+        _ = wait  # MainAgentCore owns task scheduling and continuation semantics.
+        message = request.message
+        _validate_jsonrpc_user_message(message)
+        metadata = dict(message.metadata)
+        metadata.update(request.metadata)
+        if message.task_id is not None:
+            task = core.submit_task_input(
+                message.task_id,
+                _main_agent_request(message, metadata=metadata),
+            )
+            return _main_task_payload(task, store=core.store)
+        result = core.handle_message(_main_agent_request(message, metadata=metadata))
+        return _main_agent_result_payload(result, store=core.store)
 
     def send_message_payload(self, payload: dict[str, Any], *, wait: bool = True) -> dict[str, Any]:
         if _is_jsonrpc_message_send(payload):
@@ -87,11 +87,10 @@ class A2AAdapter:
         return self.send_message(A2ASendMessageRequest.model_validate(payload), wait=wait)
 
     def stream_message_payload(self, payload: dict[str, Any]) -> Iterable[dict[str, Any]]:
+        core = self._require_main_agent_core("A2A message/stream")
         if not _is_jsonrpc_message_send(payload):
             yield self.send_message_payload(payload)
             return
-        if self.main_agent_core is None:
-            raise InvalidRequestError("A2A JSON-RPC message/stream requires main agent core.")
 
         request_id = payload.get("id")
         params = _jsonrpc_params(payload)
@@ -99,105 +98,94 @@ class A2AAdapter:
         _validate_jsonrpc_user_message(message)
         metadata = _merged_metadata(params, message=message)
         if message.task_id is not None:
-            task = self.main_agent_core.submit_task_input(
+            task = core.submit_task_input(
                 message.task_id,
                 _main_agent_request(message, metadata=metadata),
             )
             yield _jsonrpc_success(
                 request_id,
-                _main_task_payload(task, store=self.main_agent_core.store),
+                _main_task_payload(task, store=core.store),
             )
             return
-        for result in self.main_agent_core.stream_message(
-            _main_agent_request(message, metadata=metadata)
-        ):
+        for result in core.stream_message(_main_agent_request(message, metadata=metadata)):
             if isinstance(result, LocalMessageDelta):
                 yield _jsonrpc_success(request_id, _local_message_delta_payload(result))
             else:
                 yield {
                     "jsonrpc": "2.0",
                     "id": request_id,
-                    "result": _main_agent_result_payload(result, store=self.main_agent_core.store),
+                    "result": _main_agent_result_payload(result, store=core.store),
                 }
 
     def _send_jsonrpc_message(self, payload: dict[str, Any]) -> dict[str, Any]:
-        if self.main_agent_core is None:
-            raise InvalidRequestError("A2A JSON-RPC message/send requires main agent core.")
+        core = self._require_main_agent_core("A2A message/send")
         params = _jsonrpc_params(payload)
         message = _jsonrpc_message(params)
         _validate_jsonrpc_user_message(message)
         metadata = _merged_metadata(params, message=message)
         if message.task_id is not None:
-            task = self.main_agent_core.submit_task_input(
+            task = core.submit_task_input(
                 message.task_id,
                 _main_agent_request(message, metadata=metadata),
             )
             return _jsonrpc_success(
                 payload.get("id"),
-                _main_task_payload(task, store=self.main_agent_core.store),
+                _main_task_payload(task, store=core.store),
             )
-        result = self.main_agent_core.handle_message(
-            _main_agent_request(message, metadata=metadata)
-        )
+        result = core.handle_message(_main_agent_request(message, metadata=metadata))
         return {
             "jsonrpc": "2.0",
             "id": payload.get("id"),
-            "result": _main_agent_result_payload(result, store=self.main_agent_core.store),
+            "result": _main_agent_result_payload(result, store=core.store),
         }
 
     def get_task(self, task_id: str) -> dict[str, Any]:
-        main_task = self._get_main_agent_task(task_id)
-        if main_task is not None:
-            main_task = self._sync_remote_proxy_task(main_task)
-            return _jsonrpc_success(
-                f"task-get-{task_id}",
-                _main_task_payload(main_task, store=self.main_agent_core.store),
-            )
-        task = self.service.get_task(task_id)
+        core = self._require_main_agent_core("A2A tasks/get")
+        task = core.store.get_task(task_id)
         if task is None:
             raise TaskNotFoundError(task_id)
-        return self.project_task(task)
+        task = self._sync_remote_proxy_task(task)
+        return _jsonrpc_success(
+            f"task-get-{task_id}",
+            _main_task_payload(task, store=core.store),
+        )
 
     def cancel_task(self, task_id: str, *, reason: str | None = None) -> dict[str, Any]:
-        main_task = self._get_main_agent_task(task_id)
-        if main_task is not None:
-            if is_terminal_task_status(main_task.status):
-                raise InvalidSessionStateError(f"task is terminal and cannot be canceled: {task_id}")
-            delegation = self.main_agent_core.store.get_delegated_task_by_local_task_id(task_id)
-            if delegation is not None:
-                updated = self._cancel_remote_proxy_task(main_task, delegation=delegation, reason=reason)
-                return _jsonrpc_success(f"cancel-{task_id}", task_to_a2a_payload(updated))
-            updated = self.main_agent_core.cancel_task(task_id, reason=reason)
+        core = self._require_main_agent_core("A2A tasks/cancel")
+        task = core.store.get_task(task_id)
+        if task is None:
+            raise TaskNotFoundError(task_id)
+        if is_terminal_task_status(task.status):
+            raise InvalidSessionStateError(f"task is terminal and cannot be canceled: {task_id}")
+        delegation = core.store.get_delegated_task_by_local_task_id(task_id)
+        if delegation is not None:
+            updated = self._cancel_remote_proxy_task(task, delegation=delegation, reason=reason)
             return _jsonrpc_success(f"cancel-{task_id}", task_to_a2a_payload(updated))
-        task = self.service.cancel_task(task_id, reason=reason)
-        return self.project_task(task)
+        updated = core.cancel_task(task_id, reason=reason)
+        return _jsonrpc_success(f"cancel-{task_id}", task_to_a2a_payload(updated))
 
     def resume_task(self, task_id: str, *, approved: bool, reason: str | None = None) -> dict[str, Any]:
-        main_task = self._get_main_agent_task(task_id)
-        if main_task is not None:
-            delegation = self.main_agent_core.store.get_delegated_task_by_local_task_id(task_id)
-            if delegation is not None:
-                raise InvalidSessionStateError(f"delegated task resume is not supported yet: {task_id}")
-            updated = self.main_agent_core.resume_task(task_id, approved=approved, reason=reason)
-            return _jsonrpc_success(f"resume-{task_id}", task_to_a2a_payload(updated))
-        task = self.service.resume_task(task_id, approved=approved, reason=reason)
-        return self.project_task(task)
-
-    def project_task(self, task: TaskRecord) -> dict[str, Any]:
-        session = self.service.get_session(task.session_id)
-        artifacts = self.service.list_task_artifacts(task.task_id)
-        projection = project_task(
-            task,
-            context_id=session.context_id if session is not None else None,
-            artifacts=artifacts,
-        )
-        if projection.payload is None:
-            raise RuntimeError(f"failed to project task: {task.task_id}")
-        return projection.payload
+        core = self._require_main_agent_core("A2A tasks/resume")
+        task = core.store.get_task(task_id)
+        if task is None:
+            raise TaskNotFoundError(task_id)
+        delegation = core.store.get_delegated_task_by_local_task_id(task_id)
+        if delegation is not None:
+            raise InvalidSessionStateError(f"delegated task resume is not supported yet: {task_id}")
+        updated = core.resume_task(task_id, approved=approved, reason=reason)
+        return _jsonrpc_success(f"resume-{task_id}", task_to_a2a_payload(updated))
 
     def project_task_events(self, task_id: str, *, after_event_id: int = 0) -> list[dict[str, Any]]:
-        events = [event for event in self.service.list_task_events(task_id) if event.event_id > after_event_id]
-        return list(self._project_events(events))
+        core = self._require_main_agent_core("A2A task event projection")
+        task = core.store.get_task(task_id)
+        if task is None:
+            raise TaskNotFoundError(task_id)
+        task = self._sync_remote_proxy_task(task)
+        return [
+            payload
+            for event in core.store.list_task_events(task_id, after_event_id=after_event_id)
+            if (payload := self._project_main_agent_task_event(event, task=task)) is not None
+        ]
 
     def wait_for_task_events(
         self,
@@ -206,31 +194,23 @@ class A2AAdapter:
         after_event_id: int,
         timeout_seconds: float,
     ) -> A2AEventBatch:
-        main_task = self._get_main_agent_task(task_id)
-        if main_task is not None:
-            main_task = self._sync_remote_proxy_task(main_task)
-            events = self.main_agent_core.store.wait_for_task_events(
-                task_id,
-                after_event_id=after_event_id,
-                timeout_seconds=timeout_seconds,
-            )
-            projected = [
-                _jsonrpc_success(
-                    f"event-{event.event_id}",
-                    payload,
-                )
-                for event in events
-                if (payload := self._project_main_agent_task_event(event, task=main_task)) is not None
-            ]
-            return A2AEventBatch(last_event_id=_last_main_event_id(events, fallback=after_event_id), events=projected)
-        events = self.service.wait_for_task_events(
+        core = self._require_main_agent_core("A2A task event subscription")
+        task = core.store.get_task(task_id)
+        if task is None:
+            raise TaskNotFoundError(task_id)
+        task = self._sync_remote_proxy_task(task)
+        events = core.store.wait_for_task_events(
             task_id,
             after_event_id=after_event_id,
             timeout_seconds=timeout_seconds,
         )
         return A2AEventBatch(
-            last_event_id=_last_event_id(events, fallback=after_event_id),
-            events=list(self._project_events(events)),
+            last_event_id=_last_main_event_id(events, fallback=after_event_id),
+            events=[
+                _jsonrpc_success(f"event-{event.event_id}", payload)
+                for event in events
+                if (payload := self._project_main_agent_task_event(event, task=task)) is not None
+            ],
         )
 
     def is_main_agent_task(self, task_id: str) -> bool:
@@ -240,6 +220,11 @@ class A2AAdapter:
         if self.main_agent_core is None:
             return None
         return self.main_agent_core.store.get_task(task_id)
+
+    def _require_main_agent_core(self, operation: str) -> MainAgentCore:
+        if self.main_agent_core is None:
+            raise InvalidRequestError(f"{operation} requires MainAgentCore.")
+        return self.main_agent_core
 
     def _sync_remote_proxy_task(self, task):
         delegation = self.main_agent_core.store.get_delegated_task_by_local_task_id(task.task_id)
@@ -363,35 +348,6 @@ class A2AAdapter:
             event,
             task=task,
         )
-
-    def _resolve_session(self, context_id: str | None, *, request: A2ASendMessageRequest) -> SessionRecord:
-        if context_id:
-            existing = self.service.get_session_by_context_id(context_id)
-            if existing is not None:
-                return existing
-            return self.service.create_session(
-                context_id=context_id,
-                metadata=_session_metadata(request, allowlist=self.config.message_metadata_allowlist),
-            )
-        return self.service.create_session(
-            metadata=_session_metadata(request, allowlist=self.config.message_metadata_allowlist),
-        )
-
-    def _project_events(self, events: Iterable[TaskEventRecord]) -> Iterable[dict[str, Any]]:
-        for event in events:
-            artifact_payload = _artifact_event_payload(event)
-            if artifact_payload is not None:
-                artifact = self.service.get_task_artifact_by_a2a_id(
-                    task_id=event.task_id,
-                    a2a_artifact_id=artifact_payload["a2a_artifact_id"],
-                )
-                projection = project_task_artifact_event(event, artifact=artifact)
-            else:
-                projection = project_task_event(event)
-            if projection.kind in {A2AProjectionKind.STATUS_UPDATE, A2AProjectionKind.ARTIFACT_UPDATE}:
-                if projection.payload is not None:
-                    yield projection.payload
-
 
 def _extract_user_input(message: A2AMessage) -> str:
     if message.role not in {None, "user"}:
@@ -581,30 +537,6 @@ def _jsonrpc_success(request_id: Any, result: dict[str, Any]) -> dict[str, Any]:
         "id": request_id,
         "result": result,
     }
-
-
-def _session_metadata(request: A2ASendMessageRequest, *, allowlist: frozenset[str]) -> dict[str, Any]:
-    metadata: dict[str, Any] = {"source": "a2a"}
-    for source in (request.metadata, request.message.metadata):
-        for key in allowlist:
-            if key in source:
-                metadata[key] = source[key]
-    return metadata
-
-
-def _artifact_event_payload(event: TaskEventRecord) -> dict[str, Any] | None:
-    if event.event_type not in ARTIFACT_TASK_EVENT_TYPES:
-        return None
-    a2a_artifact_id = event.payload.get("a2a_artifact_id")
-    if not isinstance(a2a_artifact_id, str) or not a2a_artifact_id:
-        return None
-    return {"a2a_artifact_id": a2a_artifact_id}
-
-
-def _last_event_id(events: list[TaskEventRecord], *, fallback: int) -> int:
-    if not events:
-        return fallback
-    return max(event.event_id for event in events)
 
 
 def _last_main_event_id(events: list[Any], *, fallback: int) -> int:

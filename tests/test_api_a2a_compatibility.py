@@ -7,32 +7,48 @@ from fastapi.testclient import TestClient
 
 from vermay_agent.api.a2a import A2AAdapter, A2ASendMessageRequest
 from vermay_agent.api.app import create_app
-from vermay_agent.api.output_envelope import OutputVisibility, final_answer_envelope
 from vermay_agent.api.service import AgentService
-from vermay_agent.api.session_models import TaskStatus
 from vermay_agent.api.session_store import SessionStore
 from vermay_agent.errors import InvalidRequestError, TaskNotFoundError
-from vermay_agent.langgraph_runtime.results import RunResult
+from vermay_agent.main_agent import (
+    LocalTaskRunResult,
+    MainAgentCore,
+    MainAgentRequest,
+    MainAgentStore,
+    MessageRole,
+)
+from vermay_agent.main_agent.models import TaskStatus
 from vermay_agent.storage import AgentStore
 
 
-class FakeRuntime:
-    def __init__(self, responses) -> None:
-        self.responses = list(responses)
-        self.started = []
+class FakeLocalMessageResponder:
+    def respond(self, messages):
+        return [{"kind": "text", "text": "direct answer"}]
 
-    def start(self, user_input, thread_id=None):
-        self.started.append((user_input, thread_id))
-        response = self.responses.pop(0)
-        if callable(response):
-            return response(thread_id)
-        return response
 
-    def resume(self, thread_id, approved, reason=None):
-        raise RuntimeError("not used")
+class FakeLocalTaskRunner:
+    def __init__(self, answer: str = "task answer") -> None:
+        self.answer = answer
+        self.run_calls = []
 
-    def close(self):
-        return None
+    def run(self, messages, *, thread_id: str) -> LocalTaskRunResult:
+        self.run_calls.append((messages, thread_id))
+        return LocalTaskRunResult(
+            status=TaskStatus.COMPLETED,
+            parts=[{"kind": "text", "text": self.answer}],
+        )
+
+    def resume(self, *, thread_id: str, approved: bool, reason: str | None = None) -> LocalTaskRunResult:
+        return LocalTaskRunResult(
+            status=TaskStatus.COMPLETED,
+            parts=[{"kind": "text", "text": "resumed task answer"}],
+        )
+
+    def resume_input(self, *, thread_id: str, parts: list[dict], metadata: dict | None = None) -> LocalTaskRunResult:
+        return LocalTaskRunResult(
+            status=TaskStatus.COMPLETED,
+            parts=[{"kind": "text", "text": "input resumed answer"}],
+        )
 
 
 class ManualTaskExecutionService:
@@ -49,25 +65,46 @@ class ManualTaskExecutionService:
         return None
 
 
-def completed(answer="done"):
-    return lambda thread_id: RunResult(thread_id=thread_id, final_answer=answer)
-
-
-def make_adapter(tmp_path, runtime, *, task_execution_service=None):
+def make_core(tmp_path, *, task_submitter=None, answer: str = "task answer"):
     store = AgentStore(tmp_path / "agent.sqlite")
-    service = AgentService(
-        session_store=SessionStore(store),
-        runtime_builder=lambda config: runtime,
-        task_execution_service=task_execution_service,
+    runner = FakeLocalTaskRunner(answer)
+    core = MainAgentCore(
+        store=MainAgentStore(store),
+        local_message_responder=FakeLocalMessageResponder(),
+        local_task_runner=runner,
+        task_submitter=task_submitter,
     )
-    adapter = A2AAdapter(service=service)
-    return adapter, store, service, runtime
+    service = AgentService(session_store=SessionStore(store))
+    return core, store, service, runner
+
+
+def make_task(core: MainAgentCore, *, context_id: str = "ctx-1"):
+    core.store.create_context(context_id=context_id)
+    return core.handle_message(
+        MainAgentRequest(
+            context_id=context_id,
+            message_id=None,
+            role=MessageRole.USER,
+            parts=[{"kind": "text", "text": "run a task"}],
+            metadata={"executionMode": "task"},
+        )
+    )
+
+
+def test_a2a_path_binding_requires_main_agent_core(tmp_path):
+    store = AgentStore(tmp_path / "agent.sqlite")
+    service = AgentService(session_store=SessionStore(store))
+
+    with pytest.raises(ValueError, match="requires an injected MainAgentCore"):
+        create_app(service=service, enable_a2a=True)
+
+    service.close()
+    store.close()
 
 
 def test_a2a_routes_map_invalid_message_and_unknown_task_errors(tmp_path):
-    store = AgentStore(tmp_path / "agent.sqlite")
-    service = AgentService(session_store=SessionStore(store), runtime_builder=lambda config: FakeRuntime([completed()]))
-    client = TestClient(create_app(service=service, enable_a2a=True))
+    core, store, service, _runner = make_core(tmp_path)
+    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
 
     invalid = client.post("/message:send", json={"message": {"role": "agent", "parts": [{"text": "hello"}]}})
     missing = client.get("/tasks/missing-task")
@@ -89,9 +126,8 @@ def test_a2a_routes_map_invalid_message_and_unknown_task_errors(tmp_path):
 
 
 def test_a2a_subscribe_route_maps_unknown_task_to_http_error_without_jsonrpc_body(tmp_path):
-    store = AgentStore(tmp_path / "agent.sqlite")
-    service = AgentService(session_store=SessionStore(store), runtime_builder=lambda config: FakeRuntime([completed()]))
-    client = TestClient(create_app(service=service, enable_a2a=True))
+    core, store, service, _runner = make_core(tmp_path)
+    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
 
     response = client.post("/tasks/missing-task:subscribe")
 
@@ -105,107 +141,64 @@ def test_a2a_subscribe_route_maps_unknown_task_to_http_error_without_jsonrpc_bod
     store.close()
 
 
-def test_a2a_cancel_route_maps_to_service_boundary(tmp_path):
-    executor = ManualTaskExecutionService()
-    store = AgentStore(tmp_path / "agent.sqlite")
-    service = AgentService(
-        session_store=SessionStore(store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-        task_execution_service=executor,
-    )
-    service.create_session(session_id="session-1", context_id="ctx-1")
-    service.start_task("session-1", "hello", task_id="task-1", wait=False)
-    client = TestClient(create_app(service=service, enable_a2a=True))
-
-    response = client.post("/tasks/task-1:cancel", json={"reason": "operator requested"})
-
-    assert response.status_code == 200
-    assert response.json()["jsonrpc"] == "2.0"
-    assert response.json()["result"]["status"]["state"] == "canceled"
-    assert service.get_task("task-1").status == TaskStatus.CANCELED
-    service.close()
-    store.close()
-
-
-def test_a2a_subscribe_route_streams_projected_status_and_artifact_events(tmp_path):
-    store = AgentStore(tmp_path / "agent.sqlite")
-    service = AgentService(
-        session_store=SessionStore(store),
-        runtime_builder=lambda config: FakeRuntime([completed("done")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True))
-    client.post(
-        "/message:send",
-        json={"message": {"role": "user", "taskId": "task-1", "contextId": "ctx-1", "parts": [{"text": "hello"}]}},
-    )
-
-    response = client.post("/tasks/task-1:subscribe")
-
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/event-stream")
-    body = response.text
-    assert "event: status-update" in body
-    assert "event: artifact-update" in body
-    assert "completed" in body
-    assert "final_answer" in body
-    assert "thread_id" not in body.lower()
-    assert "localThreadId" in body
-
-
-def test_a2a_send_message_creates_context_session_task_and_projected_artifact(tmp_path):
-    adapter, store, service, runtime = make_adapter(tmp_path, FakeRuntime([completed("weather done")]))
+def test_a2a_path_binding_creates_and_projects_core_owned_task(tmp_path):
+    core, store, service, runner = make_core(tmp_path, answer="weather done")
+    core.store.create_context(context_id="ctx-1")
+    adapter = A2AAdapter(main_agent_core=core)
     request = A2ASendMessageRequest.model_validate(
         {
             "message": {
                 "role": "user",
-                "taskId": "task-1",
                 "contextId": "ctx-1",
                 "parts": [{"text": "weather forecast for Beijing"}],
-                "metadata": {"tenant": "local", "ignored": "secret"},
             },
-            "metadata": {"client": "pytest"},
+            "metadata": {"executionMode": "task", "client": "pytest"},
         }
     )
 
     payload = adapter.send_message(request)
 
     assert payload["kind"] == "task"
-    assert payload["id"] == "task-1"
+    assert payload["id"].startswith("task-")
     assert payload["contextId"] == "ctx-1"
     assert payload["status"]["state"] == "completed"
-    assert payload["artifacts"][0]["artifactId"] == "final_answer"
-    assert payload["artifacts"][0]["parts"] == [{"text": "weather done", "mediaType": "text/plain"}]
-    assert "thread_id" not in str(payload).lower()
-    assert payload["metadata"]["localThreadId"] == "task:task-1:attempt:1"
-    assert runtime.started[0] == ("weather forecast for Beijing", "task:task-1:attempt:1")
-    session = service.get_session_by_context_id("ctx-1")
-    assert session is not None
-    assert session.metadata == {"client": "pytest", "source": "a2a", "tenant": "local"}
+    assert payload["metadata"]["localStatus"] == "completed"
+    assert core.store.get_task(payload["id"]) is not None
+    assert runner.run_calls[0][0][-1].parts == [{"text": "weather forecast for Beijing"}]
+    assert service.list_sessions() == []
     service.close()
     store.close()
 
 
-def test_a2a_send_message_reuses_existing_context_session(tmp_path):
-    adapter, store, service, _runtime = make_adapter(tmp_path, FakeRuntime([completed()]))
-    existing = service.create_session(session_id="session-1", context_id="ctx-1")
-    request = A2ASendMessageRequest.model_validate(
-        {"message": {"role": "user", "taskId": "task-1", "contextId": "ctx-1", "parts": [{"text": "hello"}]}}
+def test_a2a_path_binding_reuses_existing_core_context(tmp_path):
+    core, store, service, _runner = make_core(tmp_path)
+    core.store.create_context(context_id="ctx-1")
+    adapter = A2AAdapter(main_agent_core=core)
+
+    payload = adapter.send_message(
+        A2ASendMessageRequest.model_validate(
+            {
+                "message": {
+                    "role": "user",
+                    "contextId": "ctx-1",
+                    "parts": [{"text": "hello"}],
+                },
+                "metadata": {"executionMode": "message"},
+            }
+        )
     )
 
-    payload = adapter.send_message(request)
-
-    task = service.get_task("task-1")
-    assert task is not None
-    assert task.session_id == existing.session_id
-    assert payload["kind"] == "task"
+    assert payload["kind"] == "message"
     assert payload["contextId"] == "ctx-1"
-    assert [session.session_id for session in service.list_sessions()] == ["session-1"]
+    assert len(core.store.list_context_messages("ctx-1")) == 2
+    assert service.list_sessions() == []
     service.close()
     store.close()
 
 
 def test_a2a_send_message_rejects_empty_or_non_user_message(tmp_path):
-    adapter, store, service, _runtime = make_adapter(tmp_path, FakeRuntime([completed()]))
+    core, store, service, _runner = make_core(tmp_path)
+    adapter = A2AAdapter(main_agent_core=core)
 
     with pytest.raises(InvalidRequestError, match="at least one text part"):
         adapter.send_message(A2ASendMessageRequest.model_validate({"message": {"role": "user", "parts": []}}))
@@ -219,81 +212,52 @@ def test_a2a_send_message_rejects_empty_or_non_user_message(tmp_path):
     store.close()
 
 
-def test_a2a_get_task_and_cancel_task_use_service_boundary(tmp_path):
+def test_a2a_get_cancel_and_subscribe_use_core_boundary(tmp_path):
     executor = ManualTaskExecutionService()
-    adapter, store, service, _runtime = make_adapter(
-        tmp_path,
-        FakeRuntime([completed("unused")]),
-        task_execution_service=executor,
-    )
-    service.create_session(session_id="session-1", context_id="ctx-1")
-    service.start_task("session-1", "hello", task_id="task-1", wait=False)
+    core, store, service, _runner = make_core(tmp_path, task_submitter=executor)
+    task = make_task(core)
+    adapter = A2AAdapter(main_agent_core=core)
 
-    queued = adapter.get_task("task-1")
-    canceled = adapter.cancel_task("task-1", reason="operator requested")
+    queued = adapter.get_task(task.task_id)
+    canceled = adapter.cancel_task(task.task_id, reason="operator requested")
+    subscribed = adapter.wait_for_task_events(task.task_id, after_event_id=0, timeout_seconds=0)
 
-    assert queued["kind"] == "task"
-    assert queued["status"]["state"] == "submitted"
-    assert canceled["kind"] == "task"
-    assert canceled["status"]["state"] == "canceled"
-    assert service.get_task("task-1").status == TaskStatus.CANCELED
+    assert queued["result"]["kind"] == "task"
+    assert queued["result"]["status"]["state"] == "submitted"
+    assert canceled["result"]["status"]["state"] == "canceled"
+    assert core.store.get_task(task.task_id).status == TaskStatus.CANCELED
+    assert subscribed.events
+    assert all(event["jsonrpc"] == "2.0" for event in subscribed.events)
     with pytest.raises(TaskNotFoundError):
         adapter.get_task("missing-task")
     service.close()
     store.close()
 
 
-def test_a2a_adapter_projects_status_and_artifact_events_without_internal_payloads(tmp_path):
-    adapter, store, service, _runtime = make_adapter(tmp_path, FakeRuntime([completed("done")]))
-    request = A2ASendMessageRequest.model_validate(
-        {"message": {"role": "user", "taskId": "task-1", "contextId": "ctx-1", "parts": [{"text": "hello"}]}}
+def test_a2a_subscribe_path_replays_core_status_and_artifact_events(tmp_path):
+    core, store, service, _runner = make_core(tmp_path, answer="done")
+    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    sent = client.post(
+        "/message:send",
+        json={
+            "message": {
+                "role": "user",
+                "parts": [{"text": "hello"}],
+            },
+            "metadata": {"executionMode": "task"},
+        },
     )
-    adapter.send_message(request)
+    task_id = sent.json()["id"]
 
-    projections = adapter.project_task_events("task-1")
+    response = client.post(f"/tasks/{task_id}:subscribe")
 
-    assert [projection["kind"] for projection in projections] == [
-        "status-update",
-        "status-update",
-        "artifact-update",
-        "status-update",
-    ]
-    assert projections[-1]["status"]["state"] == "completed"
-    assert projections[2]["artifact"]["artifactId"] == "final_answer"
-    assert "thread_id" not in str(projections).lower()
-    assert projections[0]["metadata"]["localThreadId"] == "task:task-1:attempt:1"
-    service.close()
-    store.close()
-
-
-def test_a2a_adapter_filters_non_projectable_artifacts_from_task_and_event_projection(tmp_path):
-    adapter, store, service, _runtime = make_adapter(tmp_path, FakeRuntime([completed("done")]))
-    request = A2ASendMessageRequest.model_validate(
-        {"message": {"role": "user", "taskId": "task-1", "contextId": "ctx-1", "parts": [{"text": "hello"}]}}
-    )
-    adapter.send_message(request)
-    metadata = final_answer_envelope().to_metadata()
-    metadata["visibility"] = OutputVisibility.INTERNAL.value
-    service.session_store.upsert_task_artifact(
-        artifact_id="task-1:final_answer",
-        task_id="task-1",
-        a2a_artifact_id="final_answer",
-        name="Final answer",
-        description="Final text answer returned by the agent.",
-        parts=[{"text": "done", "mediaType": "text/plain"}],
-        metadata=metadata,
-        extensions=[],
-    )
-
-    task_payload = adapter.get_task("task-1")
-    projections = adapter.project_task_events("task-1")
-
-    assert "artifacts" not in task_payload
-    assert [projection["kind"] for projection in projections] == [
-        "status-update",
-        "status-update",
-        "status-update",
-    ]
-    assert "artifact-update" not in str(projections)
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "event: status-update" in response.text
+    assert "event: artifact-update" in response.text
+    assert "completed" in response.text
+    assert "final_answer" in response.text
+    assert "thread_id" not in response.text.lower()
+    assert "localThreadId" in response.text
     service.close()
     store.close()

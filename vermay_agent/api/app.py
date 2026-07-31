@@ -83,6 +83,9 @@ def create_app(
                 task_submitter=owned_service.task_execution_service,
             )
 
+    if enable_a2a and main_agent_core is None:
+        raise ValueError("enable_a2a requires an injected MainAgentCore.")
+
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         try:
@@ -109,7 +112,6 @@ def create_app(
         app.include_router(
             create_a2a_router(
                 A2AAdapter(
-                    service=owned_service,
                     config=A2AAdapterConfig(agent_card=A2AAgentCardConfig(streaming=True)),
                     main_agent_core=main_agent_core,
                 )

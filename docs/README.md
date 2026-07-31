@@ -16,6 +16,7 @@ The project is positioned as an A2A-native main-agent runtime and inspectable pr
 6. [langgraph-interrupt-resume.md](langgraph-interrupt-resume.md) - approval interrupt, checkpoint, and resume flow.
 7. [server-api-readiness.md](server-api-readiness.md) - local API surface, session metadata, and approval resume contract.
 8. [code-organization-review.md](code-organization-review.md) - current code organization assessment and cleanup order.
+9. [runtime-refinement/](runtime-refinement/) - implementation plan for consolidating runtime ownership, lifecycle state, recovery, and capability boundaries.
 
 ## Documentation Boundary
 

@@ -186,7 +186,7 @@ def make_adapter(tmp_path, runtime, *, task_execution_service=None):
         runtime_builder=lambda config: runtime,
         task_execution_service=task_execution_service,
     )
-    adapter = A2AAdapter(service=service)
+    adapter = A2AAdapter()
     return adapter, store, service, runtime
 
 
@@ -251,7 +251,7 @@ def test_a2a_agent_card_includes_enabled_registered_agent_summaries(tmp_path):
         enabled=False,
     )
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    adapter = A2AAdapter(service=service, main_agent_core=core)
+    adapter = A2AAdapter(main_agent_core=core)
 
     card = adapter.get_agent_card()
 
@@ -288,8 +288,13 @@ def test_a2a_router_is_not_exposed_by_default_app(tmp_path):
 def test_a2a_routes_are_exposed_when_enabled(tmp_path):
     runtime = FakeRuntime([completed("weather done")])
     store = AgentStore(tmp_path / "agent.sqlite")
+    core = MainAgentCore(
+        store=MainAgentStore(store),
+        local_message_responder=FakeLocalMessageResponder(),
+        local_task_runner=FakeLocalTaskRunner(),
+    )
     service = AgentService(session_store=SessionStore(store), runtime_builder=lambda config: runtime)
-    client = TestClient(create_app(service=service, enable_a2a=True))
+    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
 
     card = client.get("/.well-known/agent-card.json")
     sent = client.post(
@@ -297,14 +302,14 @@ def test_a2a_routes_are_exposed_when_enabled(tmp_path):
         json={
             "message": {
                 "role": "user",
-                "taskId": "task-1",
-                "contextId": "ctx-1",
                 "parts": [{"text": "weather forecast for Beijing"}],
-            }
+            },
+            "metadata": {"executionMode": "task"},
         },
     )
-    fetched = client.get("/tasks/task-1")
-    legacy_local_fetched = client.get("/api/tasks/task-1")
+    task_id = sent.json()["id"]
+    fetched = client.get(f"/tasks/{task_id}")
+    legacy_local_fetched = client.get(f"/api/tasks/{task_id}")
 
     assert card.status_code == 200
     assert card.json()["capabilities"]["streaming"] is True
@@ -317,13 +322,13 @@ def test_a2a_routes_are_exposed_when_enabled(tmp_path):
     assert sent.status_code == 200
     assert sent.json()["kind"] == "task"
     assert sent.json()["status"]["state"] == "completed"
-    assert sent.json()["contextId"] == "ctx-1"
-    assert sent.json()["artifacts"][0]["parts"] == [{"text": "weather done", "mediaType": "text/plain"}]
+    assert sent.json()["contextId"].startswith("ctx-")
+    assert sent.json()["metadata"]["localStatus"] == "completed"
     assert "thread_id" not in str(sent.json()).lower()
-    assert sent.json()["metadata"]["localThreadId"] == "task:task-1:attempt:1"
+    assert sent.json()["metadata"]["localThreadId"].startswith("thread-")
     assert fetched.status_code == 200
     assert fetched.json()["jsonrpc"] == "2.0"
-    assert fetched.json()["result"]["id"] == "task-1"
+    assert fetched.json()["result"]["id"] == task_id
     assert legacy_local_fetched.status_code == 404
     assert legacy_local_fetched.json() == {"detail": "Not Found"}
     service.close()
@@ -455,7 +460,7 @@ def test_a2a_jsonrpc_message_send_can_return_main_agent_message_without_task(tmp
         session_store=SessionStore(agent_store),
         runtime_builder=lambda config: FakeRuntime([completed("unused")]),
     )
-    adapter = A2AAdapter(service=service, main_agent_core=core)
+    adapter = A2AAdapter(main_agent_core=core)
 
     payload = adapter.send_message_payload(
         {
@@ -1441,7 +1446,7 @@ def test_a2a_rpc_resume_task_supports_pascal_case_method(tmp_path):
     task = main_store.get_task(task_id)
     assert task is not None
     assert task.status == MainAgentTaskStatus.INPUT_REQUIRED
-    adapter = A2AAdapter(service=service, main_agent_core=core)
+    adapter = A2AAdapter(main_agent_core=core)
     interrupted_events = adapter.wait_for_task_events(task_id, after_event_id=0, timeout_seconds=0.0).events
     interrupted = [
         event
