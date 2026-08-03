@@ -88,12 +88,6 @@ def _approval_summary(tool_call: ToolCall, metadata: ToolMetadata) -> str:
         namespace = _argument_text(tool_call, "namespace", fallback="default")
         return f"Delete Kubernetes {resource}: {namespace}/{name}"
 
-    if tool_call.name == "kubectl_apply" and metadata.category == ToolCategory.KUBERNETES:
-        manifest = _argument_text(tool_call, "manifest")
-        line_count = len([line for line in manifest.splitlines() if line.strip()]) if manifest else 0
-        suffix = f" ({line_count} non-empty manifest lines)" if line_count else ""
-        return f"Apply Kubernetes manifest{suffix}"
-
     if metadata.category == ToolCategory.SHELL:
         command = _argument_text(tool_call, "command", fallback="<empty command>")
         return f"Run local shell command: {_truncate(command, 120)}"
@@ -108,14 +102,6 @@ def _approval_summary(tool_call: ToolCall, metadata: ToolMetadata) -> str:
 
 
 def _safe_argument_preview(tool_call: ToolCall, metadata: ToolMetadata) -> dict[str, object]:
-    if tool_call.name == "kubectl_apply" and metadata.category == ToolCategory.KUBERNETES:
-        manifest = _argument_text(tool_call, "manifest")
-        return {
-            "manifest_preview": _truncate(manifest, 240),
-            "manifest_chars": len(manifest),
-            "manifest_lines": len(manifest.splitlines()) if manifest else 0,
-        }
-
     if tool_call.name == "delete_resource" and metadata.category == ToolCategory.KUBERNETES:
         return {
             "resource": _argument_text(tool_call, "resource"),

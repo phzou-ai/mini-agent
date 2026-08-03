@@ -17,6 +17,18 @@ class RouteDecisionKind(str, Enum):
     REMOTE_AGENT = "remote_agent"
 
 
+class MessageIngressState(str, Enum):
+    IN_PROGRESS = "in_progress"
+    RESOLVED = "resolved"
+    FAILED = "failed"
+
+
+class MessageIngressOutcomeKind(str, Enum):
+    MESSAGE = "message"
+    TASK = "task"
+    DELEGATION = "delegation"
+
+
 class TaskStatus(str, Enum):
     CREATED = "created"
     QUEUED = "queued"
@@ -27,6 +39,36 @@ class TaskStatus(str, Enum):
     COMPLETED = "completed"
     CANCELED = "canceled"
     FAILED = "failed"
+
+
+class QueuedTaskExecutionKind(str, Enum):
+    """Durable command types for a local process waiting on the worker."""
+
+    INITIAL = "initial"
+    APPROVAL = "approval"
+    USER_INPUT = "user_input"
+
+
+class ToolInvocationStatus(str, Enum):
+    """Durable outcome of one side-effecting tool attempt.
+
+    This deliberately is not a Task or A2A status. It describes only the
+    external-effect boundary within one local Agent Process.
+    """
+
+    PREPARED = "prepared"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    UNCERTAIN = "uncertain"
+    CANCELED = "canceled"
+
+
+class ToolInvocationApprovalStatus(str, Enum):
+    NOT_REQUIRED = "not_required"
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
 
 
 @dataclass(frozen=True)
@@ -112,6 +154,24 @@ class MessageRecord:
     task_id: str | None
     metadata: dict[str, Any]
     created_at: str
+    context_sequence: int = 0
+
+
+@dataclass(frozen=True)
+class MessageIngressRecord:
+    message_id: str
+    context_id: str
+    request_fingerprint: str
+    state: MessageIngressState
+    route_decision_id: str | None
+    outcome_kind: MessageIngressOutcomeKind | None
+    outcome_id: str | None
+    error_code: str | None
+    error_message: str | None
+    error_http_status: int | None
+    error_retryable: bool
+    created_at: str
+    updated_at: str
 
 
 @dataclass(frozen=True)
@@ -133,6 +193,7 @@ class TaskRecord:
     context_id: str
     status: TaskStatus
     input_message_id: str
+    input_context_sequence: int
     output_message_id: str | None
     runtime_thread_id: str
     assigned_agent_id: str | None
@@ -145,6 +206,25 @@ class TaskRecord:
     error_message: str | None
     created_at: str
     updated_at: str
+
+
+@dataclass(frozen=True)
+class PendingContinuationRecord:
+    task_id: str
+    kind: str
+    input_request: dict[str, Any]
+    created_at: str
+
+
+@dataclass(frozen=True)
+class QueuedTaskExecutionRecord:
+    """One durable, not-yet-claimed execution slice for a local Task."""
+
+    task_id: str
+    kind: QueuedTaskExecutionKind
+    runtime_thread_id: str
+    payload: dict[str, Any]
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -165,6 +245,34 @@ class ArtifactRecord:
     parts: list[dict[str, Any]]
     metadata: dict[str, Any]
     created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class ToolInvocationRecord:
+    invocation_id: str
+    task_id: str
+    context_id: str
+    runtime_thread_id: str
+    loop_index: int
+    tool_call_id: str
+    tool_name: str
+    normalized_arguments: dict[str, Any]
+    arguments_digest: str
+    capability: dict[str, Any]
+    side_effect_level: str
+    idempotency_key: str | None
+    approval_required: bool
+    approval_status: ToolInvocationApprovalStatus
+    approval_reason: str | None
+    status: ToolInvocationStatus
+    result_artifact_id: str | None
+    error_code: str | None
+    error_message: str | None
+    error_retryable: bool
+    created_at: str
+    started_at: str | None
+    completed_at: str | None
     updated_at: str
 
 

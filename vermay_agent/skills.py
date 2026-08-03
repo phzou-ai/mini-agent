@@ -33,13 +33,6 @@ class SkillStore:
         for path in sorted(self.authored_dir.glob("*.md")):
             skill = parse_skill_file(path)
             skills.append(skill)
-            self.store.upsert_skill_index(
-                name=skill.name,
-                path=skill.path,
-                description=skill.description,
-                triggers=skill.triggers,
-                version=skill.version,
-            )
         return skills
 
     def show(self, name: str) -> Skill:

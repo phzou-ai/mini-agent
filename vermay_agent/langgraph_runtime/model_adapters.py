@@ -7,6 +7,8 @@ from uuid import uuid4
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
 
+from vermay_agent.errors import ModelProviderError
+from vermay_agent.execution_context import current_execution_context
 from vermay_agent.model_clients import OllamaModelClient, OpenAICompatibleModelClient
 from vermay_agent.tool_schema import tool_schemas_from_tools
 from vermay_agent.types import Message
@@ -29,6 +31,7 @@ class OllamaModelAdapter:
         response = self.client.invoke(
             messages=[_to_project_message(message) for message in messages],
             tools=tool_schemas_from_tools(tools),
+            timeout_seconds=_execution_timeout_seconds(provider="ollama"),
         )
         if not response.tool_calls:
             return ModelInvocation(message=AIMessage(content=response.content))
@@ -65,6 +68,7 @@ class OpenAICompatibleModelAdapter:
         response = self.client.invoke(
             messages=[_to_project_message(message) for message in messages],
             tools=tool_schemas_from_tools(tools),
+            timeout_seconds=_execution_timeout_seconds(provider="openai_compatible"),
         )
         if not response.tool_calls:
             return ModelInvocation(message=AIMessage(content=response.content))
@@ -102,3 +106,23 @@ def _to_project_message(message: BaseMessage) -> Message:
     if message_type == "system":
         return Message(role="system", content=content)
     return Message(role="user", content=content)
+
+
+def _execution_timeout_seconds(*, provider: str) -> float | None:
+    """Return the active Task's remaining budget for one HTTP model call.
+
+    Direct messages run without an execution context and keep the provider's
+    configured timeout. A Task can only shorten that timeout; it cannot extend
+    the provider-level safety bound.
+    """
+
+    context = current_execution_context()
+    if context is None:
+        return None
+    if context.cancellation is not None and context.cancellation.requested:
+        raise ModelProviderError(
+            "Model invocation was canceled before it started.",
+            provider=provider,
+            retryable=False,
+        )
+    return context.remaining_seconds()

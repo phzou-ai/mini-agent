@@ -31,7 +31,13 @@ class OpenAICompatibleModelClient:
         self.api_key = api_key or (os.environ.get(api_key_env) if api_key_env else None)
         self.timeout_seconds = timeout_seconds
 
-    def invoke(self, messages: list[Message], tools: list[dict]) -> ModelResponse:
+    def invoke(
+        self,
+        messages: list[Message],
+        tools: list[dict],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> ModelResponse:
         payload = {
             "model": self.model,
             "messages": [_to_openai_message(message) for message in messages],
@@ -47,7 +53,10 @@ class OpenAICompatibleModelClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+            with urllib.request.urlopen(
+                request,
+                timeout=self._effective_timeout_seconds(timeout_seconds),
+            ) as response:
                 response_bytes = response.read()
         except urllib.error.HTTPError as exc:
             raise ModelProviderError(
@@ -108,6 +117,17 @@ class OpenAICompatibleModelClient:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
+
+    def _effective_timeout_seconds(self, override: float | None) -> float:
+        if override is None:
+            return float(self.timeout_seconds)
+        if override <= 0:
+            raise ModelProviderError(
+                "OpenAI-compatible request did not start because its task deadline had elapsed.",
+                provider=PROVIDER,
+                retryable=True,
+            )
+        return min(float(self.timeout_seconds), override)
 
     def _format_http_error(self, exc: urllib.error.HTTPError) -> str:
         try:

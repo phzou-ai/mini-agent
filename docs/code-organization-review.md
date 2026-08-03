@@ -14,13 +14,18 @@ The archived hands-on runtime is outside the active maintenance path and should 
 
 ## Current Assessment
 
-The project now has one active runtime:
+The project now has one active execution stack:
 
 ```text
-vermay_agent/langgraph_runtime/
+A2A / management ingress
+  -> vermay_agent/main_agent/
+     -> vermay_agent/langgraph_runtime/
 ```
 
-This runtime uses standard LangChain / LangGraph data structures and `ToolNode`. The earlier explicit harness runtime has been moved to:
+`MainAgentCore` owns message routing and durable process lifecycle;
+`langgraph_runtime` uses standard LangChain / LangGraph data structures and
+`ToolNode` for local execution and checkpoint continuation. The earlier
+explicit harness runtime has been moved to:
 
 ```text
 archive/hands_on_langgraph_runtime/
@@ -101,25 +106,13 @@ Do not split this until there is a concrete maintenance trigger.
 
 Responsibilities:
 
-- local session and task lifecycle API
-- session/task metadata persistence
-- task event and artifact persistence
-- background task execution
-- approval resume, cancellation, and retry coordination
-- optional A2A adapter routes
+- FastAPI application composition and lifespan ownership
+- A2A JSON-RPC/SSE binding and first-party management/read-model endpoints
+- no independent task lifecycle ownership
 
-Current status: active API/service boundary.
-
-Recent stabilization:
-
-```text
-vermay_agent/api/task_execution.py
-  TaskExecutionService
-  TaskExecutionLocks
-  TaskEventNotifier
-```
-
-These helpers isolate execution infrastructure from `AgentService` while keeping `AgentService` as the public facade.
+Current status: active transport and composition boundary over `MainAgentCore`.
+The old service/session implementation and its dedicated tests have been
+removed; the API package has no alternate lifecycle owner.
 
 ### Shared Harness Modules
 

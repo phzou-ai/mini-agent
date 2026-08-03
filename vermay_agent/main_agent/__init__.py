@@ -1,6 +1,9 @@
 """Protocol-independent main-agent core primitives."""
 
-from .core import MainAgentCore
+from .core import MainAgentCore, StartupReconciliationResult
+from .executor import InProcessTaskExecutor
+from .invocation_ledger import MainAgentToolInvocationLedger
+from .lifecycle import InvalidLocalTaskTransitionError
 from .models import (
     ArtifactRecord,
     ContextRecord,
@@ -12,8 +15,14 @@ from .models import (
     MainAgentRequest,
     MainAgentResult,
     MainAgentStreamResult,
+    MessageIngressOutcomeKind,
+    MessageIngressRecord,
+    MessageIngressState,
     MessageRecord,
     MessageRole,
+    PendingContinuationRecord,
+    QueuedTaskExecutionKind,
+    QueuedTaskExecutionRecord,
     RegisteredAgentRecord,
     RemoteAgentResult,
     RouteDecisionKind,
@@ -21,6 +30,9 @@ from .models import (
     TaskEventRecord,
     TaskRecord,
     TaskStatus,
+    ToolInvocationApprovalStatus,
+    ToolInvocationRecord,
+    ToolInvocationStatus,
 )
 from .responder import DirectModelLocalMessageResponder, LocalMessageResponder
 from .remote_agent import (
@@ -54,6 +66,8 @@ __all__ = [
     "DirectModelLocalMessageResponder",
     "DirectModelRouterModelClient",
     "DirectLangGraphLocalTaskRunner",
+    "InProcessTaskExecutor",
+    "InvalidLocalTaskTransitionError",
     "LocalMessageDelta",
     "LocalMessageResult",
     "LocalTaskResult",
@@ -61,14 +75,22 @@ __all__ = [
     "LocalTaskRunner",
     "LocalTaskRunResult",
     "MainAgentCore",
+    "MainAgentToolInvocationLedger",
     "MainAgentStore",
     "MainAgentRequest",
     "MainAgentResult",
     "MainAgentStreamResult",
+    "StartupReconciliationResult",
+    "MessageIngressOutcomeKind",
+    "MessageIngressRecord",
+    "MessageIngressState",
     "MainAgentRouteDecision",
     "MainAgentRouter",
     "MessageRecord",
     "MessageRole",
+    "PendingContinuationRecord",
+    "QueuedTaskExecutionKind",
+    "QueuedTaskExecutionRecord",
     "RegisteredAgentRecord",
     "RemoteAgentClient",
     "RemoteAgentProtocolError",
@@ -84,6 +106,9 @@ __all__ = [
     "TaskEventRecord",
     "TaskRecord",
     "TaskStatus",
+    "ToolInvocationApprovalStatus",
+    "ToolInvocationRecord",
+    "ToolInvocationStatus",
     "build_router_json_client",
     "fetch_agent_card",
 ]

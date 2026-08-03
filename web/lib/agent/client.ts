@@ -7,6 +7,7 @@ import type {
   AgentContextTaskRecord,
   AgentDelegation,
   AgentModelConfig,
+  AgentMessageIngress,
   AgentRegisteredAgent,
   AgentRegisteredAgentPayload,
   AgentRouteDecision,
@@ -91,6 +92,12 @@ export function listAgentContextMessages(contextId: string, limit?: number) {
   const query = params.toString()
   return requestGet<AgentStoredMessage[]>(
     `/api/bff/agent/contexts/${encodeURIComponent(contextId)}/messages${query ? `?${query}` : ""}`
+  )
+}
+
+export function getAgentMessageIngress(messageId: string) {
+  return requestGet<AgentMessageIngress>(
+    `/api/bff/agent/message-ingress/${encodeURIComponent(messageId)}`
   )
 }
 

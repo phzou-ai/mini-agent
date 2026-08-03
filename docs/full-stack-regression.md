@@ -19,6 +19,27 @@ The gate runs:
 
 The Playwright regression mocks the browser-facing BFF responses. Backend A2A, persistence, routing, task lifecycle, and error projection remain covered by Python integration tests. This split keeps the default gate independent of Ollama, external model providers, and MCP availability.
 
+The gate uses dedicated Next output directories for its production build and
+deterministic Playwright server. It therefore does not reuse or overwrite the
+normal `web/.next` directory used by a local `pnpm dev` session. This allows the
+regression command to run without stopping the developer's frontend server.
+
+## Focused Single-Host Reliability Gate
+
+Run the focused reliability matrix when changing ingress, A2A streaming,
+continuation, cancellation, restart reconciliation, execution limits, or
+browser recovery behavior:
+
+```bash
+scripts/check_single_host_reliability.sh
+```
+
+It runs the relevant deterministic Python contracts plus the migrated browser
+regression and runtime-reliability Playwright specs. It is intentionally
+independent of live model, MCP, SSH, and Kubernetes dependencies. The covered
+scenarios and acceptance rules are documented in
+[runtime-refinement/single-host-reliability-matrix.md](runtime-refinement/single-host-reliability-matrix.md).
+
 Set `RUN_LIVE_E2E=1` to append the existing live Playwright suite:
 
 ```bash

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 
@@ -7,12 +8,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from vermay_agent.api.a2a import A2AAdapter, create_a2a_router
+from vermay_agent.api.a2a import routes as a2a_routes
 from vermay_agent.api.app import create_app
-from vermay_agent.api.service import AgentService
-from vermay_agent.api.session_store import SessionStore
-from vermay_agent.api.task_execution import TaskExecutionService
 from vermay_agent.errors import ModelProviderError
-from vermay_agent.langgraph_runtime.results import RunResult
 from vermay_agent.main_agent import (
     LocalTaskRunResult,
     MainAgentCore,
@@ -22,28 +20,9 @@ from vermay_agent.main_agent import (
     RemoteAgentTaskSnapshot,
     RouteDecisionKind,
 )
+from vermay_agent.main_agent.executor import InProcessTaskExecutor
 from vermay_agent.main_agent.models import TaskStatus as MainAgentTaskStatus
 from vermay_agent.storage import AgentStore
-
-
-class FakeRuntime:
-    def __init__(self, responses) -> None:
-        self.responses = list(responses)
-        self.started = []
-        self.closed = False
-
-    def start(self, user_input, thread_id=None):
-        self.started.append((user_input, thread_id))
-        response = self.responses.pop(0)
-        if callable(response):
-            return response(thread_id)
-        return response
-
-    def resume(self, thread_id, approved, reason=None):
-        raise RuntimeError("not used")
-
-    def close(self):
-        self.closed = True
 
 
 class FakeLocalMessageResponder:
@@ -136,6 +115,7 @@ class FakeApprovalTaskRunner:
             parts=[{"kind": "text", "text": "approval required"}],
             error_code="input_required",
             error_message="approval required",
+            input_request={"kind": "approval_required", "prompt": "Approve?"},
         )
 
     def resume(self, *, thread_id: str, approved: bool, reason: str | None = None) -> LocalTaskRunResult:
@@ -175,19 +155,10 @@ class FakeRemoteAgentClient:
         return snapshot
 
 
-def completed(answer="done"):
-    return lambda thread_id: RunResult(thread_id=thread_id, final_answer=answer)
-
-
-def make_adapter(tmp_path, runtime, *, task_execution_service=None):
+def make_adapter(tmp_path):
     store = AgentStore(tmp_path / "agent.sqlite")
-    service = AgentService(
-        session_store=SessionStore(store),
-        runtime_builder=lambda config: runtime,
-        task_execution_service=task_execution_service,
-    )
     adapter = A2AAdapter()
-    return adapter, store, service, runtime
+    return adapter, store
 
 
 def jsonrpc_error_data(local_code: str) -> dict:
@@ -203,7 +174,7 @@ def jsonrpc_error_data(local_code: str) -> dict:
 
 
 def test_a2a_agent_card_declares_local_skeleton_capabilities(tmp_path):
-    adapter, store, service, _runtime = make_adapter(tmp_path, FakeRuntime([completed()]))
+    adapter, store = make_adapter(tmp_path)
 
     card = adapter.get_agent_card()
 
@@ -226,16 +197,11 @@ def test_a2a_agent_card_declares_local_skeleton_capabilities(tmp_path):
     ]
     assert card["metadata"]["routeKinds"] == ["local_message", "local_task", "remote_agent"]
     assert card["metadata"]["executionModes"] == ["message", "task", "auto"]
-    service.close()
     store.close()
 
 
 def test_a2a_agent_card_includes_enabled_registered_agent_summaries(tmp_path):
     store = AgentStore(tmp_path / "agent.sqlite")
-    service = AgentService(
-        session_store=SessionStore(store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
     main_store = MainAgentStore(store)
     main_store.upsert_registered_agent(
         agent_id="agent-sql",
@@ -268,33 +234,30 @@ def test_a2a_agent_card_includes_enabled_registered_agent_summaries(tmp_path):
     assert "card_url" not in str(card)
     assert "9001" not in str(card)
     assert "agent-disabled" not in str(card)
-    service.close()
     store.close()
 
 
 def test_a2a_router_is_not_exposed_by_default_app(tmp_path):
-    adapter, store, service, _runtime = make_adapter(tmp_path, FakeRuntime([completed()]))
+    adapter, store = make_adapter(tmp_path)
+    core = MainAgentCore(store=MainAgentStore(store), local_message_responder=FakeLocalMessageResponder())
 
     router = create_a2a_router(adapter)
-    client = TestClient(create_app(service=service))
+    client = TestClient(create_app(main_agent_core=core))
 
     assert router.routes
     assert client.get("/.well-known/agent-card.json").status_code == 404
     assert client.post("/message:send", json={}).status_code == 404
-    service.close()
     store.close()
 
 
 def test_a2a_routes_are_exposed_when_enabled(tmp_path):
-    runtime = FakeRuntime([completed("weather done")])
     store = AgentStore(tmp_path / "agent.sqlite")
     core = MainAgentCore(
         store=MainAgentStore(store),
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    service = AgentService(session_store=SessionStore(store), runtime_builder=lambda config: runtime)
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     card = client.get("/.well-known/agent-card.json")
     sent = client.post(
@@ -331,7 +294,6 @@ def test_a2a_routes_are_exposed_when_enabled(tmp_path):
     assert fetched.json()["result"]["id"] == task_id
     assert legacy_local_fetched.status_code == 404
     assert legacy_local_fetched.json() == {"detail": "Not Found"}
-    service.close()
     store.close()
 
 
@@ -343,11 +305,7 @@ def test_create_app_with_fake_main_agent_supports_a2a_message_task_get_and_subsc
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     message_response = client.post(
         "/message:send",
@@ -401,7 +359,6 @@ def test_create_app_with_fake_main_agent_supports_a2a_message_task_get_and_subsc
     assert subscribed.status_code == 200
     assert "event: artifact-update" in subscribed.text
     assert "task answer" in subscribed.text
-    service.close()
     agent_store.close()
 
 
@@ -413,11 +370,7 @@ def test_create_app_with_fake_main_agent_can_hold_and_cancel_task(tmp_path):
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeHoldingLocalTaskRunner(),
     )
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     task_response = client.post(
         "/message:send",
@@ -447,7 +400,6 @@ def test_create_app_with_fake_main_agent_can_hold_and_cancel_task(tmp_path):
     assert canceled.json()["result"]["status"]["state"] == "canceled"
     assert subscribed.status_code == 200
     assert "task_cancelled" in subscribed.text
-    service.close()
     agent_store.close()
 
 
@@ -456,10 +408,6 @@ def test_a2a_jsonrpc_message_send_can_return_main_agent_message_without_task(tmp
     main_store = MainAgentStore(agent_store)
     responder = FakeLocalMessageResponder()
     core = MainAgentCore(store=main_store, local_message_responder=responder)
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
     adapter = A2AAdapter(main_agent_core=core)
 
     payload = adapter.send_message_payload(
@@ -491,7 +439,6 @@ def test_a2a_jsonrpc_message_send_can_return_main_agent_message_without_task(tmp
     ]
     assert main_store.list_context_tasks(context_id) == []
     assert [message.message_id for message in responder.calls[0]] == ["msg-user-1"]
-    service.close()
     agent_store.close()
 
 
@@ -500,11 +447,7 @@ def test_a2a_route_jsonrpc_message_send_uses_injected_main_agent_core(tmp_path):
     main_store = MainAgentStore(agent_store)
     responder = FakeLocalMessageResponder()
     core = MainAgentCore(store=main_store, local_message_responder=responder)
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post(
         "/message:send",
@@ -529,7 +472,6 @@ def test_a2a_route_jsonrpc_message_send_uses_injected_main_agent_core(tmp_path):
     assert response.json()["result"]["parts"] == [{"kind": "text", "text": "direct answer"}]
     context_id = response.json()["result"]["contextId"]
     assert main_store.list_context_tasks(context_id) == []
-    service.close()
     agent_store.close()
 
 
@@ -556,11 +498,7 @@ def test_a2a_route_jsonrpc_remote_agent_message_is_projected(tmp_path):
         local_message_responder=FakeLocalMessageResponder(),
         remote_agent_client=remote_client,
     )
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post(
         "/message:send",
@@ -588,7 +526,6 @@ def test_a2a_route_jsonrpc_remote_agent_message_is_projected(tmp_path):
     assert payload["result"]["metadata"]["remoteAgentId"] == "agent-child-1"
     assert payload["result"]["metadata"]["delegationId"].startswith("delegate-")
     assert remote_client.calls == [("agent-child-1", payload["result"]["contextId"], "msg-user-1")]
-    service.close()
     agent_store.close()
 
 
@@ -629,11 +566,7 @@ def test_a2a_route_jsonrpc_remote_agent_task_is_projected_as_proxy_task(tmp_path
         local_message_responder=FakeLocalMessageResponder(),
         remote_agent_client=remote_client,
     )
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     sent = client.post(
         "/message:send",
@@ -677,7 +610,6 @@ def test_a2a_route_jsonrpc_remote_agent_task_is_projected_as_proxy_task(tmp_path
     assert main_store.list_task_events(task_id)[0].payload["remote_task_id"] == "remote-task-1"
     delegations = main_store.list_context_delegations(sent.json()["result"]["contextId"])
     assert delegations[0].remote_task_id == "remote-task-1"
-    service.close()
     agent_store.close()
 
 
@@ -718,11 +650,7 @@ def test_a2a_route_jsonrpc_remote_proxy_task_get_syncs_remote_status(tmp_path):
         local_message_responder=FakeLocalMessageResponder(),
         remote_agent_client=remote_client,
     )
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
     sent = client.post(
         "/message:send",
         json={
@@ -758,6 +686,170 @@ def test_a2a_route_jsonrpc_remote_proxy_task_get_syncs_remote_status(tmp_path):
     assert artifacts[0].metadata["source"] == "remote_agent"
     assert artifacts[0].metadata["remoteArtifactId"] == "remote-final"
     assert artifacts[0].parts == [{"kind": "text", "text": "remote task answer"}]
+    events = main_store.list_task_events(task_id)
+    assert [event.type for event in events] == [
+        "task_delegated",
+        "task_artifact_created",
+        "remote_task_status_synced",
+    ]
+    assert events[1].status is None
+    delegation = main_store.get_delegated_task_by_local_task_id(task_id)
+    assert delegation.status == "completed"
+    assert delegation.metadata["remoteStatus"] == "completed"
+    assert remote_client.get_task_calls == [("agent-child-1", "remote-task-1"), ("agent-child-1", "remote-task-1")]
+    agent_store.close()
+
+
+def test_a2a_route_jsonrpc_remote_proxy_ignores_stale_status_regression(tmp_path):
+    agent_store = AgentStore(tmp_path / "agent.sqlite")
+    main_store = MainAgentStore(agent_store)
+    main_store.upsert_registered_agent(
+        agent_id="agent-child-1",
+        name="Child agent",
+        card_url="http://127.0.0.1:9001/.well-known/agent-card.json",
+    )
+    remote_client = FakeRemoteAgentClient(
+        [
+            RemoteAgentSendResult(
+                kind="task",
+                context_id="remote-ctx-1",
+                task_id="remote-task-1",
+                status="submitted",
+            )
+        ],
+        task_snapshots=[
+            RemoteAgentTaskSnapshot(
+                task_id="remote-task-1",
+                context_id="remote-ctx-1",
+                status="working",
+                raw={"revision": "current"},
+            ),
+            RemoteAgentTaskSnapshot(
+                task_id="remote-task-1",
+                context_id="remote-ctx-1",
+                status="submitted",
+                raw={"revision": "stale"},
+            ),
+        ],
+    )
+    core = MainAgentCore(
+        store=main_store,
+        local_message_responder=FakeLocalMessageResponder(),
+        remote_agent_client=remote_client,
+    )
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+
+    sent = client.post(
+        "/message:send",
+        json={
+            "jsonrpc": "2.0",
+            "id": "req-remote",
+            "method": "message/send",
+            "params": {
+                "message": {
+                    "kind": "message",
+                    "role": "user",
+                    "messageId": "msg-user-1",
+                    "parts": [{"kind": "text", "text": "delegate"}],
+                },
+                "metadata": {"route": "remote_agent", "targetAgentId": "agent-child-1"},
+            },
+        },
+    )
+    task_id = sent.json()["result"]["id"]
+
+    first = client.get(f"/tasks/{task_id}")
+    second = client.get(f"/tasks/{task_id}")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["result"]["status"]["state"] == "working"
+    assert second.json()["result"]["status"]["state"] == "working"
+    assert main_store.get_task(task_id).status == MainAgentTaskStatus.RUNNING
+    assert [event.type for event in main_store.list_task_events(task_id)] == [
+        "task_delegated",
+        "remote_task_status_synced",
+    ]
+    delegation = main_store.get_delegated_task_by_local_task_id(task_id)
+    assert delegation.status == "working"
+    assert delegation.metadata["remoteStatus"] == "working"
+    assert delegation.metadata["lastRemoteSnapshot"] == {"revision": "current"}
+    agent_store.close()
+
+
+def test_a2a_route_jsonrpc_remote_proxy_ignores_terminal_regression(tmp_path):
+    agent_store = AgentStore(tmp_path / "agent.sqlite")
+    main_store = MainAgentStore(agent_store)
+    main_store.upsert_registered_agent(
+        agent_id="agent-child-1",
+        name="Child agent",
+        card_url="http://127.0.0.1:9001/.well-known/agent-card.json",
+    )
+    remote_client = FakeRemoteAgentClient(
+        [
+            RemoteAgentSendResult(
+                kind="task",
+                context_id="remote-ctx-1",
+                task_id="remote-task-1",
+                status="submitted",
+            )
+        ],
+        task_snapshots=[
+            RemoteAgentTaskSnapshot(
+                task_id="remote-task-1",
+                context_id="remote-ctx-1",
+                status="completed",
+                artifacts=[
+                    {
+                        "artifactId": "remote-final",
+                        "parts": [{"text": "remote task answer", "mediaType": "text/plain"}],
+                    }
+                ],
+                raw={"revision": "completed"},
+            ),
+            RemoteAgentTaskSnapshot(
+                task_id="remote-task-1",
+                context_id="remote-ctx-1",
+                status="canceled",
+                raw={"revision": "stale-terminal"},
+            ),
+        ],
+    )
+    core = MainAgentCore(
+        store=main_store,
+        local_message_responder=FakeLocalMessageResponder(),
+        remote_agent_client=remote_client,
+    )
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+
+    sent = client.post(
+        "/message:send",
+        json={
+            "jsonrpc": "2.0",
+            "id": "req-remote",
+            "method": "message/send",
+            "params": {
+                "message": {
+                    "kind": "message",
+                    "role": "user",
+                    "messageId": "msg-user-1",
+                    "parts": [{"kind": "text", "text": "delegate"}],
+                },
+                "metadata": {"route": "remote_agent", "targetAgentId": "agent-child-1"},
+            },
+        },
+    )
+    task_id = sent.json()["result"]["id"]
+
+    first = client.get(f"/tasks/{task_id}")
+    second = client.get(f"/tasks/{task_id}")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["result"]["status"]["state"] == "completed"
+    assert second.json()["result"]["status"]["state"] == "completed"
+    assert main_store.get_task(task_id).status == MainAgentTaskStatus.COMPLETED
+    assert len(main_store.list_task_artifacts(task_id)) == 1
     assert [event.type for event in main_store.list_task_events(task_id)] == [
         "task_delegated",
         "task_artifact_created",
@@ -765,9 +857,7 @@ def test_a2a_route_jsonrpc_remote_proxy_task_get_syncs_remote_status(tmp_path):
     ]
     delegation = main_store.get_delegated_task_by_local_task_id(task_id)
     assert delegation.status == "completed"
-    assert delegation.metadata["remoteStatus"] == "completed"
-    assert remote_client.get_task_calls == [("agent-child-1", "remote-task-1"), ("agent-child-1", "remote-task-1")]
-    service.close()
+    assert delegation.metadata["lastRemoteSnapshot"] == {"revision": "completed"}
     agent_store.close()
 
 
@@ -801,11 +891,7 @@ def test_a2a_route_jsonrpc_remote_proxy_task_cancel_forwards_to_remote_agent(tmp
         local_message_responder=FakeLocalMessageResponder(),
         remote_agent_client=remote_client,
     )
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
     sent = client.post(
         "/message:send",
         json={
@@ -835,7 +921,6 @@ def test_a2a_route_jsonrpc_remote_proxy_task_cancel_forwards_to_remote_agent(tmp
         "task_delegated",
         "remote_task_status_synced",
     ]
-    service.close()
     agent_store.close()
 
 
@@ -843,11 +928,7 @@ def test_a2a_route_jsonrpc_errors_use_jsonrpc_error_envelope(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post(
         "/message:send",
@@ -878,7 +959,6 @@ def test_a2a_route_jsonrpc_errors_use_jsonrpc_error_envelope(tmp_path):
             "data": jsonrpc_error_data("invalid_request"),
         },
     }
-    service.close()
     agent_store.close()
 
 
@@ -913,11 +993,7 @@ def test_a2a_route_jsonrpc_message_validation_errors_are_jsonrpc_errors(
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post(
         "/message:send",
@@ -942,7 +1018,6 @@ def test_a2a_route_jsonrpc_message_validation_errors_are_jsonrpc_errors(
             "data": jsonrpc_error_data("invalid_request"),
         },
     }
-    service.close()
     agent_store.close()
 
 
@@ -979,11 +1054,7 @@ def test_a2a_route_jsonrpc_message_shape_errors_are_jsonrpc_errors(
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post(
         "/message:send",
@@ -1005,7 +1076,6 @@ def test_a2a_route_jsonrpc_message_shape_errors_are_jsonrpc_errors(
             "data": jsonrpc_error_data("invalid_request"),
         },
     }
-    service.close()
     agent_store.close()
 
 
@@ -1045,11 +1115,7 @@ def test_a2a_route_jsonrpc_envelope_validation_errors_are_jsonrpc_errors(tmp_pat
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post("/message:send", json=payload)
 
@@ -1063,7 +1129,6 @@ def test_a2a_route_jsonrpc_envelope_validation_errors_are_jsonrpc_errors(tmp_pat
             "data": jsonrpc_error_data("invalid_request"),
         },
     }
-    service.close()
     agent_store.close()
 
 
@@ -1071,11 +1136,7 @@ def test_a2a_route_message_stream_emits_local_message_result(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post(
         "/message:stream",
@@ -1101,7 +1162,6 @@ def test_a2a_route_message_stream_emits_local_message_result(tmp_path):
     assert '"id": "req-stream-message"' in response.text
     assert '"kind": "message"' in response.text
     assert "direct answer" in response.text
-    service.close()
     agent_store.close()
 
 
@@ -1113,11 +1173,7 @@ def test_a2a_route_message_stream_emits_local_task_events(tmp_path):
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post(
         "/message:stream",
@@ -1144,19 +1200,47 @@ def test_a2a_route_message_stream_emits_local_task_events(tmp_path):
     assert '"artifactId": "final_answer"' in response.text
     assert '"state": "completed"' in response.text
     assert "task answer" in response.text
-    service.close()
+    assert "event: error" not in response.text
     agent_store.close()
+
+
+def test_a2a_rpc_stream_ignores_trailing_failure_after_terminal_task_event(monkeypatch):
+    async def failing_stream(*args, **kwargs):
+        yield {
+            "jsonrpc": "2.0",
+            "id": "rpc-stream-terminal",
+            "result": {
+                "kind": "status-update",
+                "taskId": "task-1",
+                "contextId": "ctx-1",
+                "status": {"state": "completed"},
+            },
+        }
+        raise RuntimeError("trailing task replay failure")
+
+    async def collect_events():
+        return [
+            event
+            async for event in a2a_routes._rpc_stream_message_events(
+                object(),
+                {"id": "rpc-stream-terminal"},
+            )
+        ]
+
+    monkeypatch.setattr(a2a_routes, "_stream_message_result_events", failing_stream)
+
+    events = asyncio.run(collect_events())
+
+    assert len(events) == 1
+    assert "event: status-update" in events[0]
+    assert "event: error" not in events[0]
 
 
 def test_a2a_route_message_stream_emits_jsonrpc_error_event(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post(
         "/message:stream",
@@ -1172,7 +1256,6 @@ def test_a2a_route_message_stream_emits_jsonrpc_error_event(tmp_path):
     assert "event: error" in response.text
     assert '"id": "req-stream-error"' in response.text
     assert "JSON-RPC method must be" in response.text
-    service.close()
     agent_store.close()
 
 
@@ -1180,11 +1263,7 @@ def test_a2a_rpc_masks_model_provider_details_and_preserves_retryability(tmp_pat
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FailingLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post(
         "/rpc",
@@ -1220,7 +1299,6 @@ def test_a2a_rpc_masks_model_provider_details_and_preserves_retryability(tmp_pat
     }
     assert "Ollama" not in response.text
     assert "Connection refused" not in response.text
-    service.close()
     agent_store.close()
 
 
@@ -1228,11 +1306,7 @@ def test_a2a_route_message_stream_emits_jsonrpc_error_event_for_invalid_message(
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post(
         "/message:stream",
@@ -1257,7 +1331,6 @@ def test_a2a_route_message_stream_emits_jsonrpc_error_event_for_invalid_message(
     assert '"id": "req-stream-invalid-message"' in response.text
     assert '"code": -32602' in response.text
     assert "A2A message role must be" in response.text
-    service.close()
     agent_store.close()
 
 
@@ -1265,11 +1338,7 @@ def test_a2a_route_jsonrpc_local_task_get_cancel_and_subscribe(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     sent = client.post(
         "/message:send",
@@ -1304,7 +1373,6 @@ def test_a2a_route_jsonrpc_local_task_get_cancel_and_subscribe(tmp_path):
     assert subscribed.status_code == 200
     assert "event: status-update" in subscribed.text
     assert '"state": "canceled"' in subscribed.text
-    service.close()
     agent_store.close()
 
 
@@ -1312,11 +1380,7 @@ def test_a2a_rpc_send_message_supports_pascal_case_method(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post(
         "/rpc",
@@ -1342,7 +1406,6 @@ def test_a2a_rpc_send_message_supports_pascal_case_method(tmp_path):
     assert payload["id"] == "rpc-send-1"
     assert payload["result"]["kind"] == "message"
     assert payload["result"]["parts"] == [{"kind": "text", "text": "direct answer"}]
-    service.close()
     agent_store.close()
 
 
@@ -1350,11 +1413,7 @@ def test_a2a_rpc_get_and_cancel_task_support_pascal_case_methods(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     sent = client.post(
         "/rpc",
@@ -1406,7 +1465,6 @@ def test_a2a_rpc_get_and_cancel_task_support_pascal_case_methods(tmp_path):
     assert canceled.json()["result"]["id"] == task_id
     assert canceled.json()["result"]["status"]["state"] == "canceled"
     assert main_store.list_task_events(task_id)[-1].payload == {"reason": "operator"}
-    service.close()
     agent_store.close()
 
 
@@ -1419,11 +1477,7 @@ def test_a2a_rpc_resume_task_supports_pascal_case_method(tmp_path):
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=runner,
     )
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     sent = client.post(
         "/rpc",
@@ -1445,7 +1499,7 @@ def test_a2a_rpc_resume_task_supports_pascal_case_method(tmp_path):
     task_id = sent.json()["result"]["id"]
     task = main_store.get_task(task_id)
     assert task is not None
-    assert task.status == MainAgentTaskStatus.INPUT_REQUIRED
+    assert task.status == MainAgentTaskStatus.AUTH_REQUIRED
     adapter = A2AAdapter(main_agent_core=core)
     interrupted_events = adapter.wait_for_task_events(task_id, after_event_id=0, timeout_seconds=0.0).events
     interrupted = [
@@ -1478,11 +1532,11 @@ def test_a2a_rpc_resume_task_supports_pascal_case_method(tmp_path):
         "task_started",
         "task_interrupted",
         "task_resumed",
+        "task_queued",
         "task_started",
         "task_artifact_created",
         "task_completed",
     ]
-    service.close()
     agent_store.close()
 
 
@@ -1495,11 +1549,7 @@ def test_a2a_send_message_continues_input_required_task_without_router(tmp_path)
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=runner,
     )
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     started = client.post(
         "/rpc",
@@ -1578,7 +1628,6 @@ def test_a2a_send_message_continues_input_required_task_without_router(tmp_path)
         (task.runtime_thread_id, [{"kind": "text", "text": "staging"}], {"source": "a2a-test"})
     ]
     assert len(main_store.list_context_route_decisions(context_id)) == 1
-    service.close()
     agent_store.close()
 
 
@@ -1586,11 +1635,7 @@ def test_a2a_rpc_accepts_current_slash_method_aliases(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     sent = client.post(
         "/rpc",
@@ -1620,7 +1665,6 @@ def test_a2a_rpc_accepts_current_slash_method_aliases(tmp_path):
     assert fetched.status_code == 200
     assert fetched.json()["id"] == "rpc-get-slash"
     assert fetched.json()["result"]["id"] == task_id
-    service.close()
     agent_store.close()
 
 
@@ -1628,11 +1672,7 @@ def test_a2a_rpc_missing_task_preserves_request_id_in_jsonrpc_error(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post(
         "/rpc",
@@ -1649,7 +1689,6 @@ def test_a2a_rpc_missing_task_preserves_request_id_in_jsonrpc_error(tmp_path):
             "data": jsonrpc_error_data("task_not_found"),
         },
     }
-    service.close()
     agent_store.close()
 
 
@@ -1658,11 +1697,7 @@ def test_a2a_rpc_send_streaming_message_emits_local_message_result(tmp_path):
     main_store = MainAgentStore(agent_store)
     responder = FakeLocalMessageResponder()
     core = MainAgentCore(store=main_store, local_message_responder=responder)
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post(
         "/rpc",
@@ -1689,7 +1724,6 @@ def test_a2a_rpc_send_streaming_message_emits_local_message_result(tmp_path):
     assert '"kind": "message"' in response.text
     assert "direct answer" in response.text
     assert len(responder.calls) == 1
-    service.close()
     agent_store.close()
 
 
@@ -1698,11 +1732,7 @@ def test_a2a_rpc_send_streaming_message_emits_partial_local_message_events(tmp_p
     main_store = MainAgentStore(agent_store)
     responder = FakeStreamingLocalMessageResponder()
     core = MainAgentCore(store=main_store, local_message_responder=responder)
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post(
         "/rpc",
@@ -1746,7 +1776,6 @@ def test_a2a_rpc_send_streaming_message_emits_partial_local_message_events(tmp_p
     assert [message.role.value for message in stored_messages] == ["user", "agent"]
     assert stored_messages[-1].parts == [{"kind": "text", "text": "streamed answer"}]
     assert len(responder.calls) == 1
-    service.close()
     agent_store.close()
 
 
@@ -1758,11 +1787,7 @@ def test_a2a_rpc_send_streaming_auto_falls_back_to_local_message(tmp_path):
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post(
         "/rpc",
@@ -1791,7 +1816,6 @@ def test_a2a_rpc_send_streaming_auto_falls_back_to_local_message(tmp_path):
     )
     assert decisions[0].kind == RouteDecisionKind.LOCAL_MESSAGE
     assert decisions[0].metadata == {"source": "fallback", "executionMode": "auto"}
-    service.close()
     agent_store.close()
 
 
@@ -1803,11 +1827,7 @@ def test_a2a_rpc_send_streaming_message_emits_local_task_events(tmp_path):
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post(
         "/rpc",
@@ -1836,25 +1856,20 @@ def test_a2a_rpc_send_streaming_message_emits_local_task_events(tmp_path):
     assert '"artifactId": "final_answer"' in response.text
     assert '"state": "completed"' in response.text
     assert "task answer" in response.text
-    service.close()
     agent_store.close()
 
 
 def test_a2a_rpc_send_streaming_message_follows_background_task_to_terminal_state(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
-    executor = TaskExecutionService(max_workers=1)
+    executor = InProcessTaskExecutor(max_workers=1)
     core = MainAgentCore(
         store=main_store,
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=SlowFakeLocalTaskRunner(),
         task_submitter=executor,
     )
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post(
         "/rpc",
@@ -1880,7 +1895,6 @@ def test_a2a_rpc_send_streaming_message_follows_background_task_to_terminal_stat
     assert "task answer" in response.text
 
     executor.shutdown()
-    service.close()
     agent_store.close()
 
 
@@ -1892,11 +1906,7 @@ def test_a2a_rpc_subscribe_to_task_replays_artifact_update(tmp_path):
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     sent = client.post(
         "/rpc",
@@ -1936,7 +1946,6 @@ def test_a2a_rpc_subscribe_to_task_replays_artifact_update(tmp_path):
     assert '"localEventId": 2' not in subscribed.text
     assert '"localEventId": 3' in subscribed.text
     assert '"artifactId": "final_answer"' in subscribed.text
-    service.close()
     agent_store.close()
 
 
@@ -1951,11 +1960,7 @@ def test_a2a_rpc_subscribe_to_task_validation_errors_stream_jsonrpc_error(tmp_pa
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post(
         "/rpc",
@@ -1973,7 +1978,6 @@ def test_a2a_rpc_subscribe_to_task_validation_errors_stream_jsonrpc_error(tmp_pa
     assert '"id": "rpc-subscribe-invalid"' in response.text
     assert '"code": -32602' in response.text
     assert error_message in response.text
-    service.close()
     agent_store.close()
 
 
@@ -2016,11 +2020,7 @@ def test_a2a_rpc_validation_errors(request_json, code, message, local_code, tmp_
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post("/rpc", json=request_json)
 
@@ -2034,7 +2034,6 @@ def test_a2a_rpc_validation_errors(request_json, code, message, local_code, tmp_
         "domain": "vermay-agent",
         "metadata": {"localCode": local_code},
     }
-    service.close()
     agent_store.close()
 
 
@@ -2042,11 +2041,7 @@ def test_a2a_rpc_invalid_json_returns_parse_error(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post("/rpc", content="{", headers={"content-type": "application/json"})
 
@@ -2060,7 +2055,6 @@ def test_a2a_rpc_invalid_json_returns_parse_error(tmp_path):
             "data": jsonrpc_error_data("parse_error"),
         },
     }
-    service.close()
     agent_store.close()
 
 
@@ -2068,11 +2062,7 @@ def test_a2a_route_jsonrpc_task_cancel_accepts_request_body_and_preserves_id(tmp
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     sent = client.post(
         "/message:send",
@@ -2109,7 +2099,6 @@ def test_a2a_route_jsonrpc_task_cancel_accepts_request_body_and_preserves_id(tmp
     assert canceled.json()["result"]["id"] == task_id
     assert canceled.json()["result"]["status"]["state"] == "canceled"
     assert main_store.list_task_events(task_id)[-1].payload == {"reason": "operator"}
-    service.close()
     agent_store.close()
 
 
@@ -2121,11 +2110,7 @@ def test_a2a_route_jsonrpc_local_task_subscribe_replays_artifact_update(tmp_path
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     sent = client.post(
         "/message:send",
@@ -2157,7 +2142,6 @@ def test_a2a_route_jsonrpc_local_task_subscribe_replays_artifact_update(tmp_path
     assert '"text": "task answer"' in subscribed.text
     assert "event: status-update" in subscribed.text
     assert '"state": "completed"' in subscribed.text
-    service.close()
     agent_store.close()
 
 
@@ -2169,11 +2153,7 @@ def test_a2a_route_jsonrpc_task_subscribe_accepts_request_body_after_event_id(tm
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     sent = client.post(
         "/message:send",
@@ -2210,7 +2190,6 @@ def test_a2a_route_jsonrpc_task_subscribe_accepts_request_body_after_event_id(tm
     assert '"localEventId": 1' not in subscribed.text
     assert '"localEventId": 2' not in subscribed.text
     assert '"localEventId": 3' in subscribed.text
-    service.close()
     agent_store.close()
 
 
@@ -2231,11 +2210,7 @@ def test_a2a_route_jsonrpc_task_subscribe_request_validation_errors(tmp_path, pa
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     subscribed = client.post(
         "/tasks/task-1:subscribe",
@@ -2251,7 +2226,6 @@ def test_a2a_route_jsonrpc_task_subscribe_request_validation_errors(tmp_path, pa
     assert "event: error" in subscribed.text
     assert '"id": "subscribe-invalid"' in subscribed.text
     assert error_message in subscribed.text
-    service.close()
     agent_store.close()
 
 
@@ -2259,11 +2233,7 @@ def test_a2a_route_jsonrpc_task_subscribe_unknown_task_streams_jsonrpc_error(tmp
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     subscribed = client.post(
         "/tasks/missing-task:subscribe",
@@ -2280,7 +2250,6 @@ def test_a2a_route_jsonrpc_task_subscribe_unknown_task_streams_jsonrpc_error(tmp
     assert '"id": "subscribe-missing"' in subscribed.text
     assert '"code": -32004' in subscribed.text
     assert '"localCode": "task_not_found"' in subscribed.text
-    service.close()
     agent_store.close()
 
 
@@ -2301,11 +2270,7 @@ def test_a2a_route_jsonrpc_task_cancel_request_validation_errors(tmp_path, param
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     canceled = client.post(
         "/tasks/task-1:cancel",
@@ -2323,7 +2288,6 @@ def test_a2a_route_jsonrpc_task_cancel_request_validation_errors(tmp_path, param
     assert canceled.json()["error"]["code"] == -32602
     assert canceled.json()["error"]["data"]["localCode"] == "invalid_request"
     assert canceled.json()["error"]["message"] == error_message
-    service.close()
     agent_store.close()
 
 
@@ -2335,11 +2299,7 @@ def test_a2a_route_jsonrpc_completed_local_task_cancel_is_rejected(tmp_path):
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     sent = client.post(
         "/message:send",
@@ -2371,7 +2331,6 @@ def test_a2a_route_jsonrpc_completed_local_task_cancel_is_rejected(tmp_path):
         "retryable": False,
     }
     assert main_store.get_task(task_id).status == MainAgentTaskStatus.COMPLETED
-    service.close()
     agent_store.close()
 
 
@@ -2383,11 +2342,7 @@ def test_a2a_route_jsonrpc_completed_local_task_cancel_returns_jsonrpc_error(tmp
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     sent = client.post(
         "/message:send",
@@ -2429,5 +2384,4 @@ def test_a2a_route_jsonrpc_completed_local_task_cancel_returns_jsonrpc_error(tmp
         "data": jsonrpc_error_data("invalid_session_state"),
     }
     assert main_store.get_task(task_id).status == MainAgentTaskStatus.COMPLETED
-    service.close()
     agent_store.close()

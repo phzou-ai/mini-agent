@@ -38,7 +38,9 @@ import {
   deleteAgentRegisteredAgent,
   getAgentA2AAgentCard,
   getAgentA2ATask,
+  getAgentContext,
   getAgentModelConfig,
+  getAgentMessageIngress,
   listAgentContextDelegations,
   listAgentContextMessages,
   listAgentContextRouteDecisions,
@@ -64,6 +66,7 @@ import type {
   AgentContextTaskRecord,
   AgentDelegation,
   AgentMessage,
+  AgentMessageFailure,
   AgentModelConfig,
   AgentRegisteredAgent,
   AgentRouteDecision,
@@ -73,7 +76,7 @@ import type {
   AgentTaskEvent,
   AgentTaskStatus,
 } from "@/lib/agent/types"
-import { getRequestErrorMessage } from "@/lib/request"
+import { getRequestErrorMessage, RequestError } from "@/lib/request"
 import { cn } from "@/lib/utils"
 import { MainAgentCardPanel } from "@/app/(agent)/agent/_components/agent-card-panel"
 import { RouteDiagnosticsPanel } from "@/app/(agent)/agent/_components/route-diagnostics-panel"
@@ -208,6 +211,16 @@ function isTerminalStatus(status?: AgentTaskStatus | null) {
 
 function isActiveStatus(status?: AgentTaskStatus | null) {
   return Boolean(status && ACTIVE_STATUSES.has(status))
+}
+
+function isCancellationRequestedStatus(status?: AgentTaskStatus | null) {
+  return status === "cancel_request" || status === "cancel_requested"
+}
+
+function taskActivityLabel(status: AgentTaskStatus) {
+  return isCancellationRequestedStatus(status)
+    ? "cancellation requested"
+    : status
 }
 
 function isApprovalRequiredStatus(status?: AgentTaskStatus | null) {
@@ -352,6 +365,74 @@ function metadataString(
   return typeof value === "string" ? value : ""
 }
 
+function a2aStateFromLocalProcessStatus(status?: string | null) {
+  switch (status) {
+    case "created":
+    case "queued":
+      return "submitted"
+    case "running":
+    case "cancel_request":
+    case "cancel_requested":
+      return "working"
+    case "input_required":
+      return "input-required"
+    case "auth_required":
+      return "auth-required"
+    case "completed":
+    case "canceled":
+    case "failed":
+      return status
+    default:
+      return ""
+  }
+}
+
+function localProcessStatusFromA2AState(status?: string | null) {
+  switch (status) {
+    case "submitted":
+      return "queued"
+    case "working":
+      return "running"
+    case "input-required":
+      return "input_required"
+    case "auth-required":
+      return "auth_required"
+    case "completed":
+    case "canceled":
+    case "failed":
+      return status
+    default:
+      return ""
+  }
+}
+
+function taskStateProjection(
+  a2aState?: string | null,
+  metadata?: Record<string, unknown> | null,
+  fallbackLocalProcessStatus?: string | null
+) {
+  const localProcessStatus =
+    metadataString(metadata ?? undefined, "localStatus") ||
+    fallbackLocalProcessStatus ||
+    localProcessStatusFromA2AState(a2aState)
+  const projectedA2AState =
+    a2aState || a2aStateFromLocalProcessStatus(localProcessStatus)
+
+  return {
+    a2a_state: projectedA2AState || null,
+    local_process_status: localProcessStatus || null,
+  }
+}
+
+function taskStatusFromA2A(
+  status?: string | null,
+  metadata?: Record<string, unknown> | null
+): AgentTaskStatus {
+  return normalizeStatus(
+    metadataString(metadata ?? undefined, "localStatus") || status
+  )
+}
+
 function threadIdFromMetadata(metadata?: Record<string, unknown> | null) {
   return (
     metadataString(metadata ?? undefined, "runtimeThreadId") ||
@@ -429,18 +510,30 @@ function storedMessagesToConversation(
   return messages
     .slice()
     .sort((left, right) => left.created_at.localeCompare(right.created_at))
-    .map((message) => ({
-      id: message.message_id,
-      role:
-        message.role === "agent"
-          ? "assistant"
-          : message.role === "system"
-            ? "system"
-            : "user",
-      content: textFromParts(message.parts),
-      createdAt: message.created_at,
-      taskId: message.task_id ?? null,
-    }))
+    .flatMap((message) => {
+      const conversationMessage: AgentMessage = {
+        id: message.message_id,
+        role:
+          message.role === "agent"
+            ? "assistant"
+            : message.role === "system"
+              ? "system"
+              : "user",
+        content: textFromParts(message.parts),
+        createdAt: message.created_at,
+        taskId: message.task_id ?? null,
+      }
+      return message.failure
+        ? [
+            conversationMessage,
+            buildDirectMessageFailure(
+              message.message_id,
+              message.failure,
+              message.created_at
+            ),
+          ]
+        : [conversationMessage]
+    })
 }
 
 function approvalTasksToConversation(
@@ -529,14 +622,21 @@ function storedTaskToAgentTask(
     ? messages.find((message) => message.message_id === task.output_message_id)
     : undefined
   const status = snapshot
-    ? normalizeStatus(snapshot.status.state)
+    ? taskStatusFromA2A(snapshot.status.state, snapshot.metadata)
     : normalizeStatus(task.status)
+  const stateProjection = taskStateProjection(
+    snapshot?.status.state,
+    snapshot?.metadata,
+    task.status
+  )
   const updatedAt = snapshot?.status.timestamp || task.updated_at
 
   return {
     task_id: task.task_id,
     session_id: task.context_id,
     thread_id: task.runtime_thread_id,
+    a2a_state: stateProjection.a2a_state,
+    local_process_status: stateProjection.local_process_status,
     retry_of_task_id: task.retry_of_task_id,
     status,
     input: inputMessage ? textFromParts(inputMessage.parts) : "Agent task",
@@ -613,6 +713,42 @@ function buildAssistantConversationMessage(
   }
 }
 
+function directMessageFailureId(inputMessageId: string) {
+  return `failure:${inputMessageId}`
+}
+
+function buildDirectMessageFailure(
+  inputMessageId: string,
+  failure: AgentMessageFailure,
+  createdAt: string
+): AgentMessage {
+  return {
+    id: directMessageFailureId(inputMessageId),
+    role: "assistant",
+    content: "",
+    createdAt,
+    failure,
+  }
+}
+
+function failureFromRequestError(
+  error: unknown,
+  fallbackMessage: string
+): AgentMessageFailure {
+  if (error instanceof RequestError) {
+    return {
+      code: error.code,
+      message: error.message || fallbackMessage,
+      retryable: error.retryable,
+    }
+  }
+  return {
+    code: "a2a_stream_error",
+    message: getRequestErrorMessage(error, fallbackMessage),
+    retryable: true,
+  }
+}
+
 function a2aEnvelopeToTaskEvent(
   envelope: AgentA2AStreamEnvelope
 ): AgentTaskEvent | null {
@@ -626,6 +762,9 @@ function a2aEnvelopeToTaskEvent(
   if (typeof localEventId !== "number") return null
   const localEventCreatedAt = metadata.localEventCreatedAt
   const runtimeThreadId = threadIdFromMetadata(metadata)
+  const a2aState =
+    result.kind === "status-update" ? result.status.state : undefined
+  const stateProjection = taskStateProjection(a2aState, metadata)
 
   return {
     event_id: localEventId,
@@ -633,13 +772,15 @@ function a2aEnvelopeToTaskEvent(
     session_id: result.contextId,
     context_id: result.contextId,
     thread_id: runtimeThreadId,
+    a2a_state: stateProjection.a2a_state,
+    local_process_status: stateProjection.local_process_status,
     event_type:
       typeof metadata.localEventType === "string"
         ? metadata.localEventType
         : result.kind,
     status:
       result.kind === "status-update"
-        ? normalizeStatus(result.status.state)
+        ? taskStatusFromA2A(result.status.state, metadata)
         : null,
     payload: result as unknown as Record<string, unknown>,
     created_at:
@@ -763,6 +904,11 @@ export function AgentConsole() {
     (task) =>
       task.session_id === currentSessionId && isActiveStatus(task.status)
   )
+  const isCurrentSessionCancellationPending = taskList.some(
+    (task) =>
+      task.session_id === currentSessionId &&
+      isCancellationRequestedStatus(task.status)
+  )
   const conversationMessages = currentSessionId
     ? (messagesByContext[currentSessionId] ?? [])
     : []
@@ -798,18 +944,25 @@ export function AgentConsole() {
   }, [tasks])
 
   const applyA2ATaskSnapshot = useCallback((snapshot: AgentA2ATask) => {
-    const status = normalizeStatus(snapshot.status.state)
+    const status = taskStatusFromA2A(snapshot.status.state, snapshot.metadata)
     const updatedAt = snapshot.status.timestamp || new Date().toISOString()
     const runtimeThreadId = threadIdFromMetadata(snapshot.metadata)
 
     setTasks((previous) => {
       const task = previous[snapshot.id]
       if (!task) return previous
+      const stateProjection = taskStateProjection(
+        snapshot.status.state,
+        snapshot.metadata,
+        task.local_process_status
+      )
       return {
         ...previous,
         [snapshot.id]: {
           ...task,
           thread_id: runtimeThreadId || task.thread_id,
+          a2a_state: stateProjection.a2a_state,
+          local_process_status: stateProjection.local_process_status,
           status,
           updated_at: updatedAt,
           metadata: snapshot.metadata ?? task.metadata,
@@ -897,10 +1050,17 @@ export function AgentConsole() {
           setTasks((previous) => {
             const task = previous[event.task_id]
             if (!task) return previous
+            const stateProjection = taskStateProjection(
+              event.a2a_state,
+              undefined,
+              event.local_process_status ?? task.local_process_status
+            )
             return {
               ...previous,
               [event.task_id]: {
                 ...task,
+                a2a_state: stateProjection.a2a_state,
+                local_process_status: stateProjection.local_process_status,
                 status,
                 updated_at: event.created_at,
               },
@@ -1138,6 +1298,8 @@ export function AgentConsole() {
       task_id: pendingActivityId,
       session_id: displayContextId,
       thread_id: "",
+      a2a_state: executionMode === "message" ? null : "working",
+      local_process_status: executionMode === "message" ? null : "running",
       status: "running",
       input: prompt,
       attempt: 1,
@@ -1189,11 +1351,16 @@ export function AgentConsole() {
       ),
     ])
 
-    const promoteDraftContext = (contextId: string) => {
-      if (contextId === displayContextId) return
+    const promoteDraftContext = (contextId: string, omitMessageId?: string) => {
       setMessagesByContext((previous) => {
         const next = { ...previous }
-        const draftMessages = next[displayContextId] ?? []
+        const draftMessages = (next[displayContextId] ?? []).filter(
+          (message) => message.id !== omitMessageId
+        )
+        if (contextId === displayContextId) {
+          next[contextId] = draftMessages
+          return next
+        }
         next[contextId] = mergeConversationMessages(
           next[contextId] ?? [],
           draftMessages
@@ -1219,6 +1386,112 @@ export function AgentConsole() {
       })
     }
 
+    const removePendingActivity = () => {
+      setTasks((previous) => {
+        const next = { ...previous }
+        delete next[pendingActivityId]
+        return next
+      })
+    }
+
+    const recoverMessageStreamFailure = async (
+      fallbackFailure: AgentMessageFailure
+    ) => {
+      let contextId = displayContextId
+      let failure = fallbackFailure
+      let createdAt = new Date().toISOString()
+
+      try {
+        const ingress = await getAgentMessageIngress(outgoingMessageId)
+        contextId = ingress.context_id
+        createdAt = ingress.updated_at
+
+        // A stream can fail after the server has accepted the message or even
+        // completed its task. Ingress is the durable outcome owner, so reload
+        // that context instead of projecting a false message failure locally.
+        if (ingress.state === "resolved") {
+          promoteDraftContext(contextId, pendingAssistantMessageId)
+          removePendingActivity()
+          setCurrentSessionId(contextId)
+          setCurrentTaskId("")
+
+          try {
+            upsertResolvedSession(contextToSession(await getAgentContext(contextId)))
+          } catch {
+            upsertResolvedSession({
+              session_id: contextId,
+              context_id: contextId,
+              title: prompt,
+              status: "active",
+              metadata: {},
+              created_at: outgoingCreatedAt,
+              updated_at: createdAt,
+            })
+          }
+
+          try {
+            await loadContextMessages(contextId)
+          } catch (loadError) {
+            setError(
+              getRequestErrorMessage(
+                loadError,
+                "Message completed, but the conversation could not be refreshed"
+              )
+            )
+          }
+          return
+        }
+
+        if (ingress.state === "failed" && ingress.failure) {
+          failure = ingress.failure
+        }
+      } catch {
+        // The server may have failed before reserving ingress. Keep a local
+        // error activity so the pending spinner is never mistaken for output.
+      }
+
+      setError(failure.message)
+      promoteDraftContext(contextId, pendingAssistantMessageId)
+      appendConversationMessages(contextId, [
+        buildDirectMessageFailure(outgoingMessageId, failure, createdAt),
+      ])
+      removePendingActivity()
+      setCurrentSessionId(contextId)
+      setCurrentTaskId("")
+      setSessions((previous) => {
+        const existing = previous.find(
+          (session) => session.session_id === contextId
+        )
+        const failureSession: AgentSession = {
+          session_id: contextId,
+          context_id: contextId,
+          title: existing?.title || prompt,
+          status: "failed",
+          metadata: existing?.metadata ?? {},
+          created_at: existing?.created_at || outgoingCreatedAt,
+          updated_at: createdAt,
+        }
+        const withoutDraft = previous.filter(
+          (session) => session.session_id !== displayContextId
+        )
+        const withoutCurrent = withoutDraft.filter(
+          (session) => session.session_id !== contextId
+        )
+        return [failureSession, ...withoutCurrent]
+      })
+
+      if (contextId !== displayContextId) {
+        void loadContextMessages(contextId).catch((loadError) => {
+          setError(
+            getRequestErrorMessage(
+              loadError,
+              "Failed to load the failed message"
+            )
+          )
+        })
+      }
+    }
+
     try {
       await openAgentA2AMessageStream(
         {
@@ -1235,7 +1508,8 @@ export function AgentConsole() {
           onEvent: (envelope) => {
             receivedStreamEvent = true
             if (envelope.error) {
-              setError(errorFromA2AStreamEnvelope(envelope).message)
+              const failure = errorFromA2AStreamEnvelope(envelope)
+              void recoverMessageStreamFailure(failure)
               return
             }
 
@@ -1359,12 +1633,18 @@ export function AgentConsole() {
             if (result.kind === "task") {
               streamedTaskId = result.id
               const runtimeThreadId = threadIdFromMetadata(result.metadata)
+              const stateProjection = taskStateProjection(
+                result.status.state,
+                result.metadata
+              )
               promoteDraftContext(result.contextId)
               const task: AgentTask = {
                 task_id: result.id,
                 session_id: result.contextId,
                 thread_id: runtimeThreadId,
-                status: normalizeStatus(result.status.state),
+                a2a_state: stateProjection.a2a_state,
+                local_process_status: stateProjection.local_process_status,
+                status: taskStatusFromA2A(result.status.state, result.metadata),
                 input: prompt,
                 attempt: 1,
                 final_answer: null,
@@ -1440,6 +1720,11 @@ export function AgentConsole() {
               setTasks((previous) => {
                 const task = previous[event.task_id]
                 if (!task) return previous
+                const stateProjection = taskStateProjection(
+                  event.a2a_state,
+                  undefined,
+                  event.local_process_status ?? task.local_process_status
+                )
                 const inputRequest = result.metadata?.inputRequest
                 const metadata = { ...(task.metadata ?? {}) }
                 if (
@@ -1455,6 +1740,8 @@ export function AgentConsole() {
                   ...previous,
                   [event.task_id]: {
                     ...task,
+                    a2a_state: stateProjection.a2a_state,
+                    local_process_status: stateProjection.local_process_status,
                     status: event.status ?? task.status,
                     updated_at: event.created_at,
                     metadata,
@@ -1504,12 +1791,12 @@ export function AgentConsole() {
             }
           },
           onError: (streamError) => {
-            setError(
-              getRequestErrorMessage(streamError, "Failed to stream message")
+            void recoverMessageStreamFailure(
+              failureFromRequestError(
+                streamError,
+                "Failed to stream message"
+              )
             )
-            if (streamedTaskId) {
-              void reconcileA2ATaskSnapshot(streamedTaskId)
-            }
           },
         }
       )
@@ -1671,11 +1958,21 @@ export function AgentConsole() {
         currentTask.task_id,
         "operator requested"
       )
-      const nextStatus = normalizeStatus(canceledTask.status.state)
+      const nextStatus = taskStatusFromA2A(
+        canceledTask.status.state,
+        canceledTask.metadata
+      )
+      const stateProjection = taskStateProjection(
+        canceledTask.status.state,
+        canceledTask.metadata,
+        currentTask.local_process_status
+      )
       setTasks((previous) => ({
         ...previous,
         [currentTask.task_id]: {
           ...currentTask,
+          a2a_state: stateProjection.a2a_state,
+          local_process_status: stateProjection.local_process_status,
           status: nextStatus,
           updated_at: canceledTask.status.timestamp || new Date().toISOString(),
         },
@@ -1708,16 +2005,26 @@ export function AgentConsole() {
     setResumingTaskId(taskId)
     try {
       const resumedTask = await resumeAgentA2ATask(taskId, approved, reason)
-      const nextStatus = normalizeStatus(resumedTask.status.state)
+      const nextStatus = taskStatusFromA2A(
+        resumedTask.status.state,
+        resumedTask.metadata
+      )
       const updatedAt = resumedTask.status.timestamp || new Date().toISOString()
       const contextId = resumedTask.contextId || task.session_id
       const runtimeThreadId = threadIdFromMetadata(resumedTask.metadata)
+      const stateProjection = taskStateProjection(
+        resumedTask.status.state,
+        resumedTask.metadata,
+        task.local_process_status
+      )
 
       setTasks((previous) => ({
         ...previous,
         [taskId]: {
           ...task,
           thread_id: runtimeThreadId || task.thread_id,
+          a2a_state: stateProjection.a2a_state,
+          local_process_status: stateProjection.local_process_status,
           status: nextStatus,
           updated_at: updatedAt,
           metadata: resumedTask.metadata ?? task.metadata,
@@ -1772,14 +2079,24 @@ export function AgentConsole() {
       }
 
       const snapshot = result.task
-      const nextStatus = normalizeStatus(snapshot.status.state)
+      const nextStatus = taskStatusFromA2A(
+        snapshot.status.state,
+        snapshot.metadata
+      )
       const updatedAt = snapshot.status.timestamp || new Date().toISOString()
       const runtimeThreadId = threadIdFromMetadata(snapshot.metadata)
+      const stateProjection = taskStateProjection(
+        snapshot.status.state,
+        snapshot.metadata,
+        task.local_process_status
+      )
       setTasks((previous) => ({
         ...previous,
         [taskId]: {
           ...task,
           thread_id: runtimeThreadId || task.thread_id,
+          a2a_state: stateProjection.a2a_state,
+          local_process_status: stateProjection.local_process_status,
           status: nextStatus,
           updated_at: updatedAt,
           metadata: snapshot.metadata ?? {},
@@ -1998,6 +2315,7 @@ export function AgentConsole() {
               <Composer
                 input={input}
                 isGenerating={Boolean(isCurrentSessionTaskActive || busy)}
+                isCancelling={isCurrentSessionCancellationPending}
                 onInputChange={setInput}
                 executionMode={executionMode}
                 registeredAgents={enabledRegisteredAgents}
@@ -2617,11 +2935,16 @@ function MessageItem({
   onSubmitInput: (value: string) => void
 }) {
   const isUser = message.role === "user"
+  const isDirectMessageFailure = Boolean(message.failure)
   const isInputPending = Boolean(
-    !isUser && task && isApprovalRequiredStatus(task.status) && !message.content
+    !isUser &&
+      !isDirectMessageFailure &&
+      task &&
+      isApprovalRequiredStatus(task.status) &&
+      !message.content
   )
   const isLoadingOnly =
-    message.loading && !message.content && !isInputPending
+    message.loading && !message.content && !isInputPending && !isDirectMessageFailure
   const hasTaskEvents = Boolean(task && !isMessageDisplayTask(task))
 
   return (
@@ -2657,7 +2980,10 @@ function MessageItem({
               isUser
                 ? "max-w-[520px] rounded-[4px_0_4px_4px] border border-[#E2E8F0] bg-[#EFF6FF] text-[#0F172A]"
                 : cn(
-                    "max-w-[844px] rounded-[0_4px_4px_4px] border border-[#E7E5E8] bg-white text-[#1F0013]",
+                    "max-w-[844px] rounded-[0_4px_4px_4px] border bg-white text-[#1F0013]",
+                    isDirectMessageFailure
+                      ? "border-[#FCA5A5] bg-[#FFF7F7]"
+                      : "border-[#E7E5E8]",
                     isInputPending ? "w-full" : "w-fit"
                   ),
               selected &&
@@ -2674,7 +3000,9 @@ function MessageItem({
               }
             }}
           >
-            {isInputPending && task ? (
+            {isDirectMessageFailure && message.failure ? (
+              <DirectMessageFailureCard failure={message.failure} />
+            ) : isInputPending && task ? (
               isGeneralInputRequiredTask(task) ? (
                 <TaskInputRequiredCard
                   task={task}
@@ -2697,6 +3025,13 @@ function MessageItem({
             )}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
+            {isDirectMessageFailure && message.failure && (
+              <span className="rounded-full bg-[#FEE2E2] px-2 py-0.5 text-[11px] font-medium leading-4 text-[#B91C1C]">
+                {message.failure.retryable
+                  ? "message failed · retryable"
+                  : "message failed"}
+              </span>
+            )}
             {task && (
               <button
                 className={cn(
@@ -2708,7 +3043,7 @@ function MessageItem({
                 type="button"
                 onClick={onSelect}
               >
-                {hasTaskEvents ? `task · ${task.status}` : "message"}
+                {hasTaskEvents ? `task · ${taskActivityLabel(task.status)}` : "message"}
               </button>
             )}
             {busy && message.loading && !isInputPending && (
@@ -2716,7 +3051,7 @@ function MessageItem({
                 Updating
               </span>
             )}
-            {message.content && (
+            {message.content && !isDirectMessageFailure && (
               <button
                 className={cn(
                   "flex h-6 w-8 items-center justify-center rounded-[4px] border text-[#0F172A] transition hover:border-[#4C1C6A]",
@@ -2743,6 +3078,32 @@ function MessageItem({
             </span>
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+function DirectMessageFailureCard({
+  failure,
+}: {
+  failure: AgentMessageFailure
+}) {
+  return (
+    <div
+      className="flex min-w-0 items-start gap-2.5"
+      data-testid="agent-direct-message-failure"
+    >
+      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[#B91C1C]" />
+      <div className="min-w-0">
+        <p className="m-0 text-[13px] font-semibold leading-5 text-[#7F1D1D]">
+          Request failed
+        </p>
+        <p className="m-0 mt-1 break-words text-[13px] leading-5 text-[#7F1D1D] [overflow-wrap:anywhere]">
+          {failure.message}
+        </p>
+        <span className="mt-2 inline-flex rounded-full bg-[#FEE2E2] px-2 py-0.5 font-mono text-[10px] leading-4 text-[#B91C1C]">
+          {failure.code}
+        </span>
       </div>
     </div>
   )
@@ -2927,6 +3288,7 @@ function MarkdownText({ content }: { content: string }) {
 function Composer({
   input,
   isGenerating,
+  isCancelling = false,
   executionMode,
   registeredAgents,
   selectedRemoteAgentId,
@@ -2939,6 +3301,7 @@ function Composer({
 }: {
   input: string
   isGenerating: boolean
+  isCancelling?: boolean
   executionMode: AgentA2AExecutionMode
   registeredAgents: AgentRegisteredAgent[]
   selectedRemoteAgentId: string
@@ -2952,7 +3315,7 @@ function Composer({
   const hasInput = Boolean(input.trim())
   const [isFocused, setIsFocused] = useState(false)
   const showHighlight = isFocused || hasInput
-  const isButtonActive = isGenerating || hasInput
+  const isButtonActive = !isCancelling && (isGenerating || hasInput)
   const composerBorder = showHighlight
     ? COMPOSER_ACTIVE_BORDER
     : COMPOSER_IDLE_BORDER
@@ -3035,7 +3398,7 @@ function Composer({
           </div>
           <textarea
             className={cn(
-              "min-h-[106px] w-full resize-none bg-transparent pr-20 text-[14px] leading-5 outline-none",
+              "min-h-[106px] w-full resize-none bg-transparent pr-20 text-[14px] leading-5 outline-none disabled:cursor-not-allowed disabled:opacity-70",
               hasInput
                 ? "text-[#1F0013] placeholder:text-[#1F0013]"
                 : "text-[#54465C] placeholder:text-[#54465C]"
@@ -3045,6 +3408,7 @@ function Composer({
             }}
             data-testid="agent-composer-input"
             value={input}
+            disabled={isCancelling}
             placeholder={
               executionMode === "task"
                 ? "Enter an agent task. Enter to run, Shift + Enter for a new line."
@@ -3056,11 +3420,16 @@ function Composer({
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault()
-                if (isGenerating) return
+                if (isGenerating || isCancelling) return
                 onSend()
               }
             }}
           />
+          {isCancelling && (
+            <p className="m-0 mt-2 text-[12px] leading-5 text-[#7C3AED]">
+              Cancellation requested. Waiting for the current operation to reach a safe boundary.
+            </p>
+          )}
           <button
             className={cn(
               "absolute bottom-5 right-5 flex h-10 w-10 items-center justify-center rounded-full text-white transition-[background,box-shadow,filter] duration-300 ease-out disabled:cursor-not-allowed"
@@ -3076,8 +3445,14 @@ function Composer({
                 : "none",
             }}
             type="button"
-            disabled={!isGenerating && !hasInput}
-            aria-label={isGenerating ? "Stop generating" : "Send"}
+            disabled={isCancelling || (!isGenerating && !hasInput)}
+            aria-label={
+              isCancelling
+                ? "Cancellation requested"
+                : isGenerating
+                  ? "Stop generating"
+                  : "Send"
+            }
             onClick={isGenerating ? onStop : onSend}
           >
             {isGenerating ? <StopIcon /> : <SendIcon />}
@@ -3198,7 +3573,7 @@ function Inspector({
             Inspector
           </p>
           <p className="m-0 text-[12px] leading-4 text-[#64748B]">
-            Route, activity, and payload
+            Route, task state, and events
           </p>
         </div>
       </div>
@@ -3217,6 +3592,8 @@ function Inspector({
             <Metric label="Attempt" value={String(task?.attempt ?? 0)} />
           </div>
         </div>
+
+        <TaskStateSummary task={task} />
 
         <MainAgentCardPanel card={mainAgentCard} />
 
@@ -3245,7 +3622,7 @@ function Inspector({
               Timeline
             </h2>
             <span className="rounded-full bg-[#F1F5F9] px-2 py-1 text-[12px] text-[#64748B]">
-              {task?.status ?? "idle"}
+              {task?.local_process_status ?? task?.status ?? "idle"}
             </span>
           </div>
           <div className="grid gap-3">
@@ -3265,19 +3642,137 @@ function Inspector({
           </div>
         </div>
 
+        <SelectedEventSummary event={selectedEvent} task={task} />
+
         <div className="border-t border-[#E7E5E8] p-5">
-          <h2 className="m-0 mb-3 text-[14px] font-semibold leading-5">
-            Payload
-          </h2>
-          <pre
-            className="max-h-[360px] overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-[6px] bg-[#0F172A] p-4 text-[12px] leading-5 text-[#E2E8F0]"
-            data-testid="agent-event-payload"
+          <details
+            className="overflow-hidden rounded-[6px] border border-[#E7E5E8] bg-[#F8FAFC]"
+            data-testid="agent-raw-event-record"
           >
-            {JSON.stringify(selectedEvent ?? { state: "empty" }, null, 2)}
-          </pre>
+            <summary className="cursor-pointer px-3 py-2.5 text-[13px] font-semibold leading-5 text-[#1F0013] marker:text-[#64748B]">
+              Raw event record
+            </summary>
+            <div className="border-t border-[#E7E5E8] p-3">
+              <pre
+                className="max-h-[360px] overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-[4px] bg-[#0F172A] p-3 text-[12px] leading-5 text-[#E2E8F0]"
+                data-testid="agent-event-payload"
+              >
+                {JSON.stringify(selectedEvent ?? { state: "empty" }, null, 2)}
+              </pre>
+            </div>
+          </details>
         </div>
       </div>
     </aside>
+  )
+}
+
+function InspectorStateCell({
+  label,
+  value,
+  className,
+}: {
+  label: string
+  value?: string | null
+  className?: string
+}) {
+  const displayValue = value || "not reported"
+  return (
+    <div
+      className={cn(
+        "min-w-0 rounded-[4px] border border-[#E7E5E8] bg-[#F8FAFC] px-3 py-2",
+        className
+      )}
+    >
+      <p className="m-0 text-[10px] font-medium uppercase leading-4 text-[#64748B]">
+        {label}
+      </p>
+      <p
+        className="m-0 mt-1 truncate font-mono text-[12px] font-medium leading-5 text-[#1F0013]"
+        title={displayValue}
+      >
+        {displayValue}
+      </p>
+    </div>
+  )
+}
+
+function TaskStateSummary({ task }: { task?: AgentTask }) {
+  if (!task || isMessageDisplayTask(task)) return null
+
+  const a2aState =
+    task.a2a_state ||
+    a2aStateFromLocalProcessStatus(task.local_process_status) ||
+    null
+
+  return (
+    <div
+      className="border-b border-[#E7E5E8] px-5 py-4"
+      data-testid="agent-task-state-summary"
+    >
+      <h2 className="m-0 text-[14px] font-semibold leading-5">Task state</h2>
+      <div className="mt-3 grid min-w-0 grid-cols-2 gap-2">
+        <InspectorStateCell label="A2A Task" value={a2aState} />
+        <InspectorStateCell
+          label="Local process"
+          value={task.local_process_status}
+        />
+        <InspectorStateCell
+          className="col-span-2"
+          label="LangGraph thread"
+          value={task.thread_id}
+        />
+      </div>
+    </div>
+  )
+}
+
+function SelectedEventSummary({
+  event,
+  task,
+}: {
+  event?: AgentTaskEvent
+  task?: AgentTask
+}) {
+  if (!event) return null
+
+  const config = EVENT_LABELS[event.event_type]
+  const changesTaskState = Boolean(
+    event.a2a_state || event.local_process_status
+  )
+
+  return (
+    <div
+      className="border-t border-[#E7E5E8] px-5 py-4"
+      data-testid="agent-selected-event-summary"
+    >
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <h2 className="m-0 text-[14px] font-semibold leading-5">
+          Selected event
+        </h2>
+        <span className="truncate text-[11px] text-[#64748B]" title={event.event_type}>
+          {config?.title ?? event.event_type}
+        </span>
+      </div>
+      {changesTaskState ? (
+        <div className="mt-3 grid min-w-0 grid-cols-2 gap-2">
+          <InspectorStateCell label="A2A Task" value={event.a2a_state} />
+          <InspectorStateCell
+            label="Local process"
+            value={event.local_process_status}
+          />
+          <InspectorStateCell
+            className="col-span-2"
+            label="LangGraph thread"
+            value={event.thread_id || task?.thread_id}
+          />
+        </div>
+      ) : (
+        <p className="m-0 mt-2 text-[12px] leading-5 text-[#64748B]">
+          This event records output or metadata; it does not change Task state.
+        </p>
+      )}
+    </div>
   )
 }
 
@@ -3536,6 +4031,14 @@ function TimelineEvent({
 }) {
   const config = EVENT_LABELS[event.event_type]
   const Icon = config?.icon ?? TerminalSquare
+  const detail = [
+    event.a2a_state ? `A2A: ${event.a2a_state}` : "",
+    event.local_process_status
+      ? `Process: ${event.local_process_status}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" · ")
 
   return (
     <button
@@ -3565,7 +4068,7 @@ function TimelineEvent({
             </span>
           </div>
           <p className="m-0 mt-1 line-clamp-2 text-[12px] leading-5 text-[#64748B]">
-            {event.status || config?.detail || "event"}
+            {detail || config?.detail || event.status || "event"}
           </p>
         </div>
       </div>
@@ -3574,21 +4077,22 @@ function TimelineEvent({
 }
 
 function StatusDot({ status }: { status: AgentTaskStatus }) {
+  const tone = isCancellationRequestedStatus(status)
+    ? "bg-[#A855F7]"
+    : isActiveStatus(status)
+      ? "bg-[#3768C7]"
+      : status === "completed"
+        ? "bg-[#16A34A]"
+        : status === "canceled" ||
+            status === "cancelled" ||
+            status === "stopped"
+          ? "bg-[#F97316]"
+          : status === "failed"
+            ? "bg-[#DC2626]"
+            : "bg-[#CBD5E1]"
   return (
     <span className="mt-[5px] flex h-3 w-3 shrink-0 items-center justify-center rounded-full bg-[#EEF2FF]">
-      <span
-        className={cn(
-          "h-1.5 w-1.5 rounded-full",
-          isActiveStatus(status) && "bg-[#3768C7]",
-          status === "completed" && "bg-[#16A34A]",
-          (status === "canceled" ||
-            status === "cancelled" ||
-            status === "stopped") &&
-            "bg-[#F97316]",
-          status === "failed" && "bg-[#DC2626]",
-          status === "unknown" && "bg-[#CBD5E1]"
-        )}
-      />
+      <span className={cn("h-1.5 w-1.5 rounded-full", tone)} />
     </span>
   )
 }

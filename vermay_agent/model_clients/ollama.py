@@ -27,7 +27,13 @@ class OllamaModelClient:
         self.base_url = (base_url or "http://127.0.0.1:11434").rstrip("/")
         self.timeout_seconds = timeout_seconds if timeout_seconds is not None else 120
 
-    def invoke(self, messages: list[Message], tools: list[dict]) -> ModelResponse:
+    def invoke(
+        self,
+        messages: list[Message],
+        tools: list[dict],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> ModelResponse:
         ollama_messages = self._to_ollama_messages(messages, tools)
         payload = {
             "model": self.model,
@@ -45,7 +51,10 @@ class OllamaModelClient:
         )
 
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+            with urllib.request.urlopen(
+                request,
+                timeout=self._effective_timeout_seconds(timeout_seconds),
+            ) as response:
                 response_bytes = response.read()
         except urllib.error.HTTPError as exc:
             raise ModelProviderError(
@@ -172,10 +181,24 @@ class OllamaModelClient:
 
         return f"Ollama request failed: HTTP {exc.code} {exc.reason}{detail}"
 
+    def _effective_timeout_seconds(self, override: float | None) -> float:
+        if override is None:
+            return float(self.timeout_seconds)
+        if override <= 0:
+            raise ModelProviderError(
+                "Ollama request did not start because its task deadline had elapsed.",
+                provider=PROVIDER,
+                retryable=True,
+            )
+        return min(float(self.timeout_seconds), override)
+
     def _parse_content(self, content: str) -> ModelResponse:
         decision = parse_json_decision(content)
         if decision is None:
-            return ModelResponse(content=content)
+            raise ModelProtocolError(
+                "Invalid Ollama agent action: expected a JSON object with an action field.",
+                provider=PROVIDER,
+            )
 
         return self._parse_decision(decision)
 
@@ -186,6 +209,7 @@ class OllamaModelClient:
                 "Return only JSON. Choose one action.\n"
                 "Final answer: {\"action\":\"final\",\"content\":\"...\"}\n"
                 "Tool call: {\"action\":\"tool_call\",\"name\":\"tool_name\",\"arguments\":{...}}\n"
+                "Do not emit reasoning, <think> tags, markdown, or prose outside the JSON object.\n"
                 "Only call tools listed below. Dangerous tools may require approval.\n"
                 "Use request_user_input only for missing tool arguments, never for permission. "
                 "Call dangerous tools directly and let the runtime request approval.\n"
@@ -229,13 +253,19 @@ class OllamaModelClient:
     def _parse_decision(self, decision: dict) -> ModelResponse:
         action = decision.get("action")
         if decision == {}:
-            return ModelResponse(content="Model returned empty JSON instead of an agent action.")
+            raise ModelProtocolError(
+                "Invalid Ollama agent action: action is required.",
+                provider=PROVIDER,
+            )
 
         if action == "tool_call":
             name = decision.get("name")
             arguments = decision.get("arguments", {})
-            if not isinstance(name, str) or not isinstance(arguments, dict):
-                return ModelResponse(content=f"Invalid tool_call decision: {decision}")
+            if not isinstance(name, str) or not name or not isinstance(arguments, dict):
+                raise ModelProtocolError(
+                    "Invalid Ollama tool_call action: name and object arguments are required.",
+                    provider=PROVIDER,
+                )
             return ModelResponse(
                 content=f"Calling tool {name}.",
                 tool_calls=[ToolCall(name=name, arguments=arguments)],
@@ -247,16 +277,10 @@ class OllamaModelClient:
                 content = json.dumps(content, ensure_ascii=False, indent=2)
             return ModelResponse(content=content)
 
-        if "content" in decision:
-            content = decision["content"]
-            if not isinstance(content, str):
-                content = json.dumps(content, ensure_ascii=False, indent=2)
-            return ModelResponse(content=content)
-
-        if "message" in decision or "status" in decision:
-            return ModelResponse(content=json.dumps(decision, ensure_ascii=False))
-
-        return ModelResponse(content=f"Invalid model action: {decision}")
+        raise ModelProtocolError(
+            f"Invalid Ollama agent action: unsupported action {action!r}.",
+            provider=PROVIDER,
+        )
 
 
 def _retryable_http_status(status_code: int) -> bool:

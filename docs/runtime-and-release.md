@@ -88,6 +88,13 @@ traces/
 
 `data/agent.sqlite` and the LangGraph checkpoint database form one logical runtime state boundary. Back them up and restore them together when resumable tasks must survive a deployment. Do not include runtime databases, traces, generated proposals, `.env`, frontend build output, or dependency directories in a source release.
 
+The 2026-08-02 clean-slate storage cut intentionally retired the old
+service/session database format. When moving from a pre-cut local checkout,
+discard `data/agent.sqlite`, `data/checkpoints/langgraph.sqlite`, and any
+`traces/langgraph_checkpoints.sqlite` together before starting the current
+runtime. No data migration or checkpoint continuation is supported across that
+boundary.
+
 ## Public Service Boundary
 
 External agent clients use A2A JSON-RPC through `POST /rpc` and discover the agent through `GET /.well-known/agent-card.json`. `/api/*` routes are first-party management and diagnostic endpoints used by the Agent Console; they are not the public agent-to-agent integration contract.

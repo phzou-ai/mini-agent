@@ -5,11 +5,15 @@ import threading
 import pytest
 
 from vermay_agent.main_agent import (
+    InvalidLocalTaskTransitionError,
     LocalMessageResult,
     LocalTaskResult,
     MainAgentRequest,
     MainAgentStore,
+    MessageIngressOutcomeKind,
+    MessageIngressState,
     MessageRole,
+    QueuedTaskExecutionKind,
     RemoteAgentResult,
     RouteDecisionKind,
     TaskStatus,
@@ -82,6 +86,80 @@ def test_main_agent_store_persists_context_message_route_task_event_artifact(tmp
     ]
 
 
+def test_main_agent_store_validates_and_records_local_task_transitions_atomically(tmp_path):
+    store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
+    context = store.create_context(context_id="ctx-1")
+    message = store.append_message(
+        message_id="msg-user-1",
+        context_id=context.context_id,
+        role=MessageRole.USER,
+        parts=[{"kind": "text", "text": "run diagnostics"}],
+    )
+    task = store.create_local_task(
+        task_id="task-1",
+        context_id=context.context_id,
+        input_message_id=message.message_id,
+        runtime_thread_id="thread-1",
+    )
+
+    queued = store.transition_local_task(task.task_id, TaskStatus.QUEUED)
+    duplicate = store.transition_local_task(task.task_id, TaskStatus.QUEUED)
+
+    assert queued.status == TaskStatus.QUEUED
+    assert duplicate == queued
+    assert [(event.type, event.status) for event in store.list_task_events(task.task_id)] == [
+        ("task_created", TaskStatus.CREATED),
+        ("task_queued", TaskStatus.QUEUED),
+    ]
+
+    with pytest.raises(InvalidLocalTaskTransitionError, match="queued -> completed"):
+        store.transition_local_task(task.task_id, TaskStatus.COMPLETED)
+
+    unchanged = store.get_task(task.task_id)
+    assert unchanged is not None
+    assert unchanged.status == TaskStatus.QUEUED
+    assert [(event.type, event.status) for event in store.list_task_events(task.task_id)] == [
+        ("task_created", TaskStatus.CREATED),
+        ("task_queued", TaskStatus.QUEUED),
+    ]
+
+
+def test_main_agent_store_claims_one_durable_queued_execution_with_worker_start(tmp_path):
+    store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
+    context = store.create_context(context_id="ctx-1")
+    message = store.append_message(
+        message_id="msg-user-1",
+        context_id=context.context_id,
+        role=MessageRole.USER,
+        parts=[{"kind": "text", "text": "run diagnostics"}],
+    )
+    task = store.create_local_task(
+        task_id="task-1",
+        context_id=context.context_id,
+        input_message_id=message.message_id,
+        runtime_thread_id="thread-1",
+    )
+    queued = store.transition_local_task(task.task_id, TaskStatus.QUEUED)
+    command = store.enqueue_task_execution(
+        task.task_id,
+        kind=QueuedTaskExecutionKind.INITIAL,
+        runtime_thread_id=queued.runtime_thread_id,
+    )
+
+    claimed = store.claim_queued_task_execution(task.task_id)
+
+    assert claimed is not None
+    running, claimed_command = claimed
+    assert running.status == TaskStatus.RUNNING
+    assert claimed_command == command
+    assert store.get_queued_task_execution(task.task_id) is None
+    assert store.claim_queued_task_execution(task.task_id) is None
+    assert [(event.type, event.status) for event in store.list_task_events(task.task_id)] == [
+        ("task_created", TaskStatus.CREATED),
+        ("task_queued", TaskStatus.QUEUED),
+        ("task_started", TaskStatus.RUNNING),
+    ]
+
 def test_main_agent_store_wait_for_task_events_is_notified_by_new_event(tmp_path):
     store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
     store.create_context(context_id="ctx-1")
@@ -152,6 +230,101 @@ def test_main_agent_store_message_idempotency_and_conflict(tmp_path):
         )
 
 
+def test_main_agent_store_reserves_and_resolves_message_ingress_once(tmp_path):
+    store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
+    context = store.create_context(context_id="ctx-1")
+    message = store.append_message(
+        message_id="msg-1",
+        context_id=context.context_id,
+        role=MessageRole.USER,
+        parts=[{"kind": "text", "text": "hello"}],
+        metadata={"executionMode": "message"},
+    )
+
+    first, created = store.reserve_message_ingress(
+        message_id=message.message_id,
+        context_id=context.context_id,
+        request_fingerprint="fingerprint-1",
+    )
+    duplicate, duplicate_created = store.reserve_message_ingress(
+        message_id=message.message_id,
+        context_id=context.context_id,
+        request_fingerprint="fingerprint-1",
+    )
+
+    assert created is True
+    assert duplicate_created is False
+    assert duplicate == first
+    assert first.state == MessageIngressState.IN_PROGRESS
+
+    decision = store.record_route_decision(
+        decision_id="route-1",
+        context_id=context.context_id,
+        message_id=message.message_id,
+        kind=RouteDecisionKind.LOCAL_MESSAGE,
+        reason="test",
+    )
+    store.set_message_ingress_route_decision(message.message_id, route_decision_id=decision.decision_id)
+    output = store.append_message(
+        message_id="msg-agent-1",
+        context_id=context.context_id,
+        role=MessageRole.AGENT,
+        parts=[{"kind": "text", "text": "done"}],
+    )
+    resolved = store.resolve_message_ingress(
+        message.message_id,
+        outcome_kind=MessageIngressOutcomeKind.MESSAGE,
+        outcome_id=output.message_id,
+    )
+
+    assert resolved.state == MessageIngressState.RESOLVED
+    assert resolved.route_decision_id == decision.decision_id
+    assert resolved.outcome_kind == MessageIngressOutcomeKind.MESSAGE
+    assert resolved.outcome_id == output.message_id
+
+
+def test_main_agent_store_pending_continuation_is_not_derived_from_events(tmp_path):
+    store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
+    context = store.create_context(context_id="ctx-1")
+    message = store.append_message(
+        message_id="msg-user-1",
+        context_id=context.context_id,
+        role=MessageRole.USER,
+        parts=[{"kind": "text", "text": "delete pod"}],
+    )
+    task = store.create_task(
+        task_id="task-1",
+        context_id=context.context_id,
+        input_message_id=message.message_id,
+        runtime_thread_id="thread-1",
+        status=TaskStatus.AUTH_REQUIRED,
+    )
+    input_request = {"kind": "approval_required", "prompt": "Approve deletion?"}
+    store.set_pending_continuation(
+        task.task_id,
+        kind="approval_required",
+        input_request=input_request,
+    )
+    store.append_task_event(
+        task_id=task.task_id,
+        type="task_interrupted",
+        status=TaskStatus.AUTH_REQUIRED,
+        payload={"input_request": input_request},
+    )
+    store.append_task_event(
+        task_id=task.task_id,
+        type="task_resumed",
+        status=TaskStatus.AUTH_REQUIRED,
+        payload={"approved": True},
+    )
+
+    assert store.get_pending_input_request(task.task_id) == input_request
+    consumed = store.consume_pending_continuation(task.task_id, expected_kind="approval_required")
+
+    assert consumed.input_request == input_request
+    assert store.get_pending_input_request(task.task_id) is None
+
+
 def test_main_agent_store_recent_messages_are_bounded_and_ordered(tmp_path):
     store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
     store.create_context(context_id="ctx-1")
@@ -167,6 +340,50 @@ def test_main_agent_store_recent_messages_are_bounded_and_ordered(tmp_path):
         "msg-2",
         "msg-3",
         "msg-4",
+    ]
+
+
+def test_main_agent_store_persists_context_sequence_and_task_input_cut(tmp_path):
+    store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
+    store.create_context(context_id="ctx-1")
+    history = store.append_message(
+        message_id="msg-history",
+        context_id="ctx-1",
+        role=MessageRole.USER,
+        parts=[{"kind": "text", "text": "history"}],
+    )
+    task_input = store.append_message(
+        message_id="msg-task-input",
+        context_id="ctx-1",
+        role=MessageRole.USER,
+        parts=[{"kind": "text", "text": "run task"}],
+    )
+    task = store.create_task(
+        task_id="task-1",
+        context_id="ctx-1",
+        input_message_id=task_input.message_id,
+        runtime_thread_id="thread-1",
+        status=TaskStatus.QUEUED,
+    )
+    later = store.append_message(
+        message_id="msg-later",
+        context_id="ctx-1",
+        role=MessageRole.USER,
+        parts=[{"kind": "text", "text": "later input"}],
+    )
+
+    assert [history.context_sequence, task_input.context_sequence, later.context_sequence] == [1, 2, 3]
+    assert task.input_context_sequence == task_input.context_sequence
+    assert [message.message_id for message in store.list_task_input_messages(task.task_id)] == [
+        "msg-history",
+        "msg-task-input",
+    ]
+
+    store.store.execute("UPDATE messages SET created_at=? WHERE message_id=?", ("2099-01-01T00:00:00+00:00", "msg-history"))
+    assert [message.message_id for message in store.list_context_messages("ctx-1")] == [
+        "msg-history",
+        "msg-task-input",
+        "msg-later",
     ]
 
 
@@ -206,7 +423,7 @@ def test_recent_messages_ignores_task_events(tmp_path):
     ]
 
 
-def test_main_agent_store_delete_context_requires_force_for_active_tasks(tmp_path):
+def test_main_agent_store_delete_terminal_context_rejects_active_tasks(tmp_path):
     store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
     store.create_context(context_id="ctx-1")
     message = store.append_message(
@@ -232,13 +449,18 @@ def test_main_agent_store_delete_context_requires_force_for_active_tasks(tmp_pat
     store.append_task_event(task_id="task-1", type="task_started", status=TaskStatus.RUNNING)
 
     with pytest.raises(ValueError, match="non-terminal"):
-        store.delete_context("ctx-1")
+        store.delete_terminal_context("ctx-1")
 
-    result = store.delete_context("ctx-1", force=True)
+    still_running = store.get_task("task-1")
+    assert still_running is not None
+    assert still_running.status == TaskStatus.RUNNING
+
+    store.transition_local_task("task-1", TaskStatus.COMPLETED)
+    result = store.delete_terminal_context("ctx-1")
 
     assert result.deleted_tasks == 1
     assert result.deleted_messages == 1
-    assert result.deleted_task_events == 1
+    assert result.deleted_task_events == 2
     assert result.deleted_route_decisions == 1
     assert store.get_context("ctx-1") is None
 

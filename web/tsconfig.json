@@ -29,7 +29,11 @@
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts"
+    ".next/dev/types/**/*.ts",
+    ".next-playwright-regression/types/**/*.ts",
+    ".next-playwright-regression/dev/types/**/*.ts",
+    ".next-full-stack-build/types/**/*.ts",
+    ".next-full-stack-build/dev/types/**/*.ts"
   ],
   "exclude": ["node_modules"]
 }

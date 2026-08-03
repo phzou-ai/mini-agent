@@ -3,11 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from vermay_agent.langgraph_runtime import LangGraphAgentRuntime, ModelProviderConfig, build_model_client
+from vermay_agent.langgraph_runtime import (
+    ExecutionPolicy,
+    LangGraphAgentRuntime,
+    ModelProviderConfig,
+    ToolInvocationRecorder,
+    build_model_client,
+)
 from vermay_agent.model_selection import resolve_model_selection
 
 from .checkpointing import build_sqlite_checkpointer
-from .context_builder import ContextBuilder
+from .context_builder import default_system_prompt
 from .mcp.client import MCPClientManager
 from .mcp.prompts import MCPPromptProvider
 from .mcp.resources import MCPResourceProvider
@@ -39,6 +45,9 @@ class RuntimeFactoryConfig:
     model: ModelProviderConfig | None = None
     model_config_path: Path = DEFAULT_MODEL_CONFIG_PATH
     max_loops: int = 5
+    max_tool_calls: int | None = None
+    max_failures: int = 2
+    max_elapsed_seconds: float | None = None
     show_progress: bool = True
     trace_path: Path = DEFAULT_TRACE_PATH
     checkpoint_path: Path = DEFAULT_CHECKPOINT_PATH
@@ -51,7 +60,11 @@ class RuntimeFactoryConfig:
     mcp_resources: tuple[str, ...] = field(default_factory=tuple)
 
 
-def build_runtime(config: RuntimeFactoryConfig | None = None) -> LangGraphAgentRuntime:
+def build_runtime(
+    config: RuntimeFactoryConfig | None = None,
+    *,
+    tool_invocation_recorder: ToolInvocationRecorder | None = None,
+) -> LangGraphAgentRuntime:
     active_config = config or RuntimeFactoryConfig()
     active_model = active_config.model or resolve_model_selection(config_path=active_config.model_config_path)
     registry = ToolRegistry()
@@ -101,6 +114,12 @@ def build_runtime(config: RuntimeFactoryConfig | None = None) -> LangGraphAgentR
         system_prompt=_default_system_prompt(),
         trace=trace,
         max_loops=active_config.max_loops,
+        execution_policy=ExecutionPolicy.from_max_loops(
+            active_config.max_loops,
+            max_tool_calls=active_config.max_tool_calls,
+            max_failures=active_config.max_failures,
+            max_elapsed_seconds=active_config.max_elapsed_seconds,
+        ),
         checkpointer=checkpointer,
         progress=progress,
         context_provider=RuntimeContextProvider(
@@ -109,9 +128,10 @@ def build_runtime(config: RuntimeFactoryConfig | None = None) -> LangGraphAgentR
             memory=memory_store,
             mcp_resources=mcp_resource_provider,
         ),
+        tool_invocation_recorder=tool_invocation_recorder,
         close_callbacks=[checkpointer.conn.close, agent_store.close],
     )
 
 
 def _default_system_prompt() -> str:
-    return ContextBuilder().build(user_input="", memory=[], skills=[], observations=[])[0].content
+    return default_system_prompt()

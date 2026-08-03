@@ -46,8 +46,14 @@ generated Next.js bundle.
 ```bash
 pnpm typecheck
 pnpm build
+pnpm test:regression
 pnpm test:e2e
 ```
+
+`pnpm test:regression` starts an isolated Next development server using a
+dedicated build directory, so it can run while the normal `pnpm dev` server is
+active. `pnpm test:e2e` is the broader live suite and requires configured
+backend dependencies.
 
 The web app is intentionally agent-specific. Reusable UI primitives should only
 be extracted later if another non-agent product actually needs them.

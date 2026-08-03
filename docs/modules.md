@@ -27,18 +27,40 @@
 `vermay_agent/api/`
 
 - `app.py`: FastAPI app factory and HTTP route definitions.
-- `a2a/projection.py`: local projection helpers for A2A task, status, and artifact adapter work.
-- `a2a/`: opt-in A2A adapter package and protocol route definitions over `AgentService`.
-- `service.py`: service boundary for creating sessions, starting or queueing tasks, resuming approval, retrying terminal tasks, cancelling tasks, and reading task/session metadata.
-- `session_models.py`: project-level task status model and lifecycle predicates.
-- `session_store.py`: SQLite-backed session, task, task-event, and task-artifact metadata, including selected MCP task configuration and retry lineage.
-- `task_execution.py`: task execution infrastructure helpers for background execution, per-task execution locks, and task-event wait notification.
-- `task_contract.py`: shared task event type contract and event classification sets.
-- `lifecycle.py`: compact lifecycle observer abstractions for API operation monitoring.
+- `a2a/`: A2A JSON-RPC/SSE binding and projection package over `MainAgentCore`.
+- `management_models.py`: request and response models for the first-party Context, registered-agent, and model-configuration read-model endpoints.
 
-The API layer uses `LangGraphAgentRuntime.start()` and `resume()` through task-level service methods. It accepts structured MCP task selection, stores that selection in task metadata, and reuses it on approval resume. It does not call CLI string-output helpers and does not expose raw graph state by default.
+`create_app()` builds one default `MainAgentCore` composition. It owns no
+business lifecycle decisions itself: FastAPI only starts reconciliation, exposes
+the bindings/read models, and closes the resources it created during shutdown.
+A2A remains an API-edge binding and must not introduce A2A concepts into
+`vermay_agent/langgraph_runtime/`.
 
-A2A support belongs at this API boundary. A2A adapters call `AgentService` and use `a2a/projection.py`-style projection helpers; they should not modify the LangGraph graph topology or introduce A2A protocol concepts into `vermay_agent/langgraph_runtime/`.
+The API package contains no alternate service/session lifecycle. All supported
+agent operations enter through the A2A adapter and delegate to
+`MainAgentCore`.
+
+## Main Agent
+
+`vermay_agent/main_agent/`
+
+- `core.py`: the application lifecycle owner for direct Messages, local Tasks,
+  continuations, cancellation, remote child-task proxies, and durable ingress.
+- `store.py`: Main Agent persistence adapter over the SQLite store.
+- `router.py`, `router_classifier.py`, and `router_json_client.py`: explicit
+  route selection, model-backed classification, and model-provider transport.
+- `context.py`: causal Context cuts, role-preserving conversion, and
+  route-specific character-bounded history policies.
+- `responder.py`: direct model-backed Message response and direct SSE text
+  streaming.
+- `task_runner.py`: local LangGraph Task execution and per-runtime-thread
+  serialization.
+- `executor.py`: application-owned in-process Task executor.
+- `remote_agent.py`: child A2A client and remote Task snapshot validation.
+- `projection.py`: protocol-facing projection of durable main-agent records.
+
+`MainAgentCore` owns public lifecycle facts; `LangGraphAgentRuntime` owns only
+local graph execution and checkpoint continuation.
 
 ## Runtime Factory
 
@@ -80,7 +102,8 @@ This package is the only active runtime path. It is the production-oriented path
 - `trace.py`: writes JSONL runtime events.
 - `progress.py`: renders the default human-readable harness progress transcript.
 - `errors.py`: shared project error taxonomy for API response mapping and failed-task persistence.
-- `storage.py`: local SQLite metadata store with schema version marker.
+- `storage.py`: local SQLite metadata store with the
+  `main_agent_clean_slate_v1` schema-family marker and a forward-only baseline.
 - `memory.py`: SQLite-backed explicit-write memory.
 - `skills.py`: authored skill parser, retrieval, proposal generation, and approval.
 - `runtime_context.py`: injects selected MCP prompts, authored skills, memory, and selected MCP resources as initial system context.

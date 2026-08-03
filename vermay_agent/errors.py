@@ -18,6 +18,10 @@ class AgentErrorCode(str, Enum):
     MCP_ERROR = "mcp_error"
     CHECKPOINT_ERROR = "checkpoint_error"
     PERMISSION_ERROR = "permission_error"
+    MESSAGE_IN_PROGRESS = "message_in_progress"
+    MESSAGE_INGRESS_STALE = "message_ingress_stale"
+    MESSAGE_STREAM_ABORTED = "message_stream_aborted"
+    RESOURCE_CONFLICT = "resource_conflict"
     RUNTIME_ERROR = "runtime_error"
 
 
@@ -53,6 +57,97 @@ class InvalidRequestError(AgentError):
 class InvalidSessionStateError(AgentError):
     def __init__(self, message: str) -> None:
         super().__init__(message, code=AgentErrorCode.INVALID_SESSION_STATE, http_status=409)
+
+
+class MessageIngressInProgressError(AgentError):
+    """A duplicate Message arrived before its original ingress resolved."""
+
+    def __init__(self, message_id: str) -> None:
+        super().__init__(
+            f"message execution is still in progress: {message_id}",
+            code=AgentErrorCode.MESSAGE_IN_PROGRESS,
+            http_status=409,
+            public_message="Message execution is still in progress.",
+        )
+        self.retryable = True
+
+
+class MessageIngressStaleError(AgentError):
+    """A previous process accepted a Message but did not finish it."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "message execution did not finish before the runtime restarted",
+            code=AgentErrorCode.MESSAGE_INGRESS_STALE,
+            http_status=503,
+            public_message="The previous message did not finish. Send a new message to retry.",
+        )
+        self.retryable = True
+
+
+class MessageStreamAbortedError(AgentError):
+    """A client disconnected before a direct-message stream reached its result."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "direct message stream ended before execution completed",
+            code=AgentErrorCode.MESSAGE_STREAM_ABORTED,
+            http_status=503,
+            public_message="The response stream ended before it completed. Send a new message to retry.",
+        )
+        self.retryable = True
+
+
+class ResourceConflictError(AgentError):
+    """A destructive management operation conflicts with durable work."""
+
+    def __init__(self, message: str, *, public_message: str) -> None:
+        super().__init__(
+            message,
+            code=AgentErrorCode.RESOURCE_CONFLICT,
+            http_status=409,
+            public_message=public_message,
+        )
+
+
+class ContextDeletionConflictError(ResourceConflictError):
+    def __init__(self, context_id: str, *, reason: str) -> None:
+        super().__init__(
+            f"cannot delete context {context_id}: {reason}",
+            public_message="Context has work that must finish or be canceled before deletion.",
+        )
+
+
+class RegisteredAgentDeletionConflictError(ResourceConflictError):
+    def __init__(self, agent_id: str, *, reason: str) -> None:
+        super().__init__(
+            f"cannot delete registered agent {agent_id}: {reason}",
+            public_message="Registered agent has delegation history or active work and cannot be deleted.",
+        )
+
+
+class PersistedMessageIngressError(AgentError):
+    """Replays the public error stored for a previously failed Message ingress."""
+
+    def __init__(
+        self,
+        *,
+        code: str,
+        message: str,
+        http_status: int | None,
+        retryable: bool,
+    ) -> None:
+        try:
+            error_code = AgentErrorCode(code)
+        except ValueError:
+            error_code = AgentErrorCode.RUNTIME_ERROR
+        super().__init__(
+            message,
+            code=error_code,
+            http_status=http_status or 500,
+            public_message=message,
+        )
+        self.retryable = retryable
 
 
 class SessionNotFoundError(AgentError):

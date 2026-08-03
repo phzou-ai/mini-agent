@@ -1,59 +1,10 @@
-import { expect, test, type Page } from "@playwright/test"
+import { expect, test } from "@playwright/test"
 
-async function mockAgentBootstrap(page: Page) {
-  await page.route("**/api/bff/agent/contexts", (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: "[]" })
-  )
-  await page.route("**/api/bff/agent/registered-agents**", (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: "[]" })
-  )
-  await page.route("**/api/bff/agent/a2a/agent-card", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        name: "Vermay Agent",
-        description: "A2A-first main agent",
-        url: "http://127.0.0.1:8000/rpc",
-        version: "0.1.0",
-        capabilities: { streaming: true },
-        defaultInputModes: ["text/plain"],
-        defaultOutputModes: ["text/plain"],
-        skills: [],
-        metadata: {
-          routeKinds: ["local_message", "local_task", "remote_agent"],
-          executionModes: ["message", "task", "auto"],
-        },
-      }),
-    })
-  )
-  await page.route("**/api/bff/agent/model-config", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        primary_model: {
-          name: "primary-test-model",
-          provider: "ollama",
-          model: "test-primary",
-          base_url: "http://127.0.0.1:11434",
-        },
-        router_model: {
-          name: "router-test-model",
-          provider: "ollama",
-          model: "test-router",
-          base_url: "http://127.0.0.1:11434",
-        },
-        router_model_overridden: false,
-        config_path: "config/models.json",
-      }),
-    })
-  )
-}
+import { mockAgentRegressionBootstrap } from "./agent-regression-fixtures"
 
 test.describe("Migrated frontend regression baseline", () => {
   test.beforeEach(async ({ page }) => {
-    await mockAgentBootstrap(page)
+    await mockAgentRegressionBootstrap(page)
   })
 
   test("loads the repository-owned agent workspace without authentication", async ({
@@ -97,6 +48,10 @@ test.describe("Migrated frontend regression baseline", () => {
     await expect(page.getByTestId("agent-error-banner")).toHaveText(
       "Model request failed."
     )
+    await expect(page.getByTestId("agent-direct-message-failure")).toContainText(
+      "Model request failed."
+    )
+    await expect(page.getByText("model_error")).toBeVisible()
     await expect(page.getByText(internalMessage)).toHaveCount(0)
     await expect(page.getByText("Connection refused")).toHaveCount(0)
   })

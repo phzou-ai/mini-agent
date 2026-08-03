@@ -3,28 +3,8 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from vermay_agent.api.app import create_app
-from vermay_agent.api.service import AgentService
-from vermay_agent.api.session_store import SessionStore
-from vermay_agent.langgraph_runtime.results import RunResult
 from vermay_agent.main_agent import MainAgentCore, MainAgentStore, MessageRecord
 from vermay_agent.storage import AgentStore
-
-
-class FakeRuntime:
-    def __init__(self, responses) -> None:
-        self.responses = list(responses)
-
-    def start(self, user_input, thread_id=None):
-        response = self.responses.pop(0)
-        if callable(response):
-            return response(thread_id)
-        return response
-
-    def resume(self, thread_id, approved, reason=None):
-        raise RuntimeError("not used")
-
-    def close(self):
-        return None
 
 
 class FakeLocalMessageResponder:
@@ -36,20 +16,12 @@ class FakeLocalMessageResponder:
         return [{"kind": "text", "text": "direct answer"}]
 
 
-def completed(answer="done"):
-    return lambda thread_id: RunResult(thread_id=thread_id, final_answer=answer)
-
-
 def make_client(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    service = AgentService(
-        session_store=SessionStore(agent_store),
-        runtime_builder=lambda config: FakeRuntime([completed("unused")]),
-    )
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
-    return client, agent_store, service, core
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    return client, agent_store, core
 
 
 def send_rpc_message(client: TestClient, *, request_id: str, message_id: str, text: str, execution_mode: str):
@@ -73,7 +45,7 @@ def send_rpc_message(client: TestClient, *, request_id: str, message_id: str, te
 
 
 def test_main_agent_context_api_lists_messages_and_deletes_context(tmp_path):
-    client, agent_store, service, _core = make_client(tmp_path)
+    client, agent_store, _core = make_client(tmp_path)
     sent = send_rpc_message(
         client,
         request_id="req-1",
@@ -100,12 +72,11 @@ def test_main_agent_context_api_lists_messages_and_deletes_context(tmp_path):
     assert route_decisions.json()[0]["message_id"] == "msg-user-1"
     assert deleted.status_code == 204
     assert client.get(f"/api/contexts/{context_id}").status_code == 404
-    service.close()
     agent_store.close()
 
 
 def test_main_agent_context_api_lists_tasks(tmp_path):
-    client, agent_store, service, _core = make_client(tmp_path)
+    client, agent_store, _core = make_client(tmp_path)
     sent = send_rpc_message(
         client,
         request_id="req-task-1",
@@ -123,12 +94,34 @@ def test_main_agent_context_api_lists_tasks(tmp_path):
     assert tasks.json()[0]["context_id"] == context_id
     assert tasks.json()[0]["status"] == "created"
     assert tasks.json()[0]["input_message_id"] == "msg-task-user-1"
-    service.close()
+    agent_store.close()
+
+
+def test_main_agent_context_api_rejects_force_delete_for_live_task(tmp_path):
+    client, agent_store, _core = make_client(tmp_path)
+    sent = send_rpc_message(
+        client,
+        request_id="req-task-delete-1",
+        message_id="msg-task-delete-1",
+        text="run task",
+        execution_mode="task",
+    )
+    context_id = sent.json()["result"]["contextId"]
+
+    deleted = client.delete(f"/api/contexts/{context_id}", params={"force": "true"})
+
+    assert deleted.status_code == 409
+    assert deleted.json() == {
+        "code": "resource_conflict",
+        "message": "Context has work that must finish or be canceled before deletion.",
+        "retryable": False,
+    }
+    assert client.get(f"/api/contexts/{context_id}").status_code == 200
     agent_store.close()
 
 
 def test_main_agent_registered_agent_api_crud(tmp_path):
-    client, agent_store, service, _core = make_client(tmp_path)
+    client, agent_store, _core = make_client(tmp_path)
 
     created = client.post(
         "/api/registered-agents",
@@ -169,12 +162,11 @@ def test_main_agent_registered_agent_api_crud(tmp_path):
     assert fetched.json()["name"] == "Child agent"
     assert deleted.status_code == 204
     assert missing.status_code == 404
-    service.close()
     agent_store.close()
 
 
 def test_main_agent_registered_agent_refresh_card(tmp_path, monkeypatch):
-    client, agent_store, service, core = make_client(tmp_path)
+    client, agent_store, core = make_client(tmp_path)
     core.store.upsert_registered_agent(
         agent_id="agent-sql",
         name="SQL Agent",
@@ -201,16 +193,14 @@ def test_main_agent_registered_agent_refresh_card(tmp_path, monkeypatch):
         "url": "http://127.0.0.1:9001/.well-known/agent-card.json",
     }
     assert refreshed.json()["metadata"] == {"keywords": ["manual"]}
-    service.close()
     agent_store.close()
 
 
 def test_main_agent_registered_agent_refresh_card_missing_agent(tmp_path):
-    client, agent_store, service, _core = make_client(tmp_path)
+    client, agent_store, _core = make_client(tmp_path)
 
     missing = client.post("/api/registered-agents/missing-agent/refresh-card")
 
     assert missing.status_code == 404
     assert missing.json()["code"] == "registered_agent_not_found"
-    service.close()
     agent_store.close()

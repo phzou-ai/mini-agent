@@ -239,6 +239,30 @@ def test_openai_compatible_client_raises_protocol_error_for_invalid_response(mon
     assert raised.value.retryable is False
 
 
+def test_openai_compatible_client_uses_the_smaller_task_deadline_timeout(monkeypatch):
+    captured: dict[str, float] = {}
+
+    def fake_urlopen(request, timeout):
+        captured["timeout"] = timeout
+        return FakeResponse({"choices": [{"message": {"content": "done"}}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = OpenAICompatibleModelClient(
+        model="gpt-4o",
+        base_url="https://api.openai.com/v1",
+        timeout_seconds=20,
+    )
+
+    response = client.invoke(
+        [Message(role="user", content="hello")],
+        tools=[],
+        timeout_seconds=3.5,
+    )
+
+    assert response.content == "done"
+    assert captured["timeout"] == 3.5
+
+
 def test_openai_compatible_client_rejects_invalid_tool_arguments(monkeypatch):
     monkeypatch.setattr(
         "urllib.request.urlopen",

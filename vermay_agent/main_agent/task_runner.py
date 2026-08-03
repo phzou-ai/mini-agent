@@ -3,12 +3,14 @@ from __future__ import annotations
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Iterator, Protocol
+from typing import Any, Iterator, Protocol
 
 from vermay_agent.app_factory import RuntimeFactoryConfig, build_runtime
+from vermay_agent.execution_context import ExecutionContextRegistry, default_execution_context_registry
 from vermay_agent.langgraph_runtime import LangGraphAgentRuntime
+from vermay_agent.main_agent.context import text_from_parts, to_langchain_message
 
-from .models import MessageRecord, TaskStatus
+from .models import MessageRecord, MessageRole, TaskStatus
 
 
 @dataclass(frozen=True)
@@ -19,6 +21,8 @@ class LocalTaskRunResult:
     error_code: str | None = None
     error_message: str | None = None
     input_request: dict | None = None
+    observations: list[dict[str, Any]] = field(default_factory=list)
+    execution: dict[str, Any] = field(default_factory=dict)
 
 
 class LocalTaskRunner(Protocol):
@@ -37,10 +41,27 @@ class LocalTaskRunner(Protocol):
     ) -> LocalTaskRunResult:
         """Resume a paused local task with requested user input."""
 
+    def discard_checkpoint(self, *, thread_id: str) -> None:
+        """Discard a terminal Task's private runtime continuation state."""
+
 
 class DirectLangGraphLocalTaskRunner:
-    def __init__(self, runtime: LangGraphAgentRuntime | None = None) -> None:
+    def __init__(
+        self,
+        runtime: LangGraphAgentRuntime | None = None,
+        *,
+        execution_context_registry: ExecutionContextRegistry | None = None,
+    ) -> None:
         self.runtime = runtime or build_runtime(RuntimeFactoryConfig(show_progress=False))
+        runtime_registry = getattr(self.runtime, "execution_context_registry", None)
+        if runtime_registry is not None and execution_context_registry is not None:
+            if runtime_registry is not execution_context_registry:
+                raise ValueError(
+                    "The local task runner and LangGraph runtime must share one execution context registry."
+                )
+        self.execution_context_registry = (
+            runtime_registry or execution_context_registry or default_execution_context_registry()
+        )
         self._guard = threading.RLock()
         self._idle = threading.Condition(self._guard)
         self._close_lock = threading.Lock()
@@ -48,14 +69,20 @@ class DirectLangGraphLocalTaskRunner:
         self._closed = False
 
     def run(self, messages: list[MessageRecord], *, thread_id: str) -> LocalTaskRunResult:
-        user_input = _task_input_from_messages(messages)
+        user_input, history_messages = _task_initial_input(messages)
         with self._acquire_thread(thread_id):
-            result = self.runtime.start(user_input, thread_id=thread_id)
+            with self.execution_context_registry.activate(thread_id):
+                result = self.runtime.start(
+                    user_input,
+                    thread_id=thread_id,
+                    history_messages=history_messages,
+                )
         return _run_result_to_local_task_result(result)
 
     def resume(self, *, thread_id: str, approved: bool, reason: str | None = None) -> LocalTaskRunResult:
         with self._acquire_thread(thread_id):
-            result = self.runtime.resume(thread_id=thread_id, approved=approved, reason=reason)
+            with self.execution_context_registry.activate(thread_id):
+                result = self.runtime.resume(thread_id=thread_id, approved=approved, reason=reason)
         return _run_result_to_local_task_result(result)
 
     def resume_input(
@@ -66,8 +93,18 @@ class DirectLangGraphLocalTaskRunner:
         metadata: dict | None = None,
     ) -> LocalTaskRunResult:
         with self._acquire_thread(thread_id):
-            result = self.runtime.resume_input(thread_id=thread_id, parts=parts, metadata=metadata)
+            with self.execution_context_registry.activate(thread_id):
+                result = self.runtime.resume_input(thread_id=thread_id, parts=parts, metadata=metadata)
         return _run_result_to_local_task_result(result)
+
+    def request_cancellation(self, *, thread_id: str, reason: str | None = None) -> bool:
+        """Forward a core-owned cancellation request to an active capability call."""
+
+        return self.execution_context_registry.request_cancellation(thread_id, reason=reason)
+
+    def discard_checkpoint(self, *, thread_id: str) -> None:
+        with self._acquire_thread(thread_id):
+            self.runtime.delete_checkpoint(thread_id)
 
     def close(self) -> None:
         with self._close_lock:
@@ -106,9 +143,16 @@ class _ThreadLockEntry:
 
 
 def _run_result_to_local_task_result(result) -> LocalTaskRunResult:
+    observations = list(getattr(result, "observations", []) or [])
+    execution = dict(getattr(result, "execution", {}) or {})
     if result.status == "completed":
         parts = [{"kind": "text", "text": result.final_answer or ""}]
-        return LocalTaskRunResult(status=TaskStatus.COMPLETED, parts=parts)
+        return LocalTaskRunResult(
+            status=TaskStatus.COMPLETED,
+            parts=parts,
+            observations=observations,
+            execution=execution,
+        )
     if result.status == "interrupted":
         input_request = result.interrupt if isinstance(result.interrupt, dict) else None
         message = (
@@ -117,37 +161,36 @@ def _run_result_to_local_task_result(result) -> LocalTaskRunResult:
             else result.interrupt_message or "Additional input is required."
         )
         parts = [{"kind": "text", "text": message}]
+        status = (
+            TaskStatus.AUTH_REQUIRED
+            if input_request and input_request.get("kind") == "approval_required"
+            else TaskStatus.INPUT_REQUIRED
+        )
         return LocalTaskRunResult(
-            status=TaskStatus.INPUT_REQUIRED,
+            status=status,
             parts=parts,
-            error_code="input_required",
+            error_code=getattr(result, "stop_reason", None) or "input_required",
             error_message=message,
             input_request=input_request,
+            observations=observations,
+            execution=execution,
         )
     return LocalTaskRunResult(
         status=TaskStatus.FAILED,
-        error_code=result.status,
+        error_code=getattr(result, "stop_reason", None) or result.status,
         error_message=result.stop_message or "Local task did not complete.",
+        observations=observations,
+        execution=execution,
     )
 
 
-def _task_input_from_messages(messages: list[MessageRecord]) -> str:
-    latest_user = next((message for message in reversed(messages) if message.role.value == "user"), None)
+def _task_initial_input(messages: list[MessageRecord]):
+    latest_user = next((message for message in reversed(messages) if message.role == MessageRole.USER), None)
     if latest_user is None:
-        return ""
-    previous = [message for message in messages if message.message_id != latest_user.message_id]
-    current_input = _text_from_parts(latest_user.parts)
-    if not previous:
-        return current_input
-    history = "\n".join(
-        f"{message.role.value}: {_text_from_parts(message.parts)}"
-        for message in previous
-        if _text_from_parts(message.parts)
-    )
-    if not history:
-        return current_input
-    return f"Conversation history:\n{history}\n\nCurrent task:\n{current_input}"
-
-
-def _text_from_parts(parts: list[dict]) -> str:
-    return "\n".join(str(part.get("text")) for part in parts if part.get("text") is not None)
+        return "", []
+    history = [
+        to_langchain_message(message)
+        for message in messages
+        if message.message_id != latest_user.message_id and text_from_parts(message.parts)
+    ]
+    return text_from_parts(latest_user.parts), history

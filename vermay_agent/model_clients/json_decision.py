@@ -1,18 +1,38 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 
 def parse_json_decision(content: str) -> dict[str, Any] | None:
     normalized = strip_markdown_json_fence(content.strip())
-    try:
-        decision = json.loads(normalized)
-    except json.JSONDecodeError:
+    decision = decode_json_object(normalized)
+    if decision is None:
+        normalized = strip_markdown_json_fence(strip_reasoning_markup(normalized).strip())
+        decision = decode_json_object(normalized)
+    if decision is None:
         decision = extract_embedded_action(normalized)
     if not isinstance(decision, dict):
         return None
     return normalize_known_tool_action(decision)
+
+
+def decode_json_object(content: str) -> dict[str, Any] | None:
+    try:
+        decision = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    return decision if isinstance(decision, dict) else None
+
+
+_THINK_BLOCK = re.compile(r"<think(?:\s[^>]*)?>.*?</think\s*>", re.IGNORECASE | re.DOTALL)
+_THINK_TAG = re.compile(r"</?think(?:\s[^>]*)?>", re.IGNORECASE)
+
+
+def strip_reasoning_markup(content: str) -> str:
+    """Remove model-private reasoning markup before extracting an embedded action."""
+    return _THINK_TAG.sub("", _THINK_BLOCK.sub("", content))
 
 
 def normalize_known_tool_action(decision: dict[str, Any]) -> dict[str, Any]:

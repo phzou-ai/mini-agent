@@ -2,11 +2,21 @@
 
 ## Status
 
-This document defines the architectural direction for evolving Vermay Agent into an Agent OS-style runtime.
+This document defines the architectural direction for evolving Vermay Agent into an Agent OS-style runtime. It is a vocabulary and target-architecture document, not the source of day-to-day milestone status.
 
 Agent OS is an architectural lens for organizing agent workloads. It is not an operating system for managing hardware, and it does not replace A2A or LangGraph. It defines control-plane responsibilities around those technologies: process lifecycle, execution coordination, IPC, capabilities, persistence, and recovery. The analogy is useful only where it clarifies ownership; it is not a requirement to reproduce operating-system components one-for-one.
 
 The current `vermay_agent.main_agent.models.TaskRecord` is the backing record for what this document calls an `AgentProcessRecord`. This document does not require an immediate code or database rename. The API session projection also has a `TaskRecord`; it is a read model, not a second lifecycle owner.
+
+For an assessment of the currently implemented runtime, including its safety
+guarantees, liveness limitations, and staged evolution order, see
+[current runtime assessment](runtime-refinement/current-architecture-assessment.md).
+For active milestone status and acceptance criteria, see the
+[runtime-refinement roadmap](runtime-refinement/roadmap.md). When this document
+describes a future direction, the focused runtime contract and roadmap take
+precedence for current behavior.
+For feasibility, stage gates, and the sequence beyond current correctness work,
+see the [runtime evolution path](runtime-refinement/runtime-evolution-path.md).
 
 ## Goals
 
@@ -37,10 +47,10 @@ The current implementation remains intentionally compact:
 | Responsibility | Current implementation | Near-term action |
 | --- | --- | --- |
 | Service hosting | FastAPI app factory and lifecycle hooks | Keep one process boundary; do not add a private gateway protocol. |
-| Context/turn coordination | `MainAgentCore` request preparation plus `MainAgentStore` | Add causal ordering and immutable input cuts. |
-| Process lifecycle | `MainAgentCore` plus `MainAgentStore` | Centralize transition validation without renaming the subsystem. |
-| Execution coordination | `TaskExecutionService`, task submitter, and per-task locks | Keep the bounded thread-pool implementation. |
-| Context assembly | `recent_messages`, responder conversion, and task-runner formatting | Consolidate policy without forcing one prompt shape on every route. |
+| Context/turn coordination | `MainAgentCore` request preparation plus `MainAgentStore` | Causal ordering, route-specific character limits, and initial input cuts are implemented; add token-aware budgets only when needed. |
+| Process lifecycle | `MainAgentCore` plus `MainAgentStore` | Transition validation and conservative startup recovery are implemented; broaden execution only with evidence. |
+| Execution coordination | `InProcessTaskExecutor`, task submitter, durable queued commands, and per-task locks | Keep the bounded thread-pool implementation; do not add distributed scheduling yet. |
+| Context assembly | `main_agent.context`, responder conversion, task-runner formatting, and `RuntimeContextProvider` | Explicit character-bounded policies are implemented; token-aware accounting remains evidence-driven. |
 | Runtime continuation | `LangGraphAgentRuntime` and checkpoints | Keep protocol concepts outside the runtime. |
 | Capability gate | Existing permission and approval flow | Keep it in-process; do not introduce a standalone manager. |
 | Public IPC | A2A adapter and JSON-RPC/SSE routes | Clarify projection and event contracts. |
@@ -54,13 +64,25 @@ Add a new architectural component only when at least one of these conditions is 
 
 Program registries, advanced schedulers, resource quotas, distributed recovery, and broad internal renaming are deferred capabilities, not prerequisites for the current version.
 
+### Current Delivery Constraint
+
+The Agent OS vocabulary is a design map, not a feature backlog. During the
+current rapid-development phase, Vermay Agent remains a compact single-host
+A2A main-agent runtime. An architecture term does not authorize a new service,
+table, scheduler, workspace, sandbox, or framework layer by itself.
+
+Add a new subsystem only when a current workflow exposes a concrete missing
+correctness, safety, or operational boundary and a narrow extension of the
+existing shape cannot solve it. R3-R5 remain conditional stages; they are not
+the default next implementation sequence.
+
 ## Review Verdict
 
 The technical direction is sound because it separates public protocol identity, durable application lifecycle, and runtime continuation instead of treating all three as one task abstraction. It also leaves direct Message handling lightweight and models delegated child Tasks explicitly.
 
 Its extension path is adequate for additional runtimes, remote agents, capability policies, and stronger execution coordination because those concerns meet at narrow records and adapters rather than inheriting LangGraph or A2A types throughout the codebase.
 
-The main complexity risk is literal implementation of the OS analogy. The current version should therefore strengthen existing boundaries rather than create an Agent OS framework. Phase 1 and Phase 2 below are the implementation target; later phases remain evidence-driven.
+The main complexity risk is literal implementation of the OS analogy. The current version should therefore strengthen existing boundaries rather than create an Agent OS framework. The phase list below remains a capability map; the runtime-refinement roadmap and evolution path determine which work is active and when a later capability is justified.
 
 The recommended product and architecture position is:
 
@@ -96,12 +118,15 @@ These strengths make the project suitable as a reference runtime, embedded main-
 
 The most important current gaps are:
 
-- process transition enforcement and state/event contract clarity;
-- Context causality and immutable task input cuts;
-- timeout, restart reconciliation, and lost-execution handling;
+- token-aware Context budgeting, full prompt snapshots, and global tool-output limits beyond the implemented character-bounded policies;
+- general execution timeouts, workspace lifecycle, arbitrary-command isolation,
+  and lost-execution policy beyond R3.1's bounded SSH child-process control;
 - caller authorization, approval binding, and execution isolation before non-local deployment;
 - measured router quality and safe child-agent selection;
 - remote-task continuation, idempotency, health, and failure reconciliation.
+
+These are evaluation boundaries, not an immediate implementation queue. The
+active roadmap determines whether evidence makes any one of them current work.
 
 ## External References And Adoption Boundary
 
@@ -295,7 +320,7 @@ The router must remain narrow and governed:
 6. Every automatic decision is persisted with source, model, confidence, reason, fallback, and selected target so it can be inspected and evaluated.
 7. Router quality is measured against multilingual fixtures and real corrected decisions; keyword coverage is not used as the quality metric.
 
-The current registered-agent keyword short-circuit should be demoted from an authoritative route to model evidence or removed after equivalent Agent Card evidence is supplied to the classifier. A substring match can be multilingual only by continuously expanding configuration, can collide with unrelated intent, and can delegate without comparing all enabled agents. Hard routing rules remain appropriate only when they express a protocol invariant rather than inferred user intent.
+Registered-agent keywords and skill tags are supplied to the router model only as Agent Card evidence. They are not an automatic delegation mechanism. A substring match would require continuously expanding configuration for multilingual input, can collide with unrelated intent, and can delegate without comparing all enabled agents. Hard routing rules remain appropriate only when they express a protocol invariant rather than inferred user intent.
 
 Do not add a second planner model behind the router. Once an execution class is selected, the direct responder, local LangGraph runtime, or child agent owns reasoning and tool selection.
 
@@ -352,21 +377,26 @@ A durable conversation transcript and the prompt sent to a model are different o
 
 ```text
 Context transcript (complete, durable, ordered)
-  -> context policy and token budget
+  -> context policy and bounded projection
   -> model context (bounded projection for one turn or process)
 ```
 
-The current implementation uses a bounded recent-message window. That is a valid baseline, but the limit and formatting must become an explicit policy rather than remain duplicated across the router, direct responder, and task runner.
+The current implementation uses a bounded recent-message window. It now also
+persists Context-local Message order and each local Task's initial input cut.
+The remaining work is to make token limits and formatting explicit policy
+rather than leave them duplicated across the router, direct responder, and task
+runner.
 
-The target rules are:
+The current and target rules are:
 
-1. Every Message in a Context has a stable causal order. Before concurrent ingress is supported broadly, add a monotonic `contextSequence` or an equivalent transactional ordering mechanism.
-2. Persisting an inbound Message, selecting its route, and creating any resulting process record form one serialized Context-ingress operation.
-3. A process captures an immutable input cut at creation, identified by `inputMessageId` plus its Context sequence. Queue delay must not cause later Messages to appear in the process's initial prompt.
-4. A long-running process does not lock the entire Context. After its input cut is captured, later independent turns may proceed and the process completion is appended with causal `taskId`/message metadata.
-5. Continuation input carrying an existing `taskId` belongs to that process and bypasses normal route classification.
-6. Context assembly is token-budgeted and policy-specific. Router context, direct-answer context, and task context may use different budgets while sharing one assembly interface.
-7. Large tool results, child-agent traces, and old turns are summarized, referenced, or omitted rather than copied unbounded into every prompt.
+1. **Implemented:** every Message in a Context has a stable causal order through a monotonic `contextSequence` allocated by SQLite.
+2. **Implemented:** an inbound `messageId` first resolves to one durable ingress/outcome record. A duplicate returns that established or in-progress outcome and never re-routes or re-executes the request.
+3. Ingress ownership is serialized per `messageId`; independent top-level Messages in one Context are not globally serialized. Introduce broader Context serialization only when a demonstrated ordering requirement needs it.
+4. **Implemented for initial local execution:** a process captures an immutable input cut at creation, identified by `inputMessageId` plus its Context sequence. Queue delay cannot cause later Messages to appear in that process's initial prompt.
+5. A long-running process does not lock the entire Context. After its input cut is captured, later independent turns may proceed and the process completion is appended with causal `taskId`/message metadata.
+6. Continuation input carrying an existing `taskId` belongs to that process and bypasses normal route classification.
+7. Context assembly is policy-specific and currently character-bounded. Router context, direct-answer context, and task context use different persisted-history caps; injected MCP prompts, skills, memory, and resources have per-section and total caps.
+8. Token-aware accounting, summaries, global tool-result limits, and full prompt snapshots remain future work. They must be added only when model limits, reproducibility, or audit requirements justify them.
 
 Do not introduce a pluggable context-engine framework yet. First extract one project-owned context assembler with explicit policies. A plugin boundary becomes justified only when a second context strategy is actually required.
 
@@ -383,7 +413,9 @@ AgentProcessRecord
   agent definition / assignedAgentId
   runtimeThreadId
   inputMessageId
+  inputCutSequence
   outputMessageId
+  pendingContinuation
   attempt and retry lineage
   model and capability selection
   error information
@@ -399,11 +431,19 @@ Current implementation correspondence:
 | Process events | `main_agent_task_events` |
 | Process outputs | `artifacts` associated with the task |
 | Process manager | `MainAgentCore` task lifecycle methods |
-| Execution coordinator | `TaskExecutionService` and task submitter boundary |
+| Execution coordinator | `InProcessTaskExecutor` and task submitter boundary |
 | Runtime continuation | LangGraph checkpoint addressed by `runtime_thread_id` |
+| Pending continuation | `main_agent_pending_continuations` keyed by `task_id` |
 | Remote process mapping | `delegated_tasks` |
 
 `executionOwner` is conceptual today: membership in `delegated_tasks` distinguishes a remote proxy from a locally executed record. A dedicated column is unnecessary until that lookup becomes ambiguous or costly.
+
+`inputCutSequence` is implemented as
+`main_agent_tasks.input_context_sequence`, copied from the Task input Message.
+It captures the initial transcript boundary rather than a complete rendered
+prompt. `pendingContinuation` is durable in its own table rather than as a
+mutable field on `TaskRecord`; this keeps pending input out of event-history
+reconstruction.
 
 ## Process State Governance
 
@@ -442,14 +482,16 @@ created          -> queued | running | canceled | failed
 queued           -> running | canceled | failed
 running          -> input_required | auth_required
                  -> cancel_requested | completed | failed
-input_required   -> queued | running | canceled | failed
-auth_required    -> queued | running | canceled | failed
-cancel_requested -> canceled | completed | failed
+input_required   -> queued | canceled | failed
+auth_required    -> queued | canceled | failed
+cancel_requested -> canceled | failed
 ```
 
 Terminal processes do not transition back to a runnable state. Retry creates a new process record with lineage to the previous process.
 
 Remote Process Proxies follow child A2A snapshots rather than this local execution transition table. Their synchronization rules should still reject regression from a terminal child state and preserve the last valid snapshot.
+
+The lifecycle layer owns transition validation and event append as one transactional operation. Protocol adapters and background workers do not write process status directly. A remote proxy is the exception only in the sense that its transition input is a child snapshot; the local lifecycle layer still validates the cached projection.
 
 ## State Ownership And Projection
 
@@ -476,16 +518,17 @@ This is not a process lifecycle state machine. It describes the result of one `s
 
 ### Agent Process State
 
-The process lifecycle layer maps runtime outcomes to durable process state. The current local runner implements:
+The process lifecycle layer maps runtime outcomes and structured interruption kinds to durable process state. The current local path implements:
 
 ```text
-completed   -> completed
-interrupted -> input_required
-stopped     -> failed
-exception   -> failed
+completed                           -> completed
+interrupted: approval_required      -> auth_required
+interrupted: user_input_required    -> input_required
+interrupted: missing/unknown kind   -> failed
+stopped or exception                -> failed
 ```
 
-`auth_required` is currently available in the durable and A2A state models and can also be synchronized from a remote task. A future local authentication interrupt may select it by interrupt kind, but that distinction is not implemented by the current local runner.
+`MainAgentCore` persists the typed pending continuation independently from the lifecycle events. It validates and consumes that record before queuing the next execution slice, so a worker never reconstructs control state by reverse-scanning `task_resumed` events.
 
 ### A2A TaskState
 
@@ -544,6 +587,20 @@ running
 ```
 
 Continuation input does not create a new process and does not pass through the router again. It is IPC addressed to the existing process.
+
+The process has one typed pending continuation while blocked:
+
+```text
+approval_required
+  -> auth_required
+  -> approval resume operation
+
+user_input_required
+  -> input_required
+  -> SubmitTaskInput / Message carrying taskId
+```
+
+The continuation kind, prompt/schema, and approval binding are durable task state. The accepted command is consumed atomically before queueing the next execution slice. Lifecycle events record the facts; they are not the authoritative store from which a worker reconstructs pending input.
 
 The current implementation supports continuation for locally owned processes. Forwarding continuation input to a delegated child Task is a separate future capability and must not be implied by the local resume path.
 
@@ -640,18 +697,22 @@ Durability without liveness policy produces Tasks that remain `working` forever.
 The near-term design should keep the public and internal state sets compact:
 
 - execution timeout becomes `failed` with `error_code=execution_timeout`;
-- missing in-process backing after service restart becomes `failed` with `error_code=execution_lost`;
+- claimed local work interrupted by a service restart becomes `failed` with `error_code=runtime_restart_interrupted`;
 - provider, MCP, and child-agent availability failures use typed retryable error codes;
 - a remote proxy keeps the last confirmed child state plus stale/unreachable diagnostics until the child state is reconciled or policy expires it.
 
 Do not add `timed_out`, `lost`, leases, or heartbeats as first-class process states until operators need to query or govern them independently. Error reason codes preserve the distinction without expanding every projection and UI contract.
 
-Startup reconciliation should be conservative:
+Startup reconciliation is conservative:
 
 1. preserve `input_required` and `auth_required` because their checkpoints are intentionally blocked;
 2. never claim that an old `running` or `cancel_requested` process is still active when no worker can own it;
-3. resubmit `queued` work only after execution claiming and tool idempotency rules are explicit;
-4. never auto-resume a privileged action from a checkpoint without revalidating its approval binding;
+3. requeue `queued` work only when a durable queued-execution command proves
+   that no execution slice was claimed or started; otherwise report a
+   structured retryable recovery outcome rather than repeat side effects;
+4. resume an approved slice only when its approved continuation was already
+   durably accepted and persisted; future approval expiry/binding policy may
+   impose an additional revalidation requirement;
 5. append a lifecycle event for every reconciliation decision.
 
 Automatic recovery is a policy layer above persistence, not a side effect of having SQLite and LangGraph checkpoints.
@@ -667,7 +728,11 @@ An Agent Process may outlive the worker and server process that executed its pre
 
 The process database and checkpoint database form one logical recovery boundary and must be backed up and restored together.
 
-This persistence makes recovery possible, but the current runtime does not guarantee automatic startup reconciliation or rescheduling of every non-terminal process. That guarantee must be added explicitly before it is advertised as runtime behavior.
+This persistence now supports conservative automatic startup reconciliation:
+unclaimed queued local slices are resubmitted, ambiguous claimed work fails
+explicitly, and intentionally blocked processes remain resumable. It does not
+guarantee replay of every non-terminal process or provide distributed worker
+failover.
 
 ## UI Mental Model
 
@@ -705,6 +770,11 @@ The UI should display A2A state as the public state. Internal process state and 
 16. A blocked, queued, or running status must have an explainable owner or reconciliation outcome; it cannot remain active only because a row says so.
 17. Approval authorizes one capability use and does not substitute for caller authorization or execution isolation.
 18. Child-agent output is untrusted external input and enters parent context only through an explicit bounded projection.
+19. A repeated `messageId` is resolved by a durable ingress/outcome record before routing, model invocation, delegation, or tool execution.
+20. A task input cut and pending continuation are durable control data; in-memory callbacks and reverse scans of events are not recovery boundaries.
+21. Destructive management cannot erase process facts while a local worker or remote child Task may still execute; cleanup is a lifecycle operation owned by `MainAgentCore`.
+22. Accepting an asynchronous local Task must also establish a recoverable execution owner. A publicly accepted Task cannot depend on a later best-effort queue write.
+23. A LangGraph checkpoint proves execution position, not whether an external side effect occurred. Side-effect attempts and uncertain outcomes require separate durable invocation facts.
 
 ## Incremental Migration Plan
 
@@ -731,8 +801,10 @@ Channel adapters, automation, general workflow features, autonomous memory/skill
 
 ### Phase 1: State Governance
 
-- Add one transition policy and validation helper around the existing `TaskStatus` model.
-- Centralize LangGraph RunOutcome to process-state mapping without introducing another lifecycle model.
+- Done: add durable `messageId` ingress/outcome ownership before any router or execution work.
+- Done: add one transition policy and validation helper around the existing `TaskStatus` model.
+- Done: centralize LangGraph RunOutcome to local process-state mapping without introducing another lifecycle model.
+- Done: store typed pending continuations independently from lifecycle events, and atomically consume them when an approval or task-input continuation is accepted.
 - Keep one A2A state projection for locally owned processes while preserving explicit remote-proxy synchronization.
 - Consolidate child A2A state to local proxy-state synchronization into one helper; do not merge it with the owned-process projection.
 - Add exhaustive transition and projection tests.
@@ -740,9 +812,11 @@ Channel adapters, automation, general workflow features, autonomous memory/skill
 
 ### Phase 2: Context Causality And Assembly
 
-- Add stable per-Context message ordering or an equivalent transactional input-cut mechanism.
-- Serialize inbound Message persistence, route selection, and process creation per Context.
-- Make task execution load history only through its captured `inputMessageId` cut.
+- Done: add stable per-Context message ordering and persist each local Task's input cut.
+- Done: make initial worker execution load history only through that cut.
+- Evaluate full Context-ingress serialization only when concurrent route work
+  demonstrates a concrete ordering requirement; it is not implied by the
+  input-cut contract.
 - Extract one context-assembly interface with separate router, direct-answer, and task policies.
 - Replace fixed message-count behavior with explicit token and output-size budgets incrementally.
 - Add concurrent-ingress and queued-task context-isolation tests.
@@ -756,10 +830,13 @@ Channel adapters, automation, general workflow features, autonomous memory/skill
 ### Phase 4: Liveness And Recovery
 
 - Add an execution-slice deadline and typed `execution_timeout` failure.
-- Reconcile stale local `running` and `cancel_requested` records on startup.
-- Preserve intentionally blocked checkpoints and revalidate approval before resume.
+- Done: reconcile stale local `running` and `cancel_requested` records on startup.
+- Done: retain intentionally blocked checkpoints and requeue only a durable, unclaimed command.
+- Add approval expiry and capability-binding revalidation before a later non-local or privileged deployment.
 - Represent remote child unavailability as stale diagnostics without fabricating a child terminal state.
-- Do not automatically resubmit queued work until execution claiming and tool idempotency are explicit.
+- Requeue a queued process only when its durable lifecycle record proves that
+  no execution slice was claimed or started. Treat any ambiguous work as a
+  structured retryable recovery outcome rather than repeating side effects.
 
 ### Phase 5: Deployment Security
 
@@ -788,6 +865,14 @@ Channel adapters, automation, general workflow features, autonomous memory/skill
 - Avoid database renames until runtime behavior and migration value justify them.
 - Preserve A2A `Task`, `taskId`, and protocol method names.
 
-The approved near-term implementation scope is Phase 1 and Phase 2 only. Phase 3 is a bounded contract cleanup. Phases 4 and 5 are activated by deployment and reliability requirements, Phase 6 requires concrete architectural pressure, Phase 7 follows only after local process behavior is stable, and Phase 8 is optional.
+Most Phase 1 and Phase 2 contracts, along with the implemented R0-R3.1
+boundaries, are now in place: destructive cleanup is core-owned, asynchronous
+Task acceptance is atomic, stale direct ingress has an explicit retryable
+failure, local non-read-only effects have a durable invocation boundary, and
+the SSH/Kubernetes path has bounded child-process control. The phase list
+remains a capability map, not an automatic implementation sequence. The
+[runtime evolution path](runtime-refinement/runtime-evolution-path.md) owns
+the activation criteria for broader execution, workspaces, persistent
+planning, and distributed scheduling. Phase 8 remains optional.
 
 The migration should improve ownership and observability without turning the OS analogy into unnecessary framework complexity.

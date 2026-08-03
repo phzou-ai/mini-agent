@@ -566,6 +566,118 @@ test.describe("Agent Workbench", () => {
     await expectLatestTaskStatus(page, "canceled")
   })
 
+  test("shows cancellation requested until a running task reaches a safe boundary", async ({
+    page,
+  }) => {
+    const now = Date.now()
+    const prompt = `cancel pending e2e task ${now}`
+    const contextId = `ctx-e2e-cancel-pending-${now}`
+    const taskId = `task-e2e-cancel-pending-${now}`
+    let cancellationPending = false
+    const cancelRequestedTask = {
+      kind: "task",
+      id: taskId,
+      contextId,
+      status: {
+        state: "working",
+        timestamp: new Date(now + 1).toISOString(),
+      },
+      metadata: { localStatus: "cancel_requested" },
+    }
+
+    await mockAgentBootstrap(page)
+    await page.route(
+      `**/api/bff/agent/contexts/${contextId}/route-decisions`,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([]),
+        })
+      }
+    )
+    await page.route(
+      `**/api/bff/agent/contexts/${contextId}/delegations`,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([]),
+        })
+      }
+    )
+    await page.route("**/api/bff/agent/a2a/message-stream", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: `event: task\ndata: ${JSON.stringify({
+          jsonrpc: "2.0",
+          id: "e2e-cancel-pending-task",
+          result: {
+            kind: "task",
+            id: taskId,
+            contextId,
+            status: {
+              state: "working",
+              timestamp: new Date(now).toISOString(),
+            },
+            metadata: {},
+          },
+        })}\n\n`,
+      })
+    })
+    await page.route("**/api/bff/agent/a2a/tasks/*/cancel", async (route) => {
+      cancellationPending = true
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(cancelRequestedTask),
+      })
+    })
+    await page.route(`**/api/bff/agent/a2a/tasks/${taskId}`, async (route) => {
+      const snapshot = cancellationPending
+        ? cancelRequestedTask
+        : {
+            kind: "task",
+            id: taskId,
+            contextId,
+            status: {
+              state: "working",
+              timestamp: new Date(now).toISOString(),
+            },
+            metadata: {},
+          }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(snapshot),
+      })
+    })
+
+    await page.goto("/agent")
+    await expect(page.getByTestId("agent-console")).toBeVisible()
+    await page.getByRole("button", { name: "New session" }).click()
+    await page.getByTestId("agent-mode-task").click()
+    await page.getByTestId("agent-composer-input").fill(prompt)
+    await page.getByTestId("agent-composer-send").click()
+
+    await expectLatestTaskStatus(page, "running")
+    await page.getByTestId("agent-composer-send").click()
+
+    await expectLatestTaskStatus(page, "cancellation requested")
+    await expect(page.getByTestId("agent-composer-input")).toBeDisabled()
+    await expect(page.getByTestId("agent-composer-send")).toBeDisabled()
+    await expect(page.getByTestId("agent-composer-send")).toHaveAttribute(
+      "aria-label",
+      "Cancellation requested"
+    )
+    await expect(
+      page.getByText(
+        "Cancellation requested. Waiting for the current operation to reach a safe boundary."
+      )
+    ).toBeVisible()
+  })
+
   test("shows a cancel error when the task cancel request is rejected", async ({
     page,
   }) => {

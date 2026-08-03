@@ -1,3 +1,6 @@
+import pytest
+
+from vermay_agent.errors import ModelProtocolError
 from vermay_agent.model_clients.ollama import OllamaModelClient
 from vermay_agent.types import Message
 
@@ -49,25 +52,47 @@ def test_parse_embedded_tool_call_action():
     assert response.tool_call.arguments == {"resource": "pods", "namespace": "all"}
 
 
-def test_parse_plain_markdown_as_final_answer():
-    response = parse("## Status\nAll pods are running.")
+def test_parse_embedded_tool_call_after_thinking_markup():
+    response = parse(
+        "<think>First I need cluster state.</think>\n"
+        '{"action":"tool_call","name":"ssh_kubectl_get","arguments":{"resource":"nodes"}}'
+    )
 
-    assert response.content == "## Status\nAll pods are running."
+    assert response.content == "Calling tool ssh_kubectl_get."
+    assert response.tool_call is not None
+    assert response.tool_call.name == "ssh_kubectl_get"
+
+
+def test_parse_ignores_action_inside_thinking_markup():
+    response = parse(
+        "<think>{\"action\":\"tool_call\",\"name\":\"wrong_tool\",\"arguments\":{}}</think>\n"
+        '{"action":"final","content":"done"}'
+    )
+
+    assert response.content == "done"
     assert response.tool_call is None
 
 
-def test_parse_content_only_json_as_final_answer():
-    response = parse('{"content":"plain answer"}')
-
-    assert response.content == "plain answer"
-    assert response.tool_call is None
+def test_parse_plain_text_as_invalid_agent_action():
+    with pytest.raises(ModelProtocolError, match="expected a JSON object with an action field"):
+        parse("## Status\nAll pods are running.")
 
 
-def test_parse_malformed_json_as_final_answer():
-    response = parse('{"action":"final","content":')
 
-    assert response.content == '{"action":"final","content":'
-    assert response.tool_call is None
+def test_parse_tool_announcement_without_json_as_invalid_agent_action():
+    with pytest.raises(ModelProtocolError, match="expected a JSON object with an action field"):
+        parse("Let me check all nodes.\n\nCalling tool ssh_kubectl_get for nodes.</think>")
+
+
+
+def test_parse_content_only_json_as_invalid_agent_action():
+    with pytest.raises(ModelProtocolError, match="unsupported action None"):
+        parse('{"content":"plain answer"}')
+
+
+def test_parse_malformed_json_as_invalid_agent_action():
+    with pytest.raises(ModelProtocolError, match="expected a JSON object with an action field"):
+        parse('{"action":"final","content":')
 
 
 def test_parse_json_fenced_in_markdown_code_block():
@@ -77,18 +102,15 @@ def test_parse_json_fenced_in_markdown_code_block():
     assert response.tool_call is None
 
 
-def test_parse_unknown_action_reports_invalid_action():
-    response = parse('{"action":"wait","content":"later"}')
+def test_parse_unknown_action_is_invalid_agent_action():
+    with pytest.raises(ModelProtocolError, match="unsupported action 'wait'"):
+        parse('{"action":"wait","content":"later"}')
 
-    assert response.content == "later"
-    assert response.tool_call is None
 
 
 def test_parse_tool_call_missing_name_is_invalid():
-    response = parse('{"action":"tool_call","arguments":{"pattern":"error"}}')
-
-    assert response.content.startswith("Invalid tool_call decision:")
-    assert response.tool_call is None
+    with pytest.raises(ModelProtocolError, match="name and object arguments are required"):
+        parse('{"action":"tool_call","arguments":{"pattern":"error"}}')
 
 
 def test_parse_tool_call_missing_arguments_defaults_to_empty_dict():
@@ -123,3 +145,4 @@ def test_ollama_protocol_prompt_uses_standard_tool_message_error_language():
     assert "TOOL_ERROR" not in protocol
     assert "tool message indicates an error or failed execution" in protocol
     assert "Use request_user_input only for missing tool arguments" in protocol
+    assert "Do not emit reasoning, <think> tags" in protocol

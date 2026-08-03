@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -10,8 +9,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
-SCHEMA_VERSION = 8
-DEV_SCHEMA_RESET_ENV = "VERMAY_AGENT_ALLOW_DEV_SCHEMA_RESET"
+SCHEMA_VERSION = 2
+STORE_SCHEMA_FAMILY = "main_agent_clean_slate_v1"
+SQLITE_BUSY_TIMEOUT_MS = 5_000
+
+
+def configure_sqlite_connection(connection: sqlite3.Connection) -> None:
+    """Apply the runtime's durable SQLite connection contract.
+
+    Foreign-key enforcement is connection-local in SQLite. WAL and a bounded
+    busy timeout make the Agent store and LangGraph checkpoint store tolerate
+    the short concurrent reads and writes introduced by background workers.
+    """
+
+    connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+    connection.execute("PRAGMA journal_mode = WAL")
 
 
 def utc_now() -> str:
@@ -28,6 +41,14 @@ class SchemaMigration:
 def _apply_schema_v1(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
+        CREATE TABLE IF NOT EXISTS store_metadata (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+
+        INSERT OR REPLACE INTO store_metadata(key, value)
+        VALUES ('schema_family', 'main_agent_clean_slate_v1');
+
         CREATE TABLE IF NOT EXISTS memory_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             content TEXT NOT NULL,
@@ -73,142 +94,23 @@ def _apply_schema_v1(conn: sqlite3.Connection) -> None:
             options TEXT NOT NULL DEFAULT '{}',
             updated_at TEXT NOT NULL
         );
-
-        CREATE TABLE IF NOT EXISTS sessions (
-            thread_id TEXT PRIMARY KEY,
-            input TEXT NOT NULL,
-            status TEXT NOT NULL,
-            final_answer TEXT,
-            interrupt TEXT,
-            interrupt_message TEXT,
-            stop_message TEXT,
-            model TEXT,
-            max_loops INTEGER,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
         """
     )
+    _create_main_agent_core_tables(conn)
+    _create_registered_agent_tables(conn)
+    _create_pending_continuation_tables(conn)
+    _create_message_ingress_tables(conn)
+    _create_queued_execution_tables(conn)
 
 
-def _apply_schema_v2(conn: sqlite3.Connection) -> None:
-    _ensure_column(conn, "sessions", "mcp", "TEXT")
-    _ensure_column(conn, "sessions", "error_code", "TEXT")
-    _ensure_column(conn, "sessions", "error_message", "TEXT")
-
-
-def _apply_schema_v3(conn: sqlite3.Connection) -> None:
-    """Baseline marker for the ordered migration framework."""
-
-
-def _apply_schema_v4(conn: sqlite3.Connection) -> None:
-    if _table_exists(conn, "sessions") and _is_legacy_sessions_table(conn, "sessions"):
-        if not _table_exists(conn, "legacy_sessions"):
-            conn.execute("ALTER TABLE sessions RENAME TO legacy_sessions")
-        else:
-            conn.execute("DROP TABLE sessions")
-
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS sessions (
-            session_id TEXT PRIMARY KEY,
-            context_id TEXT,
-            title TEXT,
-            status TEXT NOT NULL DEFAULT 'active',
-            metadata TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS tasks (
-            task_id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL,
-            thread_id TEXT NOT NULL UNIQUE,
-            input TEXT NOT NULL,
-            status TEXT NOT NULL,
-            attempt INTEGER NOT NULL DEFAULT 1,
-            final_answer TEXT,
-            interrupt TEXT,
-            interrupt_message TEXT,
-            stop_message TEXT,
-            error_code TEXT,
-            error_message TEXT,
-            model TEXT,
-            max_loops INTEGER,
-            mcp TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY(session_id) REFERENCES sessions(session_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS task_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            task_id TEXT NOT NULL,
-            session_id TEXT NOT NULL,
-            context_id TEXT,
-            thread_id TEXT,
-            event_type TEXT NOT NULL,
-            status TEXT,
-            payload TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(task_id) REFERENCES tasks(task_id),
-            FOREIGN KEY(session_id) REFERENCES sessions(session_id)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON tasks(session_id);
-        CREATE INDEX IF NOT EXISTS idx_tasks_thread_id ON tasks(thread_id);
-        CREATE INDEX IF NOT EXISTS idx_task_events_task_id_id ON task_events(task_id, id);
-        CREATE INDEX IF NOT EXISTS idx_task_events_session_id_id ON task_events(session_id, id);
-        """
-    )
-
-
-def _apply_schema_v5(conn: sqlite3.Connection) -> None:
-    _ensure_column(conn, "tasks", "root_task_id", "TEXT")
-    _ensure_column(conn, "tasks", "retry_of_task_id", "TEXT")
-    conn.execute("UPDATE tasks SET root_task_id=task_id WHERE root_task_id IS NULL")
-    conn.executescript(
-        """
-        CREATE INDEX IF NOT EXISTS idx_tasks_root_task_id ON tasks(root_task_id);
-        CREATE INDEX IF NOT EXISTS idx_tasks_retry_of_task_id ON tasks(retry_of_task_id);
-        """
-    )
-
-
-def _apply_schema_v6(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS task_artifacts (
-            artifact_id TEXT PRIMARY KEY,
-            task_id TEXT NOT NULL,
-            session_id TEXT NOT NULL,
-            context_id TEXT,
-            a2a_artifact_id TEXT NOT NULL,
-            name TEXT,
-            description TEXT,
-            parts TEXT NOT NULL DEFAULT '[]',
-            metadata TEXT NOT NULL DEFAULT '{}',
-            extensions TEXT NOT NULL DEFAULT '[]',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE(task_id, a2a_artifact_id),
-            FOREIGN KEY(task_id) REFERENCES tasks(task_id),
-            FOREIGN KEY(session_id) REFERENCES sessions(session_id)
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_task_artifacts_task_id ON task_artifacts(task_id);
-        CREATE INDEX IF NOT EXISTS idx_task_artifacts_session_id ON task_artifacts(session_id);
-        """
-    )
-
-
-def _apply_schema_v7(conn: sqlite3.Connection) -> None:
+def _create_main_agent_core_tables(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS contexts (
             context_id TEXT PRIMARY KEY,
             title TEXT,
             metadata TEXT NOT NULL DEFAULT '{}',
+            next_message_sequence INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -218,6 +120,7 @@ def _apply_schema_v7(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS messages (
             message_id TEXT PRIMARY KEY,
             context_id TEXT NOT NULL,
+            context_sequence INTEGER NOT NULL,
             role TEXT NOT NULL,
             parts TEXT NOT NULL DEFAULT '[]',
             task_id TEXT,
@@ -228,6 +131,8 @@ def _apply_schema_v7(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_messages_context_created ON messages(context_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_messages_task_id ON messages(task_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_context_sequence
+            ON messages(context_id, context_sequence);
 
         CREATE TABLE IF NOT EXISTS route_decisions (
             decision_id TEXT PRIMARY KEY,
@@ -252,6 +157,7 @@ def _apply_schema_v7(conn: sqlite3.Connection) -> None:
             context_id TEXT NOT NULL,
             status TEXT NOT NULL,
             input_message_id TEXT NOT NULL,
+            input_context_sequence INTEGER NOT NULL DEFAULT 0,
             output_message_id TEXT,
             runtime_thread_id TEXT NOT NULL UNIQUE,
             assigned_agent_id TEXT,
@@ -307,7 +213,7 @@ def _apply_schema_v7(conn: sqlite3.Connection) -> None:
     )
 
 
-def _apply_schema_v8(conn: sqlite3.Connection) -> None:
+def _create_registered_agent_tables(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS registered_agents (
@@ -356,15 +262,120 @@ def _apply_schema_v8(conn: sqlite3.Connection) -> None:
     )
 
 
+def _create_pending_continuation_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS main_agent_pending_continuations (
+            task_id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            input_request TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(task_id) REFERENCES main_agent_tasks(task_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_main_agent_pending_continuations_kind
+            ON main_agent_pending_continuations(kind);
+        """
+    )
+
+
+def _create_message_ingress_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS main_agent_message_ingress (
+            message_id TEXT PRIMARY KEY,
+            context_id TEXT NOT NULL,
+            request_fingerprint TEXT NOT NULL,
+            state TEXT NOT NULL,
+            route_decision_id TEXT,
+            outcome_kind TEXT,
+            outcome_id TEXT,
+            error_code TEXT,
+            error_message TEXT,
+            error_http_status INTEGER,
+            error_retryable INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(message_id) REFERENCES messages(message_id),
+            FOREIGN KEY(context_id) REFERENCES contexts(context_id),
+            FOREIGN KEY(route_decision_id) REFERENCES route_decisions(decision_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_main_agent_message_ingress_context_updated
+            ON main_agent_message_ingress(context_id, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_main_agent_message_ingress_state_updated
+            ON main_agent_message_ingress(state, updated_at);
+        """
+    )
+
+
+def _create_queued_execution_tables(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS main_agent_queued_executions (
+            task_id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            runtime_thread_id TEXT NOT NULL,
+            payload TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(task_id) REFERENCES main_agent_tasks(task_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_main_agent_queued_executions_created
+            ON main_agent_queued_executions(created_at);
+        """
+    )
+
+
+def _apply_schema_v2(conn: sqlite3.Connection) -> None:
+    """Add the durable boundary for non-read-only tool invocations."""
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS main_agent_tool_invocations (
+            invocation_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            context_id TEXT NOT NULL,
+            runtime_thread_id TEXT NOT NULL,
+            loop_index INTEGER NOT NULL,
+            tool_call_id TEXT NOT NULL,
+            tool_name TEXT NOT NULL,
+            normalized_arguments TEXT NOT NULL DEFAULT '{}',
+            arguments_digest TEXT NOT NULL,
+            capability TEXT NOT NULL DEFAULT '{}',
+            side_effect_level TEXT NOT NULL,
+            idempotency_key TEXT,
+            approval_required INTEGER NOT NULL DEFAULT 0,
+            approval_status TEXT NOT NULL DEFAULT 'not_required',
+            approval_reason TEXT,
+            status TEXT NOT NULL,
+            result_artifact_id TEXT,
+            error_code TEXT,
+            error_message TEXT,
+            error_retryable INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(task_id) REFERENCES main_agent_tasks(task_id),
+            FOREIGN KEY(context_id) REFERENCES contexts(context_id)
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_invocations_execution_identity
+            ON main_agent_tool_invocations(
+                task_id, runtime_thread_id, loop_index, tool_call_id, arguments_digest
+            );
+        CREATE INDEX IF NOT EXISTS idx_tool_invocations_task_created
+            ON main_agent_tool_invocations(task_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_tool_invocations_status
+            ON main_agent_tool_invocations(status, updated_at);
+        """
+    )
+
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
-    SchemaMigration(1, "initial_metadata_tables", _apply_schema_v1),
-    SchemaMigration(2, "session_mcp_and_error_metadata", _apply_schema_v2),
-    SchemaMigration(3, "ordered_migration_baseline", _apply_schema_v3),
-    SchemaMigration(4, "session_task_event_identity_cleanup", _apply_schema_v4),
-    SchemaMigration(5, "task_retry_lineage", _apply_schema_v5),
-    SchemaMigration(6, "task_artifacts", _apply_schema_v6),
-    SchemaMigration(7, "a2a_main_agent_core_tables", _apply_schema_v7),
-    SchemaMigration(8, "a2a_remote_agent_registry", _apply_schema_v8),
+    SchemaMigration(1, "main_agent_clean_slate_baseline", _apply_schema_v1),
+    SchemaMigration(2, "tool_invocation_ledger", _apply_schema_v2),
 )
 
 
@@ -378,27 +389,24 @@ class AgentStore:
         self._transaction_depth = 0
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        self.setup()
+        try:
+            self.setup()
+            configure_sqlite_connection(self.conn)
+        except Exception:
+            self.conn.close()
+            raise
 
     def setup(self) -> None:
         with self._lock:
             _ensure_schema_migrations_table(self.conn)
-            self._reset_development_schema_if_required()
+            self._reset_retired_schema_if_required()
             self._apply_pending_migrations()
 
-    def _reset_development_schema_if_required(self) -> None:
-        if not _requires_development_schema_reset(self.conn):
+    def _reset_retired_schema_if_required(self) -> None:
+        if not _requires_clean_slate_reset(self.conn):
             return
-        if os.environ.get(DEV_SCHEMA_RESET_ENV) != "1":
-            raise RuntimeError(
-                "legacy agent store schema requires development reset; "
-                f"set {DEV_SCHEMA_RESET_ENV}=1 to reset this SQLite database"
-            )
         _reset_sqlite_schema(self.conn)
         _ensure_schema_migrations_table(self.conn)
-
-    def _ensure_column(self, table: str, column: str, declaration: str) -> None:
-        _ensure_column(self.conn, table, column, declaration)
 
     def _apply_pending_migrations(self) -> None:
         applied_versions = self._applied_schema_versions()
@@ -535,13 +543,38 @@ def _ensure_schema_migrations_table(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _requires_development_schema_reset(conn: sqlite3.Connection) -> bool:
+def _requires_clean_slate_reset(conn: sqlite3.Connection) -> bool:
+    family = _store_schema_family(conn)
+    if family == STORE_SCHEMA_FAMILY:
+        return False
+    if family is not None:
+        raise RuntimeError(f"unsupported agent store schema family: {family}")
+
     versions = {int(row["version"]) for row in conn.execute("SELECT version FROM schema_migrations")}
-    if not versions:
-        return False
-    if max(versions) >= 4:
-        return False
-    return _table_exists(conn, "sessions") and _is_legacy_sessions_table(conn, "sessions")
+    return bool(versions) or _has_user_schema_objects(conn)
+
+
+def _store_schema_family(conn: sqlite3.Connection) -> str | None:
+    if not _table_exists(conn, "store_metadata"):
+        return None
+    row = conn.execute(
+        "SELECT value FROM store_metadata WHERE key='schema_family'"
+    ).fetchone()
+    return str(row["value"]) if row is not None else None
+
+
+def _has_user_schema_objects(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM sqlite_master
+        WHERE type IN ('table', 'view', 'trigger')
+          AND name NOT LIKE 'sqlite_%'
+          AND name != 'schema_migrations'
+        LIMIT 1
+        """
+    ).fetchone()
+    return row is not None
 
 
 def _reset_sqlite_schema(conn: sqlite3.Connection) -> None:
@@ -569,20 +602,9 @@ def _quote_identifier(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
 
 
-def _ensure_column(conn: sqlite3.Connection, table: str, column: str, declaration: str) -> None:
-    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
-    if column not in columns:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
-
-
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
         (table,),
     ).fetchone()
     return row is not None
-
-
-def _is_legacy_sessions_table(conn: sqlite3.Connection, table: str) -> bool:
-    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
-    return "thread_id" in columns and "session_id" not in columns

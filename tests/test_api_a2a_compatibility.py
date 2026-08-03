@@ -7,8 +7,6 @@ from fastapi.testclient import TestClient
 
 from vermay_agent.api.a2a import A2AAdapter, A2ASendMessageRequest
 from vermay_agent.api.app import create_app
-from vermay_agent.api.service import AgentService
-from vermay_agent.api.session_store import SessionStore
 from vermay_agent.errors import InvalidRequestError, TaskNotFoundError
 from vermay_agent.main_agent import (
     LocalTaskRunResult,
@@ -51,7 +49,7 @@ class FakeLocalTaskRunner:
         )
 
 
-class ManualTaskExecutionService:
+class ManualTaskSubmitter:
     def __init__(self) -> None:
         self.submitted = []
 
@@ -74,8 +72,7 @@ def make_core(tmp_path, *, task_submitter=None, answer: str = "task answer"):
         local_task_runner=runner,
         task_submitter=task_submitter,
     )
-    service = AgentService(session_store=SessionStore(store))
-    return core, store, service, runner
+    return core, store, runner
 
 
 def make_task(core: MainAgentCore, *, context_id: str = "ctx-1"):
@@ -91,20 +88,9 @@ def make_task(core: MainAgentCore, *, context_id: str = "ctx-1"):
     )
 
 
-def test_a2a_path_binding_requires_main_agent_core(tmp_path):
-    store = AgentStore(tmp_path / "agent.sqlite")
-    service = AgentService(session_store=SessionStore(store))
-
-    with pytest.raises(ValueError, match="requires an injected MainAgentCore"):
-        create_app(service=service, enable_a2a=True)
-
-    service.close()
-    store.close()
-
-
 def test_a2a_routes_map_invalid_message_and_unknown_task_errors(tmp_path):
-    core, store, service, _runner = make_core(tmp_path)
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    core, store, _runner = make_core(tmp_path)
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     invalid = client.post("/message:send", json={"message": {"role": "agent", "parts": [{"text": "hello"}]}})
     missing = client.get("/tasks/missing-task")
@@ -121,13 +107,12 @@ def test_a2a_routes_map_invalid_message_and_unknown_task_errors(tmp_path):
         "message": "task not found",
         "retryable": False,
     }
-    service.close()
     store.close()
 
 
 def test_a2a_subscribe_route_maps_unknown_task_to_http_error_without_jsonrpc_body(tmp_path):
-    core, store, service, _runner = make_core(tmp_path)
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    core, store, _runner = make_core(tmp_path)
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
 
     response = client.post("/tasks/missing-task:subscribe")
 
@@ -137,12 +122,11 @@ def test_a2a_subscribe_route_maps_unknown_task_to_http_error_without_jsonrpc_bod
         "message": "task not found",
         "retryable": False,
     }
-    service.close()
     store.close()
 
 
 def test_a2a_path_binding_creates_and_projects_core_owned_task(tmp_path):
-    core, store, service, runner = make_core(tmp_path, answer="weather done")
+    core, store, runner = make_core(tmp_path, answer="weather done")
     core.store.create_context(context_id="ctx-1")
     adapter = A2AAdapter(main_agent_core=core)
     request = A2ASendMessageRequest.model_validate(
@@ -165,13 +149,11 @@ def test_a2a_path_binding_creates_and_projects_core_owned_task(tmp_path):
     assert payload["metadata"]["localStatus"] == "completed"
     assert core.store.get_task(payload["id"]) is not None
     assert runner.run_calls[0][0][-1].parts == [{"text": "weather forecast for Beijing"}]
-    assert service.list_sessions() == []
-    service.close()
     store.close()
 
 
 def test_a2a_path_binding_reuses_existing_core_context(tmp_path):
-    core, store, service, _runner = make_core(tmp_path)
+    core, store, _runner = make_core(tmp_path)
     core.store.create_context(context_id="ctx-1")
     adapter = A2AAdapter(main_agent_core=core)
 
@@ -191,13 +173,11 @@ def test_a2a_path_binding_reuses_existing_core_context(tmp_path):
     assert payload["kind"] == "message"
     assert payload["contextId"] == "ctx-1"
     assert len(core.store.list_context_messages("ctx-1")) == 2
-    assert service.list_sessions() == []
-    service.close()
     store.close()
 
 
 def test_a2a_send_message_rejects_empty_or_non_user_message(tmp_path):
-    core, store, service, _runner = make_core(tmp_path)
+    core, store, _runner = make_core(tmp_path)
     adapter = A2AAdapter(main_agent_core=core)
 
     with pytest.raises(InvalidRequestError, match="at least one text part"):
@@ -208,13 +188,12 @@ def test_a2a_send_message_rejects_empty_or_non_user_message(tmp_path):
             A2ASendMessageRequest.model_validate({"message": {"role": "agent", "parts": [{"text": "hello"}]}})
         )
 
-    service.close()
     store.close()
 
 
 def test_a2a_get_cancel_and_subscribe_use_core_boundary(tmp_path):
-    executor = ManualTaskExecutionService()
-    core, store, service, _runner = make_core(tmp_path, task_submitter=executor)
+    executor = ManualTaskSubmitter()
+    core, store, _runner = make_core(tmp_path, task_submitter=executor)
     task = make_task(core)
     adapter = A2AAdapter(main_agent_core=core)
 
@@ -230,13 +209,12 @@ def test_a2a_get_cancel_and_subscribe_use_core_boundary(tmp_path):
     assert all(event["jsonrpc"] == "2.0" for event in subscribed.events)
     with pytest.raises(TaskNotFoundError):
         adapter.get_task("missing-task")
-    service.close()
     store.close()
 
 
 def test_a2a_subscribe_path_replays_core_status_and_artifact_events(tmp_path):
-    core, store, service, _runner = make_core(tmp_path, answer="done")
-    client = TestClient(create_app(service=service, enable_a2a=True, main_agent_core=core))
+    core, store, _runner = make_core(tmp_path, answer="done")
+    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
     sent = client.post(
         "/message:send",
         json={
@@ -259,5 +237,4 @@ def test_a2a_subscribe_path_replays_core_status_and_artifact_events(tmp_path):
     assert "final_answer" in response.text
     assert "thread_id" not in response.text.lower()
     assert "localThreadId" in response.text
-    service.close()
     store.close()

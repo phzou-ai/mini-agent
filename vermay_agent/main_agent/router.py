@@ -9,7 +9,6 @@ from .router_classifier import (
     RouterModelClient,
     RouterModelDecision,
     RouterRawJsonClient,
-    agent_keywords as _agent_keywords,
 )
 from .store import MainAgentStore
 
@@ -92,21 +91,6 @@ class DefaultMainAgentRouter:
         hard_signal = _hard_signal_route(metadata, store=store)
         if hard_signal is not None:
             return hard_signal
-
-        matched_agent = _match_registered_agent(_text_from_messages(messages), store=store)
-        if matched_agent is not None:
-            return MainAgentRouteDecision(
-                kind=RouteDecisionKind.REMOTE_AGENT,
-                reason=f"auto route matched registered agent keyword: {matched_agent['keyword']}",
-                confidence=0.7,
-                target_agent_id=str(matched_agent["agent_id"]),
-                metadata=_decision_metadata(
-                    "guardrail",
-                    executionMode=execution_mode,
-                    keyword=matched_agent["keyword"],
-                    legacySource="keyword_match",
-                ),
-            )
 
         if self.router_model is not None:
             model_decision = self.router_model.classify(
@@ -251,24 +235,3 @@ def _fallback_local_message(
         confidence=confidence,
         metadata=metadata or _decision_metadata("fallback", executionMode="auto"),
     )
-
-
-def _text_from_messages(messages: list[MessageRecord]) -> str:
-    text_parts: list[str] = []
-    for message in messages:
-        for part in message.parts:
-            text = part.get("text")
-            if isinstance(text, str):
-                text_parts.append(text)
-    return "\n".join(text_parts).lower()
-
-
-def _match_registered_agent(text: str, *, store: MainAgentStore) -> dict[str, str] | None:
-    if not text.strip():
-        return None
-    for agent in store.list_registered_agents(enabled_only=True):
-        for keyword in _agent_keywords(agent.card_json, agent.metadata):
-            normalized = keyword.strip().lower()
-            if normalized and normalized in text:
-                return {"agent_id": agent.agent_id, "keyword": keyword}
-    return None

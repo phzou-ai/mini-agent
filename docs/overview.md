@@ -20,9 +20,9 @@ The current implementation focuses on:
 - Evaluation replay from traces or scenario fixtures without live tool execution.
 - Ollama and OpenAI-compatible model adapters with named model selection.
 - MCP client-side tool discovery for configured servers.
-- Local FastAPI server for agent session and task lifecycle.
-- Compact API lifecycle events for local operation monitoring.
-- Optional local A2A routes over existing session, task, event, and artifact records.
+- Local FastAPI host for A2A ingress and first-party management/read-model endpoints.
+- Durable Context, Message, Task, lifecycle-event, artifact, and route-decision inspection.
+- A2A JSON-RPC and SSE routes over the same `MainAgentCore` lifecycle owner.
 - SSH-backed read-only Kubernetes inspection.
 - External read-only data tools such as weather forecast.
 
@@ -69,20 +69,17 @@ CLI input
 - Real cluster operations are limited to allowlisted read-only Kubernetes commands.
 - SSH identity file paths are redacted in command traces.
 - LangGraph checkpoint files are stored under `data/checkpoints/` and are not intended for Git.
-- API session, task, and task-event metadata is stored in `data/agent.sqlite`.
-- Local API lifecycle endpoints use `/api/...` and separate long-lived sessions from per-input tasks.
-- API task start/resume supports `wait=false` for background execution with queued/running/completed task inspection.
-- API task cancellation is cooperative: queued/interrupted tasks cancel immediately; running tasks move through `cancel_requested`.
-- API task retry creates a new task row for each retry and records lineage through `root_task_id`, `retry_of_task_id`, and `attempt`.
-- Completed API tasks persist a default final-answer artifact under `task_artifacts`.
-- API background execution, per-task execution locks, and task-event wait notification are isolated in API execution helper modules while `AgentService` remains the public service facade.
-- API task lifecycle events can be streamed through a local SSE endpoint backed by persisted `task_events`.
-- API artifact events are compact references and do not include final answer text.
-- API lifecycle events are compact service-level records written through a lifecycle observer; they do not include raw user input, model output, graph state, final answer text, or full tool output.
-- API task/status/artifact metadata has local A2A projection helpers. `vermay-agent serve` exposes the A2A-first service boundary by default.
-- A2A routes remain an API-edge adapter and do not alter LangGraph runtime internals. Use `vermay-agent serve --disable-a2a` only when you explicitly need management APIs without public A2A routes.
-- The local metadata schema currently records version `6` through ordered schema migrations.
-- API lifecycle errors are classified through a shared project error taxonomy before response mapping and failed-task persistence.
+- Context, Message, Task, event, artifact, route-decision, delegation, and ingress metadata is stored in `data/agent.sqlite`.
+- `MainAgentCore` is the product lifecycle owner for direct Messages, local Tasks, and remote child-task proxies.
+- Direct Messages can stream token deltas over SSE; local Tasks expose durable lifecycle events and a final artifact.
+- Local Task cancellation is cooperative, and approval or user-input continuation uses a durable pending-continuation record.
+- Repeated top-level A2A `messageId` values reuse one durable ingress outcome rather than routing or executing twice.
+- A local Task captures a causal Context input cut; later independent Messages cannot change its initial prompt.
+- A2A routes are API-edge bindings and do not alter LangGraph graph topology or checkpoint semantics.
+- The local metadata store starts from the `main_agent_clean_slate_v1` baseline
+  at schema version `1`. Historical service/session databases are intentionally
+  discarded rather than migrated.
+- Public errors use a stable `{ code, message, retryable }` contract where a structured error applies.
 - Local trace outputs are not intended for Git.
 - Evaluation replay defaults to recorded trace/scenario data and does not execute a live model or live tools.
 - Memory writes are explicit CLI operations only.
@@ -123,7 +120,7 @@ Production-complete MCP todo list:
 
 The project uses SQLite for metadata and files for larger artifacts:
 
-- `data/agent.sqlite`: memory items, skill index, eval run metadata, model profile metadata, API session/task metadata, task events, and task artifacts.
+- `data/agent.sqlite`: memory items, skill index, eval metadata, model profile metadata, and durable main-agent Context/Message/Task lifecycle records.
 - `data/checkpoints/langgraph.sqlite`: LangGraph checkpoint state for interrupt/resume.
 - `skills/*.md`: authored skills tracked with the project.
 - `data/skill_proposals/*.md`: generated skill proposals, local-only by default.

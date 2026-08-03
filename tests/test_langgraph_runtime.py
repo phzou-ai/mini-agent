@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from urllib.error import URLError
 
 import pytest
@@ -7,14 +8,22 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from pydantic import Field
 
 from vermay_agent.checkpointing import build_sqlite_checkpointer
+from vermay_agent.execution_context import ExecutionContextRegistry, current_execution_context
 from vermay_agent.errors import ModelProviderError
 from vermay_agent.model_clients import OllamaModelClient, OpenAICompatibleModelClient
 from vermay_agent.permission import PermissionGate
 from vermay_agent.progress import ProgressReporter
-from vermay_agent.langgraph_runtime import ModelInvocation, OllamaModelAdapter, OpenAICompatibleModelAdapter
+from vermay_agent.langgraph_runtime import (
+    ExecutionPolicy,
+    ModelInvocation,
+    OllamaModelAdapter,
+    OpenAICompatibleModelAdapter,
+)
 from vermay_agent.langgraph_runtime.graph import build_graph
 from vermay_agent.langgraph_runtime.model_factory import ModelProviderConfig, build_model_client
 from vermay_agent.langgraph_runtime.nodes import GraphComponents
+from vermay_agent.langgraph_runtime.execution import model_call_limit, policy_from_state
+from vermay_agent.langgraph_runtime.observations import normalize_tool_observation
 from vermay_agent.langgraph_runtime.routing import (
     latest_ai_message,
     route_after_approval,
@@ -30,6 +39,7 @@ from vermay_agent.tool_registry import ToolRegistry
 from vermay_agent.tools.user_input import register_user_input_tool
 from vermay_agent.trace import TraceLogger
 from vermay_agent.types import ModelResponse, ToolCall
+from vermay_agent.storage import SQLITE_BUSY_TIMEOUT_MS
 
 
 class EchoArgs(ToolArgs):
@@ -55,8 +65,8 @@ class FakeProjectModelClient:
         self.response = response
         self.calls = []
 
-    def invoke(self, messages, tools):
-        self.calls.append((messages, tools))
+    def invoke(self, messages, tools, *, timeout_seconds=None):
+        self.calls.append((messages, tools, timeout_seconds))
         return self.response
 
 
@@ -87,6 +97,39 @@ def make_named_dangerous_tool(name: str, executed: list[str]):
         description=f"Dangerous tool {name}.",
         args_schema=EmptyArgs,
         dangerous=True,
+    )
+
+
+def make_failing_tool():
+    def fail() -> dict:
+        raise RuntimeError("upstream service unavailable")
+
+    return structured_tool(
+        func=fail,
+        name="failing_tool",
+        description="Always fails.",
+        args_schema=EmptyArgs,
+        dangerous=False,
+    )
+
+
+def make_context_observing_tool(observed_contexts: list[dict[str, str | None]]):
+    def observe() -> dict:
+        context = current_execution_context()
+        observed_contexts.append(
+            {
+                "runtime_thread_id": context.runtime_thread_id if context is not None else None,
+                "invocation_id": context.invocation_id if context is not None else None,
+            }
+        )
+        return {"ok": True}
+
+    return structured_tool(
+        func=observe,
+        name="observe_execution_context",
+        description="Observe the current execution context.",
+        args_schema=EmptyArgs,
+        dangerous=False,
     )
 
 
@@ -176,6 +219,18 @@ def test_langgraph_runtime_returns_run_result_for_final_answer():
     assert result.status == "completed"
     assert result.final_answer == "final answer"
     assert result.to_output() == "final answer"
+    assert result.execution["completion"] == {
+        "claimed": True,
+        "evidence_count": 0,
+        "residual_risk_count": 1,
+    }
+    assert result.execution["residual_risks"] == [
+        {
+            "category": "no_tool_evidence",
+            "summary": "The final answer is model-generated; no tool-backed observation was produced.",
+            "retryable": False,
+        }
+    ]
     assert len(result.state["messages"]) == 3
     assert model.calls[0][0][0].content == "system prompt"
     assert model.calls[0][0][1].content == "hello"
@@ -335,7 +390,322 @@ def test_langgraph_runtime_executes_safe_tool_with_toolnode():
     assert result.thread_id == "thread-safe-tool"
     assert result.status == "completed"
     assert result.final_answer == "tool completed"
+    assert result.execution["completion"] == {
+        "claimed": True,
+        "evidence_count": 1,
+        "residual_risk_count": 0,
+    }
+    assert result.execution["evidence"][0]["tool_call_id"] == "call-echo"
     assert any(isinstance(message, ToolMessage) for message in result.state["messages"])
+
+
+def test_langgraph_tool_node_binds_the_active_runtime_execution_context():
+    observed_contexts: list[dict[str, str | None]] = []
+    registry = ExecutionContextRegistry()
+    model = FakeModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "observe_execution_context",
+                        "args": {},
+                        "id": "call-context",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="context observed"),
+        ]
+    )
+    runtime = LangGraphAgentRuntime(
+        model=model,
+        tools=[make_context_observing_tool(observed_contexts)],
+        execution_context_registry=registry,
+    )
+
+    with registry.activate("thread-r3"):
+        result = runtime.start("observe", thread_id="thread-r3")
+
+    assert result.status == "completed"
+    assert observed_contexts == [{"runtime_thread_id": "thread-r3", "invocation_id": None}]
+
+
+def test_model_adapter_caps_an_active_task_call_by_its_remaining_deadline():
+    project_client = FakeProjectModelClient(ModelResponse(content="ok"))
+    adapter = OllamaModelAdapter(client=project_client)
+    registry = ExecutionContextRegistry()
+
+    with registry.activate("thread-model-deadline"):
+        with registry.bind_model_context(
+            runtime_thread_id="thread-model-deadline",
+            deadline_monotonic=time.monotonic() + 5,
+        ):
+            response = adapter.invoke([HumanMessage(content="hello")], tools=[])
+
+    assert response.message.content == "ok"
+    timeout_seconds = project_client.calls[0][2]
+    assert timeout_seconds is not None
+    assert 0 < timeout_seconds <= 5
+
+
+def test_langgraph_runtime_stops_when_a_slow_model_exhausts_task_elapsed_budget():
+    class SlowModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def invoke(self, messages, tools):
+            self.calls += 1
+            time.sleep(0.03)
+            return ModelInvocation(message=AIMessage(content="late answer"))
+
+    model = SlowModel()
+    runtime = LangGraphAgentRuntime(
+        model=model,
+        execution_policy=ExecutionPolicy(
+            max_model_calls=2,
+            max_tool_calls=2,
+            max_failures=2,
+            max_loop_steps=2,
+            max_elapsed_seconds=0.01,
+        ),
+    )
+
+    result = runtime.start("slow model", thread_id="thread-model-deadline")
+
+    assert result.status == "stopped"
+    assert result.stop_reason == "budget_exhausted"
+    assert result.final_answer is None
+    assert result.execution["stop_detail"]["limit"] == "max_elapsed_seconds"
+    assert model.calls == 1
+
+
+def test_langgraph_runtime_stops_before_executing_tools_after_cancellation_during_model_call():
+    registry = ExecutionContextRegistry()
+    executed = {"value": False}
+
+    class CancelDuringModelCall:
+        def invoke(self, messages, tools):
+            assert registry.request_cancellation(
+                "thread-cancel-after-model",
+                reason="operator requested",
+            )
+            return ModelInvocation(
+                message=AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "dangerous",
+                            "args": {},
+                            "id": "call-dangerous",
+                            "type": "tool_call",
+                        }
+                    ],
+                )
+            )
+
+    runtime = LangGraphAgentRuntime(
+        model=CancelDuringModelCall(),
+        tools=[make_dangerous_tool(executed)],
+        execution_context_registry=registry,
+    )
+
+    with registry.activate("thread-cancel-after-model"):
+        result = runtime.start("delete resource", thread_id="thread-cancel-after-model")
+
+    assert result.status == "stopped"
+    assert result.stop_reason == "canceled"
+    assert result.execution["stop_detail"] == {"source": "control_plane_cancellation"}
+    assert executed["value"] is False
+
+
+def test_langgraph_runtime_stops_before_exceeding_model_call_budget():
+    model = FakeModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "echo",
+                        "args": {"value": "hello"},
+                        "id": "call-echo",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="this response must not be invoked"),
+        ]
+    )
+    runtime = LangGraphAgentRuntime(
+        model=model,
+        tools=[make_echo_tool()],
+        execution_policy=ExecutionPolicy(
+            max_model_calls=1,
+            max_tool_calls=2,
+            max_failures=2,
+            max_loop_steps=3,
+        ),
+    )
+
+    result = runtime.start("echo hello", thread_id="thread-model-budget")
+
+    assert result.status == "stopped"
+    assert result.stop_reason == "budget_exhausted"
+    assert result.execution["stop_detail"]["limit"] == "max_model_calls"
+    assert result.execution["metrics"]["model_calls"] == 1
+    assert result.execution["completion"]["claimed"] is False
+    assert len(model.calls) == 1
+
+
+def test_langgraph_runtime_stops_before_exceeding_tool_call_budget():
+    executed = {"count": 0}
+
+    def side_effect() -> dict:
+        executed["count"] += 1
+        return {"executed": True}
+
+    tool = structured_tool(
+        func=side_effect,
+        name="side_effect",
+        description="Records an execution.",
+        args_schema=EmptyArgs,
+        dangerous=False,
+    )
+    runtime = LangGraphAgentRuntime(
+        model=FakeModel(
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "side_effect", "args": {}, "id": "call-effect", "type": "tool_call"}
+                ],
+            )
+        ),
+        tools=[tool],
+        execution_policy=ExecutionPolicy(
+            max_model_calls=2,
+            max_tool_calls=0,
+            max_failures=2,
+            max_loop_steps=2,
+        ),
+    )
+
+    result = runtime.start("perform work", thread_id="thread-tool-budget")
+
+    assert result.status == "stopped"
+    assert result.stop_reason == "budget_exhausted"
+    assert result.execution["stop_detail"]["limit"] == "max_tool_calls"
+    assert executed["count"] == 0
+
+
+def test_langgraph_runtime_stops_after_repeated_tool_failure_and_keeps_observation():
+    runtime = LangGraphAgentRuntime(
+        model=FakeModel(
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "failing_tool", "args": {}, "id": "call-fail", "type": "tool_call"}
+                ],
+            )
+        ),
+        tools=[make_failing_tool()],
+        execution_policy=ExecutionPolicy(
+            max_model_calls=2,
+            max_tool_calls=2,
+            max_failures=1,
+            max_loop_steps=2,
+        ),
+    )
+
+    result = runtime.start("run a failing tool", thread_id="thread-failure-budget")
+
+    assert result.status == "stopped"
+    assert result.stop_reason == "repeated_failure"
+    assert result.execution["metrics"]["failure_count"] == 1
+    assert result.observations[0]["tool_call_id"] == "call-fail"
+    assert result.observations[0]["ok"] is False
+    assert result.observations[0]["error_category"] == "tool_execution_error"
+    assert result.observations[0]["retryable"] is False
+    assert result.execution["completion"] == {
+        "claimed": False,
+        "evidence_count": 0,
+        "residual_risk_count": 2,
+    }
+
+
+def test_normalized_tool_observation_uses_structured_error_fields_without_text_inference():
+    observation = normalize_tool_observation(
+        ToolMessage(
+            content=(
+                '{"error_code":"network_unavailable","retryable":true,'
+                '"changed_resources":[{"kind":"pod","name":"api-1"}],'
+                '"artifact_refs":["artifact-1"]}'
+            ),
+            name="inspect_cluster",
+            tool_call_id="call-structured-error",
+            status="error",
+        ),
+        loop_index=2,
+    )
+
+    assert observation["error_category"] == "network_unavailable"
+    assert observation["retryable"] is True
+    assert observation["changed_resources"] == [{"kind": "pod", "name": "api-1"}]
+    assert observation["artifact_refs"] == ["artifact-1"]
+
+
+def test_normalized_tool_observation_treats_structured_ok_false_as_a_failure():
+    observation = normalize_tool_observation(
+        ToolMessage(
+            content='{"ok":false,"error_code":"execution_timeout","retryable":true}',
+            name="inspect_cluster",
+            tool_call_id="call-structured-failure",
+        ),
+        loop_index=2,
+    )
+
+    assert observation["ok"] is False
+    assert observation["error_category"] == "execution_timeout"
+    assert observation["retryable"] is True
+
+
+def test_execution_policy_preserves_a_pre_r2_checkpoint_loop_limit(monkeypatch):
+    state = build_initial_state("resume legacy task", max_loops=3)
+    state.pop("execution_policy")
+    state["execution_started_at"] = 0.0
+    state["model_calls"] = 3
+    monkeypatch.setattr("vermay_agent.langgraph_runtime.execution.time.time", lambda: 10.0)
+
+    policy = policy_from_state(state)
+    limit = model_call_limit(state)
+
+    assert policy.max_loop_steps == 3
+    assert policy.max_model_calls == 3
+    assert limit is not None
+    assert limit.detail["limit"] == "max_model_calls"
+
+
+def test_execution_policy_stops_when_elapsed_time_is_exhausted(monkeypatch):
+    state = build_initial_state(
+        "time-bound task",
+        execution_policy=ExecutionPolicy(
+            max_model_calls=3,
+            max_tool_calls=3,
+            max_failures=2,
+            max_loop_steps=3,
+            max_elapsed_seconds=2.0,
+        ),
+    )
+    state["execution_started_at"] = 10.0
+    monkeypatch.setattr("vermay_agent.langgraph_runtime.execution.time.time", lambda: 13.0)
+
+    limit = model_call_limit(state)
+
+    assert limit is not None
+    assert limit.detail == {
+        "limit": "max_elapsed_seconds",
+        "limit_value": 2.0,
+        "observed_value": 3.0,
+    }
 
 
 def test_langgraph_runtime_interrupts_dangerous_tool_before_toolnode():
@@ -610,6 +980,17 @@ def test_langgraph_runtime_resumes_approval_from_sqlite_checkpoint_across_runtim
     assert executed["value"] is True
     assert result.state["approval"] == {"approved": True, "reason": "approved from second runtime"}
     second_runtime.close()
+
+
+def test_sqlite_checkpointer_uses_runtime_connection_contract(tmp_path):
+    checkpointer = build_sqlite_checkpointer(tmp_path / "langgraph.sqlite")
+
+    try:
+        assert checkpointer.conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert checkpointer.conn.execute("PRAGMA busy_timeout").fetchone()[0] == SQLITE_BUSY_TIMEOUT_MS
+        assert checkpointer.conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    finally:
+        checkpointer.conn.close()
 
 
 def test_langgraph_runtime_resumes_rejected_dangerous_tool_without_execution():

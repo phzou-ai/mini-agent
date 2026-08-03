@@ -98,7 +98,7 @@ class DirectA2ARemoteAgentClient:
             "params": {"id": task_id},
         }
         body, result = self._post_jsonrpc(agent, payload)
-        return _remote_task_snapshot_from_payload(result, raw=body, fallback_task_id=task_id)
+        return _remote_task_snapshot_from_payload(result, raw=body)
 
     def cancel_task(
         self,
@@ -118,7 +118,7 @@ class DirectA2ARemoteAgentClient:
         if reason:
             payload["params"]["reason"] = reason
         body, result = self._post_jsonrpc(agent, payload)
-        return _remote_task_snapshot_from_payload(result, raw=body, fallback_task_id=task_id)
+        return _remote_task_snapshot_from_payload(result, raw=body)
 
     def _post_jsonrpc(
         self,
@@ -266,10 +266,11 @@ def _remote_result_from_payload(result: dict[str, Any], *, raw: dict[str, Any]) 
         )
     if kind == "task":
         status = result.get("status") if isinstance(result.get("status"), dict) else {}
+        task_id = _required_nonempty_string(result.get("id"), label="remote agent task result id")
         return RemoteAgentSendResult(
             kind="task",
             context_id=_optional_str(result.get("contextId")),
-            task_id=_optional_str(result.get("id")),
+            task_id=task_id,
             status=_optional_str(status.get("state")),
             raw=raw,
         )
@@ -280,7 +281,6 @@ def _remote_task_snapshot_from_payload(
     result: dict[str, Any],
     *,
     raw: dict[str, Any],
-    fallback_task_id: str,
 ) -> RemoteAgentTaskSnapshot:
     task = result.get("task") if isinstance(result.get("task"), dict) else result
     if not isinstance(task, dict):
@@ -288,7 +288,7 @@ def _remote_task_snapshot_from_payload(
     status = task.get("status") if isinstance(task.get("status"), dict) else {}
     artifacts = task.get("artifacts") if isinstance(task.get("artifacts"), list) else []
     return RemoteAgentTaskSnapshot(
-        task_id=_optional_str(task.get("id")) or fallback_task_id,
+        task_id=_required_nonempty_string(task.get("id"), label="remote agent task snapshot id"),
         context_id=_optional_str(task.get("contextId")),
         status=_optional_str(status.get("state")),
         artifacts=list(artifacts),
@@ -311,3 +311,10 @@ def _optional_str(value: object) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _required_nonempty_string(value: object, *, label: str) -> str:
+    normalized = _optional_str(value)
+    if normalized is None or not normalized.strip():
+        raise RemoteAgentProtocolError(f"{label} must be a non-empty string")
+    return normalized.strip()

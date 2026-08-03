@@ -10,7 +10,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from vermay_agent.errors import error_info_from_exception, public_error_payload
 
 from .adapter import A2AAdapter
-from .projection import is_terminal_a2a_state
 from .rpc import (
     is_jsonrpc_request as _is_jsonrpc_request,
     jsonrpc_error_payload as _jsonrpc_error_payload,
@@ -21,6 +20,21 @@ from .rpc import (
     rpc_after_event_id as _rpc_after_event_id,
     rpc_params as _rpc_params,
     rpc_task_id as _rpc_task_id,
+)
+
+
+# A task subscription must close for both terminal tasks and tasks waiting for
+# user or authentication input. These are A2A transport states, not a legacy
+# session-projection concern.
+_STREAM_END_STATES = frozenset(
+    {
+        "completed",
+        "failed",
+        "canceled",
+        "rejected",
+        "input-required",
+        "auth-required",
+    }
 )
 
 
@@ -261,6 +275,7 @@ def _a2a_sse_response(event_stream: Any) -> StreamingResponse:
 
 async def _rpc_stream_message_events(adapter: A2AAdapter, payload: dict[str, Any]):
     request_id = payload.get("id")
+    reached_end_state = False
     try:
         async for event in _stream_message_result_events(
             adapter,
@@ -268,8 +283,16 @@ async def _rpc_stream_message_events(adapter: A2AAdapter, payload: dict[str, Any
             task_event_request_id=request_id,
             wrap_task_events=True,
         ):
+            reached_end_state = reached_end_state or _is_stream_end_state(
+                _task_state(event)
+            )
             yield _format_a2a_sse_event(event)
     except Exception as exc:
+        # Once an A2A task's terminal or input-required state has reached the
+        # client, a trailing replay/transport failure must not overwrite that
+        # durable outcome with a JSON-RPC error event.
+        if reached_end_state:
+            return
         yield _format_a2a_sse_event(_jsonrpc_error_payload(request_id, exc))
 
 
@@ -676,13 +699,4 @@ def _task_state(task: dict[str, Any]) -> Any:
 
 
 def _is_stream_end_state(state: Any) -> bool:
-    if is_terminal_a2a_state(state):
-        return True
-    return state in {
-        "completed",
-        "failed",
-        "canceled",
-        "rejected",
-        "input-required",
-        "auth-required",
-    }
+    return isinstance(state, str) and state.strip().lower() in _STREAM_END_STATES

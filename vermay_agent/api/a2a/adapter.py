@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Iterable
-from uuid import uuid4
 
 from pydantic import ValidationError
 
@@ -17,7 +16,7 @@ from vermay_agent.main_agent import (
     RemoteAgentResult,
     RouteDecisionKind,
 )
-from vermay_agent.main_agent.models import RegisteredAgentRecord, TaskStatus as MainAgentTaskStatus
+from vermay_agent.main_agent.models import RegisteredAgentRecord
 from vermay_agent.main_agent.models import is_terminal_task_status
 from vermay_agent.main_agent.projection import (
     task_event_to_a2a_artifact_update,
@@ -141,10 +140,9 @@ class A2AAdapter:
 
     def get_task(self, task_id: str) -> dict[str, Any]:
         core = self._require_main_agent_core("A2A tasks/get")
-        task = core.store.get_task(task_id)
+        task = core.get_task(task_id, refresh_remote=True)
         if task is None:
             raise TaskNotFoundError(task_id)
-        task = self._sync_remote_proxy_task(task)
         return _jsonrpc_success(
             f"task-get-{task_id}",
             _main_task_payload(task, store=core.store),
@@ -157,10 +155,6 @@ class A2AAdapter:
             raise TaskNotFoundError(task_id)
         if is_terminal_task_status(task.status):
             raise InvalidSessionStateError(f"task is terminal and cannot be canceled: {task_id}")
-        delegation = core.store.get_delegated_task_by_local_task_id(task_id)
-        if delegation is not None:
-            updated = self._cancel_remote_proxy_task(task, delegation=delegation, reason=reason)
-            return _jsonrpc_success(f"cancel-{task_id}", task_to_a2a_payload(updated))
         updated = core.cancel_task(task_id, reason=reason)
         return _jsonrpc_success(f"cancel-{task_id}", task_to_a2a_payload(updated))
 
@@ -169,18 +163,14 @@ class A2AAdapter:
         task = core.store.get_task(task_id)
         if task is None:
             raise TaskNotFoundError(task_id)
-        delegation = core.store.get_delegated_task_by_local_task_id(task_id)
-        if delegation is not None:
-            raise InvalidSessionStateError(f"delegated task resume is not supported yet: {task_id}")
         updated = core.resume_task(task_id, approved=approved, reason=reason)
         return _jsonrpc_success(f"resume-{task_id}", task_to_a2a_payload(updated))
 
     def project_task_events(self, task_id: str, *, after_event_id: int = 0) -> list[dict[str, Any]]:
         core = self._require_main_agent_core("A2A task event projection")
-        task = core.store.get_task(task_id)
+        task = core.get_task(task_id, refresh_remote=True)
         if task is None:
             raise TaskNotFoundError(task_id)
-        task = self._sync_remote_proxy_task(task)
         return [
             payload
             for event in core.store.list_task_events(task_id, after_event_id=after_event_id)
@@ -195,10 +185,9 @@ class A2AAdapter:
         timeout_seconds: float,
     ) -> A2AEventBatch:
         core = self._require_main_agent_core("A2A task event subscription")
-        task = core.store.get_task(task_id)
+        task = core.get_task(task_id, refresh_remote=True)
         if task is None:
             raise TaskNotFoundError(task_id)
-        task = self._sync_remote_proxy_task(task)
         events = core.store.wait_for_task_events(
             task_id,
             after_event_id=after_event_id,
@@ -225,121 +214,6 @@ class A2AAdapter:
         if self.main_agent_core is None:
             raise InvalidRequestError(f"{operation} requires MainAgentCore.")
         return self.main_agent_core
-
-    def _sync_remote_proxy_task(self, task):
-        delegation = self.main_agent_core.store.get_delegated_task_by_local_task_id(task.task_id)
-        if delegation is None or delegation.remote_task_id is None:
-            return task
-        client = self.main_agent_core.remote_agent_client
-        if client is None:
-            return task
-        agent = self.main_agent_core.store.get_registered_agent(delegation.remote_agent_id)
-        if agent is None or not agent.enabled:
-            return task
-        snapshot = client.get_task(agent=agent, task_id=delegation.remote_task_id)
-        return self._apply_remote_task_snapshot(task, delegation=delegation, snapshot=snapshot)
-
-    def _cancel_remote_proxy_task(self, task, *, delegation, reason: str | None):
-        client = self.main_agent_core.remote_agent_client
-        if client is None:
-            raise InvalidRequestError("remote_agent client is not configured")
-        if delegation.remote_task_id is None:
-            raise InvalidRequestError("delegated task is missing remote task id")
-        agent = self.main_agent_core.store.get_registered_agent(delegation.remote_agent_id)
-        if agent is None:
-            raise InvalidRequestError(f"unknown registered agent: {delegation.remote_agent_id}")
-        if not agent.enabled:
-            raise InvalidRequestError(f"registered agent is disabled: {delegation.remote_agent_id}")
-        snapshot = client.cancel_task(agent=agent, task_id=delegation.remote_task_id, reason=reason)
-        return self._apply_remote_task_snapshot(task, delegation=delegation, snapshot=snapshot)
-
-    def _apply_remote_task_snapshot(self, task, *, delegation, snapshot):
-        next_status = _remote_status_to_main_status(snapshot.status, fallback=task.status)
-        metadata = {
-            **delegation.metadata,
-            "remoteTaskId": snapshot.task_id,
-            "remoteContextId": snapshot.context_id,
-            "remoteStatus": snapshot.status,
-        }
-        if snapshot.raw:
-            metadata["lastRemoteSnapshot"] = snapshot.raw
-        self.main_agent_core.store.update_delegated_task_status(
-            delegation.delegation_id,
-            status=snapshot.status or next_status.value,
-            metadata=metadata,
-        )
-        if next_status == MainAgentTaskStatus.COMPLETED:
-            task = self._sync_remote_proxy_final_answer(task, delegation=delegation, snapshot=snapshot)
-        if next_status == task.status:
-            return task
-        updated = self.main_agent_core.store.update_task_status(task.task_id, next_status)
-        self.main_agent_core.store.append_task_event(
-            task_id=task.task_id,
-            type="remote_task_status_synced",
-            status=next_status,
-            payload={
-                "remote_agent_id": delegation.remote_agent_id,
-                "remote_task_id": snapshot.task_id,
-                "remote_context_id": snapshot.context_id,
-                "remote_status": snapshot.status,
-            },
-        )
-        return updated
-
-    def _sync_remote_proxy_final_answer(self, task, *, delegation, snapshot):
-        parts, remote_artifact_id = _remote_final_artifact(snapshot.artifacts)
-        if not parts:
-            return task
-
-        store = self.main_agent_core.store
-        artifact_id = f"{task.task_id}:remote_final_answer"
-        if store.get_artifact(artifact_id) is not None:
-            return store.get_task(task.task_id) or task
-
-        with store.transaction():
-            assistant_message = store.append_message(
-                message_id=f"msg-{uuid4().hex}",
-                context_id=task.context_id,
-                role=MessageRole.AGENT,
-                parts=parts,
-                task_id=task.task_id,
-                metadata={
-                    "routeKind": RouteDecisionKind.REMOTE_AGENT.value,
-                    "remoteAgentId": delegation.remote_agent_id,
-                    "remoteTaskId": snapshot.task_id,
-                    "remoteContextId": snapshot.context_id,
-                    "remoteArtifactId": remote_artifact_id,
-                    "delegationId": delegation.delegation_id,
-                },
-            )
-            artifact = store.upsert_artifact(
-                artifact_id=artifact_id,
-                task_id=task.task_id,
-                context_id=task.context_id,
-                parts=parts,
-                metadata={
-                    "kind": "final_answer",
-                    "source": "remote_agent",
-                    "outputMessageId": assistant_message.message_id,
-                    "remoteAgentId": delegation.remote_agent_id,
-                    "remoteTaskId": snapshot.task_id,
-                    "remoteArtifactId": remote_artifact_id,
-                },
-            )
-            store.append_task_event(
-                task_id=task.task_id,
-                type="task_artifact_created",
-                status=MainAgentTaskStatus.COMPLETED,
-                payload={
-                    "artifact_id": artifact.artifact_id,
-                    "kind": "final_answer",
-                    "source": "remote_agent",
-                    "remote_agent_id": delegation.remote_agent_id,
-                    "remote_task_id": snapshot.task_id,
-                    "remote_artifact_id": remote_artifact_id,
-                },
-            )
-            return store.set_task_output_message(task.task_id, assistant_message.message_id)
 
     def _project_main_agent_task_event(self, event, *, task):
         artifact_id = event.payload.get("artifact_id")
@@ -601,51 +475,3 @@ def _dedupe_strings(values: Iterable[str]) -> list[str]:
         seen.add(key)
         result.append(value)
     return result
-
-
-def _remote_status_to_main_status(status: str | None, *, fallback: MainAgentTaskStatus) -> MainAgentTaskStatus:
-    if status in {"submitted", "TASK_STATE_SUBMITTED", "created", "queued"}:
-        return MainAgentTaskStatus.QUEUED
-    if status in {"working", "TASK_STATE_WORKING", "running"}:
-        return MainAgentTaskStatus.RUNNING
-    if status in {"completed", "TASK_STATE_COMPLETED"}:
-        return MainAgentTaskStatus.COMPLETED
-    if status in {"canceled", "cancelled", "TASK_STATE_CANCELED"}:
-        return MainAgentTaskStatus.CANCELED
-    if status in {"failed", "rejected", "TASK_STATE_FAILED", "TASK_STATE_REJECTED"}:
-        return MainAgentTaskStatus.FAILED
-    if status in {"input-required", "TASK_STATE_INPUT_REQUIRED"}:
-        return MainAgentTaskStatus.INPUT_REQUIRED
-    if status in {"auth-required", "TASK_STATE_AUTH_REQUIRED"}:
-        return MainAgentTaskStatus.AUTH_REQUIRED
-    return fallback
-
-
-def _remote_final_artifact(artifacts: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str | None]:
-    for artifact in artifacts:
-        if not isinstance(artifact, dict):
-            continue
-        raw_parts = artifact.get("parts")
-        if not isinstance(raw_parts, list):
-            continue
-        parts = [_normalize_remote_part(part) for part in raw_parts]
-        parts = [part for part in parts if part is not None]
-        if parts:
-            return parts, _optional_str(artifact.get("artifactId") or artifact.get("id"))
-    return [], None
-
-
-def _normalize_remote_part(part: object) -> dict[str, Any] | None:
-    if not isinstance(part, dict):
-        return None
-    if isinstance(part.get("text"), str):
-        return {"kind": "text", "text": part["text"]}
-    if isinstance(part.get("kind"), str):
-        return dict(part)
-    return None
-
-
-def _optional_str(value: object) -> str | None:
-    if value is None:
-        return None
-    return str(value)

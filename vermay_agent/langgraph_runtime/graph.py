@@ -12,6 +12,7 @@ from .nodes import (
     max_loops_node,
     record_tool_messages_node,
     reject_tool_node,
+    tool_call_wrapper,
     user_input_required_node,
 )
 from .routing import route_after_approval, route_after_model, route_after_permission, route_loop_limit
@@ -25,7 +26,14 @@ def build_graph(components: GraphComponents, checkpointer=None):
     graph.add_node("approval_required", approval_required_node(components))
     graph.add_node("user_input_required", user_input_required_node(components))
     graph.add_node("reject_tool", reject_tool_node(components))
-    graph.add_node("tools", ToolNode(components.tools, handle_tool_errors=True))
+    graph.add_node(
+        "tools",
+        ToolNode(
+            components.tools,
+            handle_tool_errors=True,
+            wrap_tool_call=tool_call_wrapper(components),
+        ),
+    )
     graph.add_node("record_tool_messages", record_tool_messages_node(components))
     graph.add_node("increment_loop", increment_loop_node(components))
     graph.add_node("max_loops", max_loops_node(components))
@@ -37,6 +45,7 @@ def build_graph(components: GraphComponents, checkpointer=None):
         {
             "final": END,
             "tool_calls": "check_permission",
+            "stopped": END,
         },
     )
     graph.add_conditional_edges(
@@ -47,6 +56,7 @@ def build_graph(components: GraphComponents, checkpointer=None):
             "input_required": "user_input_required",
             "approval_required": "approval_required",
             "denied": "reject_tool",
+            "stopped": END,
         },
     )
     graph.add_conditional_edges(
@@ -67,6 +77,7 @@ def build_graph(components: GraphComponents, checkpointer=None):
         {
             "continue": "call_model",
             "max_loops": "max_loops",
+            "stopped": END,
         },
     )
     graph.add_edge("max_loops", END)

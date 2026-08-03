@@ -256,6 +256,50 @@ def test_direct_a2a_remote_agent_rejects_invalid_jsonrpc_response(monkeypatch, p
         client.get_task(agent=_registered_agent(), task_id="task-1")
 
 
+def test_direct_a2a_remote_agent_rejects_task_snapshot_without_an_id(monkeypatch):
+    monkeypatch.setattr(
+        "vermay_agent.main_agent.remote_agent.urlopen",
+        lambda request, timeout: FakeResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": "get-remote-task-task-1",
+                "result": {"kind": "task", "status": {"state": "working"}},
+            }
+        ),
+    )
+    client = DirectA2ARemoteAgentClient()
+
+    with pytest.raises(RemoteAgentProtocolError, match="snapshot id must be a non-empty string"):
+        client.get_task(agent=_registered_agent(), task_id="task-1")
+
+
+def test_direct_a2a_remote_agent_rejects_send_task_without_an_id(monkeypatch):
+    monkeypatch.setattr(
+        "vermay_agent.main_agent.remote_agent.urlopen",
+        lambda request, timeout: FakeResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": "delegate-msg-1",
+                "result": {"kind": "task", "status": {"state": "submitted"}},
+            }
+        ),
+    )
+    client = DirectA2ARemoteAgentClient()
+
+    with pytest.raises(RemoteAgentProtocolError, match="task result id must be a non-empty string"):
+        client.send_message(
+            agent=_registered_agent(),
+            request=MainAgentRequest(
+                context_id="ctx-1",
+                message_id="msg-1",
+                role=MessageRole.USER,
+                parts=[{"kind": "text", "text": "delegate"}],
+            ),
+            context_id="ctx-1",
+            message_id="msg-1",
+        )
+
+
 def test_direct_a2a_remote_agent_rejects_card_without_jsonrpc_interface():
     client = DirectA2ARemoteAgentClient()
     agent = _registered_agent(

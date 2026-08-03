@@ -16,6 +16,10 @@ def test_app_factory_builds_runtime_with_registered_tools(tmp_path):
             skills_path=tmp_path / "skills",
             skill_proposals_path=tmp_path / "skill_proposals",
             mcp_config_path=tmp_path / "mcp_servers.json",
+            max_loops=7,
+            max_tool_calls=9,
+            max_failures=3,
+            max_elapsed_seconds=42.0,
             show_progress=False,
         )
     )
@@ -30,6 +34,14 @@ def test_app_factory_builds_runtime_with_registered_tools(tmp_path):
     assert runtime.trace.path == tmp_path / "trace.jsonl"
     assert runtime.progress is not None
     assert runtime.progress.enabled is False
+    assert runtime.execution_policy is not None
+    assert runtime.execution_policy.to_dict() == {
+        "max_model_calls": 7,
+        "max_tool_calls": 9,
+        "max_failures": 3,
+        "max_loop_steps": 7,
+        "max_elapsed_seconds": 42.0,
+    }
     assert runtime.checkpointer is not None
     assert "ssh_kubectl_get" in tool_names
     assert "weather_forecast" in tool_names

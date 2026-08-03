@@ -18,7 +18,7 @@ class ConcurrentRuntime:
         self.same_thread_overlap = False
         self.closed = False
 
-    def start(self, user_input: str, thread_id: str):
+    def start(self, user_input: str, thread_id: str, *, history_messages=None):
         with self._guard:
             active = self.active_by_thread.get(thread_id, 0) + 1
             self.active_by_thread[thread_id] = active

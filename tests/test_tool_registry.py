@@ -159,6 +159,8 @@ def test_devops_tool_schemas_use_single_source_resource_enums():
     assert get_resource_schema["enum"] == KUBECTL_GET_RESOURCES
     assert describe_resource_schema["enum"] == KUBECTL_DESCRIBE_RESOURCES
     assert delete_resource_schema["enum"] == KUBECTL_DELETE_RESOURCES
+    assert "exec_shell" not in schemas
+    assert "kubectl_apply" not in schemas
 
 
 def test_devops_tools_have_explicit_metadata_classification():

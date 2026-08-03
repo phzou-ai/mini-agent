@@ -47,6 +47,10 @@ export type AgentTask = {
   task_id: string
   session_id: string
   thread_id: string
+  /** A2A's public projection of the durable local process state. */
+  a2a_state?: string | null
+  /** The local durable process state owned by the main-agent runtime. */
+  local_process_status?: string | null
   root_task_id?: string | null
   retry_of_task_id?: string | null
   status: AgentTaskStatus
@@ -71,6 +75,10 @@ export type AgentTaskEvent = {
   session_id: string
   context_id?: string | null
   thread_id?: string | null
+  /** A2A state carried by a status-update event, when that event changes state. */
+  a2a_state?: string | null
+  /** Local process state carried by the event metadata, when available. */
+  local_process_status?: string | null
   event_type: string
   status?: AgentTaskStatus | null
   payload: Record<string, unknown>
@@ -86,6 +94,13 @@ export type AgentMessage = {
   createdAt: string
   taskId?: string | null
   loading?: boolean
+  failure?: AgentMessageFailure
+}
+
+export type AgentMessageFailure = {
+  code: string
+  message: string
+  retryable: boolean
 }
 
 export type AgentA2AExecutionMode = "message" | "task" | "auto"
@@ -231,6 +246,16 @@ export type AgentStoredMessage = {
   task_id?: string | null
   metadata: Record<string, unknown>
   created_at: string
+  failure?: AgentMessageFailure | null
+}
+
+export type AgentMessageIngress = {
+  message_id: string
+  context_id: string
+  state: "in_progress" | "resolved" | "failed"
+  failure?: AgentMessageFailure | null
+  created_at: string
+  updated_at: string
 }
 
 export type AgentContextTaskRecord = {

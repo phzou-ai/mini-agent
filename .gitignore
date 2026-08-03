@@ -27,6 +27,8 @@ traces/*.sqlite
 # Web frontend artifacts
 web/node_modules/
 web/.next/
+web/.next-playwright-regression/
+web/.next-full-stack-build/
 web/out/
 web/tsconfig.tsbuildinfo
 web/test-results/

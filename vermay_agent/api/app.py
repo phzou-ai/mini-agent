@@ -19,10 +19,12 @@ from vermay_agent.main_agent import (
     DefaultMainAgentRouter,
     MainAgentCore,
     MainAgentStore,
+    MainAgentToolInvocationLedger,
     MessageRole,
     build_router_json_client,
     fetch_agent_card,
 )
+from vermay_agent.main_agent.executor import InProcessTaskExecutor
 from vermay_agent.model_selection import (
     NamedModelSelection,
     resolve_model_selection,
@@ -30,76 +32,46 @@ from vermay_agent.model_selection import (
     resolve_named_router_model_selection,
 )
 from vermay_agent.storage import AgentStore
-from vermay_agent.trace import TraceLogger
 
 from .a2a import A2AAdapter, A2AAdapterConfig, A2AAgentCardConfig, create_a2a_router
-from .lifecycle import TraceLifecycleObserver
 from .management_models import (
     ContextUpdateRequest,
     ModelConfigResponse,
     RegisteredAgentResponse,
     RegisteredAgentUpsertRequest,
 )
-from .service import AgentService
-from .session_store import SessionStore
 
 
 def create_app(
-    service: AgentService | None = None,
     *,
     enable_a2a: bool = False,
     main_agent_core: MainAgentCore | None = None,
 ) -> FastAPI:
     owned_store = None
-    owned_service = service
     owned_task_runner = None
-    owns_service = owned_service is None
-    if owned_service is None:
-        owned_store = AgentStore(DEFAULT_AGENT_STORE_PATH)
-        default_config = RuntimeFactoryConfig(show_progress=False)
-        owned_service = AgentService(
-            session_store=SessionStore(owned_store),
-            default_config=default_config,
-            runtime_builder=build_runtime,
-            lifecycle_observer=TraceLifecycleObserver(TraceLogger(default_config.trace_path)),
-        )
-        if main_agent_core is None:
-            active_model = resolve_model_selection(config_path=DEFAULT_MODEL_CONFIG_PATH)
-            local_message_responder = DirectModelLocalMessageResponder(build_model_client(active_model))
-            owned_task_runner = DirectLangGraphLocalTaskRunner(build_runtime(default_config))
-            router_model = _router_model_selection()
-            router = DefaultMainAgentRouter(
-                router_model=DirectModelRouterModelClient(
-                    raw_json_client=build_router_json_client(router_model.config),
-                    model_name=router_model.name,
-                )
-            )
-            main_agent_core = MainAgentCore(
-                store=MainAgentStore(owned_store),
-                local_message_responder=local_message_responder,
-                local_task_runner=owned_task_runner,
-                remote_agent_client=DirectA2ARemoteAgentClient(),
-                router=router,
-                task_submitter=owned_service.task_execution_service,
-            )
-
-    if enable_a2a and main_agent_core is None:
-        raise ValueError("enable_a2a requires an injected MainAgentCore.")
+    owned_main_agent_executor = None
+    if main_agent_core is None:
+        (
+            main_agent_core,
+            owned_store,
+            owned_task_runner,
+            owned_main_agent_executor,
+        ) = _build_default_main_agent_core()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         try:
+            main_agent_core.reconcile_startup()
             yield
         finally:
-            if owns_service:
-                owned_service.close()
+            if owned_main_agent_executor is not None:
+                owned_main_agent_executor.shutdown()
             if owned_task_runner is not None:
                 owned_task_runner.close()
             if owned_store is not None:
                 owned_store.close()
 
     app = FastAPI(title="Vermay Agent API", version="0.1.0", lifespan=lifespan)
-    app.state.agent_service = owned_service
     app.state.main_agent_core = main_agent_core
 
     @app.exception_handler(HTTPException)
@@ -176,7 +148,25 @@ def create_app(
         core = _main_agent_core(app)
         if core.store.get_context(context_id) is None:
             raise HTTPException(status_code=404, detail={"code": "context_not_found", "message": "context not found"})
-        return [_message_to_dict(record) for record in core.store.list_context_messages(context_id, limit=limit)]
+        failed_ingresses = {
+            ingress.message_id: ingress
+            for ingress in core.store.list_failed_message_ingresses(context_id)
+        }
+        return [
+            _message_to_dict(record, ingress=failed_ingresses.get(record.message_id))
+            for record in core.store.list_context_messages(context_id, limit=limit)
+        ]
+
+    @api_router.get("/message-ingress/{message_id}")
+    def get_message_ingress(message_id: str) -> dict[str, Any]:
+        core = _main_agent_core(app)
+        ingress = core.store.get_message_ingress(message_id)
+        if ingress is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "message_ingress_not_found", "message": "message ingress not found"},
+            )
+        return _message_ingress_to_dict(ingress)
 
     @api_router.get("/contexts/{context_id}/tasks")
     def list_context_tasks(context_id: str) -> list[dict[str, Any]]:
@@ -184,6 +174,38 @@ def create_app(
         if core.store.get_context(context_id) is None:
             raise HTTPException(status_code=404, detail={"code": "context_not_found", "message": "context not found"})
         return [_task_to_dict(record) for record in core.store.list_context_tasks(context_id)]
+
+    @api_router.get("/tasks/{task_id}/tool-invocations")
+    def list_task_tool_invocations(task_id: str) -> list[dict[str, Any]]:
+        core = _main_agent_core(app)
+        if core.store.get_task(task_id) is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "task_not_found", "message": "task not found"},
+            )
+        return [_tool_invocation_to_dict(record) for record in core.store.list_task_tool_invocations(task_id)]
+
+    @api_router.get("/tasks/{task_id}/observations")
+    def get_task_observations(task_id: str) -> dict[str, Any]:
+        """Return R2's normalized read-model for local ToolNode observations."""
+
+        core = _main_agent_core(app)
+        if core.store.get_task(task_id) is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "task_not_found", "message": "task not found"},
+            )
+        artifact = core.store.get_artifact(f"{task_id}:tool_observations")
+        if artifact is None:
+            return {"task_id": task_id, "observations": [], "artifact_id": None, "execution": None}
+        observations = _observations_from_artifact_parts(artifact.parts)
+        return {
+            "task_id": task_id,
+            "observations": observations,
+            "artifact_id": artifact.artifact_id,
+            "execution": artifact.metadata.get("execution"),
+            "updated_at": artifact.updated_at,
+        }
 
     @api_router.get("/contexts/{context_id}/route-decisions")
     def list_context_route_decisions(context_id: str) -> list[dict[str, Any]]:
@@ -202,12 +224,12 @@ def create_app(
     @api_router.delete("/contexts/{context_id}", status_code=204)
     def delete_context(context_id: str, force: bool = Query(default=False)) -> None:
         core = _main_agent_core(app)
-        if core.store.get_context(context_id) is None:
-            raise HTTPException(status_code=404, detail={"code": "context_not_found", "message": "context not found"})
         try:
-            core.store.delete_context(context_id, force=force)
+            deleted = core.delete_context(context_id, force=force)
         except Exception as exc:
             raise _http_exception(exc) from exc
+        if deleted is None:
+            raise HTTPException(status_code=404, detail={"code": "context_not_found", "message": "context not found"})
 
     @api_router.get("/registered-agents", response_model=list[RegisteredAgentResponse])
     def list_registered_agents(enabled_only: bool = Query(default=False)) -> list[dict[str, Any]]:
@@ -275,7 +297,11 @@ def create_app(
     @api_router.delete("/registered-agents/{agent_id}", status_code=204)
     def delete_registered_agent(agent_id: str) -> None:
         core = _main_agent_core(app)
-        if not core.store.delete_registered_agent(agent_id):
+        try:
+            deleted = core.delete_registered_agent(agent_id)
+        except Exception as exc:
+            raise _http_exception(exc) from exc
+        if not deleted:
             raise HTTPException(
                 status_code=404,
                 detail={"code": "registered_agent_not_found", "message": "registered agent not found"},
@@ -284,6 +310,44 @@ def create_app(
     app.include_router(api_router)
 
     return app
+
+
+def _build_default_main_agent_core() -> tuple[
+    MainAgentCore,
+    AgentStore,
+    DirectLangGraphLocalTaskRunner,
+    InProcessTaskExecutor,
+]:
+    """Compose the one product runtime used by HTTP, A2A, and management APIs."""
+
+    store = AgentStore(DEFAULT_AGENT_STORE_PATH)
+    main_agent_store = MainAgentStore(store)
+    runtime_config = RuntimeFactoryConfig(show_progress=False)
+    active_model = resolve_model_selection(config_path=DEFAULT_MODEL_CONFIG_PATH)
+    local_message_responder = DirectModelLocalMessageResponder(build_model_client(active_model))
+    task_runner = DirectLangGraphLocalTaskRunner(
+        build_runtime(
+            runtime_config,
+            tool_invocation_recorder=MainAgentToolInvocationLedger(main_agent_store),
+        )
+    )
+    task_executor = InProcessTaskExecutor()
+    router_model = _router_model_selection()
+    router = DefaultMainAgentRouter(
+        router_model=DirectModelRouterModelClient(
+            raw_json_client=build_router_json_client(router_model.config),
+            model_name=router_model.name,
+        )
+    )
+    core = MainAgentCore(
+        store=main_agent_store,
+        local_message_responder=local_message_responder,
+        local_task_runner=task_runner,
+        remote_agent_client=DirectA2ARemoteAgentClient(),
+        router=router,
+        task_submitter=task_executor,
+    )
+    return core, store, task_runner, task_executor
 
 
 def _router_model_name(config_path: Path = DEFAULT_MODEL_CONFIG_PATH) -> str:
@@ -362,8 +426,8 @@ def _normalize_title_text(value: str) -> str | None:
     return normalized or None
 
 
-def _message_to_dict(record) -> dict[str, Any]:
-    return {
+def _message_to_dict(record, *, ingress=None) -> dict[str, Any]:
+    payload = {
         "message_id": record.message_id,
         "context_id": record.context_id,
         "role": record.role.value,
@@ -371,6 +435,31 @@ def _message_to_dict(record) -> dict[str, Any]:
         "task_id": record.task_id,
         "metadata": record.metadata,
         "created_at": record.created_at,
+    }
+    failure = _message_ingress_failure_to_dict(ingress)
+    if failure is not None:
+        payload["failure"] = failure
+    return payload
+
+
+def _message_ingress_to_dict(record) -> dict[str, Any]:
+    return {
+        "message_id": record.message_id,
+        "context_id": record.context_id,
+        "state": record.state.value,
+        "failure": _message_ingress_failure_to_dict(record),
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+    }
+
+
+def _message_ingress_failure_to_dict(record) -> dict[str, Any] | None:
+    if record is None or record.state.value != "failed":
+        return None
+    return {
+        "code": record.error_code or "runtime_error",
+        "message": record.error_message or "Agent execution failed.",
+        "retryable": record.error_retryable,
     }
 
 
@@ -393,6 +482,53 @@ def _task_to_dict(record) -> dict[str, Any]:
         "created_at": record.created_at,
         "updated_at": record.updated_at,
     }
+
+
+def _tool_invocation_to_dict(record) -> dict[str, Any]:
+    error = None
+    if record.error_code is not None:
+        error = {
+            "code": record.error_code,
+            "message": record.error_message or "Tool invocation failed.",
+            "retryable": record.error_retryable,
+        }
+    return {
+        "invocation_id": record.invocation_id,
+        "task_id": record.task_id,
+        "context_id": record.context_id,
+        "runtime_thread_id": record.runtime_thread_id,
+        "loop_index": record.loop_index,
+        "tool_call_id": record.tool_call_id,
+        "tool_name": record.tool_name,
+        "normalized_arguments": record.normalized_arguments,
+        "arguments_digest": record.arguments_digest,
+        "capability": record.capability,
+        "side_effect_level": record.side_effect_level,
+        "idempotency_key": record.idempotency_key,
+        "approval_required": record.approval_required,
+        "approval_status": record.approval_status.value,
+        "approval_reason": record.approval_reason,
+        "status": record.status.value,
+        "result_artifact_id": record.result_artifact_id,
+        "error": error,
+        "created_at": record.created_at,
+        "started_at": record.started_at,
+        "completed_at": record.completed_at,
+        "updated_at": record.updated_at,
+    }
+
+
+def _observations_from_artifact_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for part in parts:
+        if not isinstance(part, dict) or part.get("kind") != "data":
+            continue
+        data = part.get("data")
+        if not isinstance(data, dict):
+            continue
+        observations = data.get("observations")
+        if isinstance(observations, list):
+            return [dict(observation) for observation in observations if isinstance(observation, dict)]
+    return []
 
 
 def _route_decision_to_dict(record) -> dict[str, Any]:

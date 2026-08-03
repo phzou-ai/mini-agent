@@ -15,6 +15,8 @@ def latest_ai_message(messages: list[BaseMessage]) -> AIMessage | None:
 def route_after_model(state: AgentState) -> str:
     if state.get("final_answer") is not None:
         return "final"
+    if state.get("stop_reason"):
+        return "stopped"
 
     ai_message = latest_ai_message(state.get("messages", []))
     if ai_message is not None and ai_message.tool_calls:
@@ -31,6 +33,8 @@ def route_after_permission(state: AgentState) -> str:
         return "input_required"
     if permission.get("status") == "approval_required":
         return "approval_required"
+    if state.get("stop_reason"):
+        return "stopped"
     return "denied"
 
 
@@ -42,6 +46,8 @@ def route_after_approval(state: AgentState) -> str:
 
 
 def route_loop_limit(state: AgentState) -> str:
+    if state.get("stop_reason"):
+        return "stopped"
     if state["loop_index"] > state["max_loops"]:
         return "max_loops"
     return "continue"

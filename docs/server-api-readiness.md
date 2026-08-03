@@ -4,7 +4,10 @@
 
 The server is now A2A-first for external service access.
 
-The old local lifecycle REST surface under `/api/sessions` and `/api/tasks` has been removed. The remaining `/api` routes are main-agent management and Web UI diagnostics, not the public task execution boundary.
+The old local lifecycle REST surface under `/api/sessions` and the former
+`/api/tasks/{task_id}` execution routes has been removed. The remaining `/api`
+routes are main-agent management and Web UI diagnostics, not the public task
+execution boundary.
 
 Start the server:
 
@@ -195,6 +198,8 @@ GET    /api/contexts/{context_id}/messages
 GET    /api/contexts/{context_id}/tasks
 GET    /api/contexts/{context_id}/route-decisions
 GET    /api/contexts/{context_id}/delegations
+GET    /api/tasks/{task_id}/tool-invocations
+GET    /api/tasks/{task_id}/observations
 DELETE /api/contexts/{context_id}?force=true
 GET    /api/registered-agents
 POST   /api/registered-agents
@@ -202,6 +207,11 @@ GET    /api/registered-agents/{agent_id}
 POST   /api/registered-agents/{agent_id}/refresh-card
 DELETE /api/registered-agents/{agent_id}
 ```
+
+Context deletion is core-owned and refuses live local or remote Tasks.
+`force=true` does not bypass that safeguard. A registered agent can be
+hard-deleted only if it has no delegation history; otherwise update it with
+`enabled: false` to prevent future delegation while preserving audit facts.
 
 These routes are not the public A2A service boundary. Browser clients should access them through the Next.js BFF.
 

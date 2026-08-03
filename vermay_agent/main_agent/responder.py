@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from typing import Iterator, Protocol
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 
+from vermay_agent.context_builder import default_system_prompt
 from vermay_agent.langgraph_runtime.nodes import ModelClient
 
-from .models import MessageRecord, MessageRole
+from .context import text_from_parts, to_langchain_message
+from .models import MessageRecord
 
 
 class LocalMessageResponder(Protocol):
@@ -14,11 +16,12 @@ class LocalMessageResponder(Protocol):
 
 
 class DirectModelLocalMessageResponder:
-    def __init__(self, model: ModelClient) -> None:
+    def __init__(self, model: ModelClient, *, system_prompt: str | None = None) -> None:
         self.model = model
+        self.system_prompt = system_prompt or default_system_prompt()
 
     def respond(self, messages: list[MessageRecord]) -> list[dict]:
-        invocation = self.model.invoke(messages=[_to_langchain_message(message) for message in messages], tools=[])
+        invocation = self.model.invoke(messages=self._model_messages(messages), tools=[])
         content = _string_content(invocation.message)
         return [{"kind": "text", "text": content}]
 
@@ -27,20 +30,10 @@ class DirectModelLocalMessageResponder:
         if not callable(stream_text):
             yield _text_from_parts(self.respond(messages))
             return
-        yield from stream_text([_to_langchain_message(message) for message in messages], [])
+        yield from stream_text(self._model_messages(messages), [])
 
-
-def _to_langchain_message(message: MessageRecord) -> BaseMessage:
-    text = _text_from_parts(message.parts)
-    if message.role == MessageRole.SYSTEM:
-        return SystemMessage(content=text)
-    if message.role == MessageRole.AGENT:
-        return AIMessage(content=text)
-    return HumanMessage(content=text)
-
-
-def _text_from_parts(parts: list[dict]) -> str:
-    return "\n".join(str(part.get("text", "")).strip() for part in parts if isinstance(part.get("text"), str)).strip()
+    def _model_messages(self, messages: list[MessageRecord]) -> list[BaseMessage]:
+        return [SystemMessage(content=self.system_prompt), *[to_langchain_message(message) for message in messages]]
 
 
 def _string_content(message: AIMessage) -> str:

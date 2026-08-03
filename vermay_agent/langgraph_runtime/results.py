@@ -12,6 +12,9 @@ class RunResult:
     interrupt_message: str | None = None
     state: dict[str, Any] = field(default_factory=dict)
     stop_message: str | None = None
+    stop_reason: str | None = None
+    observations: list[dict[str, Any]] = field(default_factory=list)
+    execution: dict[str, Any] = field(default_factory=dict)
 
     @property
     def status(self) -> str:
@@ -40,6 +43,9 @@ class RunResult:
             "interrupt": _safe_payload(self.interrupt),
             "interrupt_message": self.interrupt_message,
             "stop_message": self.stop_message,
+            "stop_reason": self.stop_reason,
+            "observations": _safe_payload(self.observations),
+            "execution": _safe_payload(self.execution),
         }
         if include_state:
             payload["state"] = _safe_payload(self.state)

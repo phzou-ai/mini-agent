@@ -90,6 +90,38 @@ def test_ollama_client_raises_protocol_error_for_invalid_response(monkeypatch):
     assert raised.value.retryable is False
 
 
+def test_ollama_client_uses_the_smaller_task_deadline_timeout(monkeypatch):
+    captured: dict[str, float] = {}
+
+    def fake_urlopen(request, timeout):
+        captured["timeout"] = timeout
+        return FakeResponse({"message": {"content": '{"action":"final","content":"done"}'}})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = OllamaModelClient(timeout_seconds=20)
+
+    response = client.invoke(
+        [Message(role="user", content="hello")],
+        tools=[],
+        timeout_seconds=3.5,
+    )
+
+    assert response.content == "done"
+    assert captured["timeout"] == 3.5
+
+
+def test_ollama_client_rejects_plain_text_when_task_action_is_required(monkeypatch):
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda request, timeout: FakeResponse(
+            {"message": {"content": "Let me check all nodes. Calling tool ssh_kubectl_get."}}
+        ),
+    )
+
+    with pytest.raises(ModelProtocolError, match="expected a JSON object with an action field"):
+        OllamaModelClient().invoke([Message(role="user", content="check nodes")], tools=[])
+
+
 def test_ollama_stream_raises_retryable_connection_error(monkeypatch):
     monkeypatch.setattr(
         "urllib.request.urlopen",

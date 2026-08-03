@@ -149,6 +149,12 @@ POST   /api/registered-agents/{agent_id}/refresh-card
 DELETE /api/registered-agents/{agent_id}
 ```
 
+Context deletion is a core-owned lifecycle operation. A Context containing a
+live local or remote Task returns a conflict; `force=true` is accepted for API
+compatibility but does not erase live work. Registered-agent deletion is
+allowed only when the registration has no retained delegation history; disable
+an agent with `POST /api/registered-agents` instead when history must remain.
+
 The server is local-only by default and has no authentication. Keep the default bind address unless an access-control layer is added.
 
 ## Local Storage

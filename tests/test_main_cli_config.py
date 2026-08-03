@@ -228,7 +228,11 @@ def test_serve_command_accepts_host_and_port(monkeypatch):
     def fake_run(*args, **kwargs):
         calls.append((args, kwargs))
 
+    def fake_create_app(**kwargs):
+        return "app"
+
     monkeypatch.setattr("uvicorn.run", fake_run)
+    monkeypatch.setattr("vermay_agent.api.app.create_app", fake_create_app)
 
     run_serve_command(["--host", "0.0.0.0", "--port", "9000"])
 
@@ -259,4 +263,3 @@ def test_serve_command_can_enable_a2a_routes(monkeypatch):
 def test_serve_command_rejects_conflicting_a2a_flags():
     with pytest.raises(SystemExit, match="--enable-a2a and --disable-a2a cannot be used together"):
         run_serve_command(["--enable-a2a", "--disable-a2a"])
-
