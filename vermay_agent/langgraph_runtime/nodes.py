@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import re
 import time
 from typing import Any, Protocol
 
@@ -9,7 +10,7 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.types import interrupt
 
-from vermay_agent.errors import ModelProviderError
+from vermay_agent.errors import ModelProtocolError, ModelProviderError
 from vermay_agent.execution_context import ExecutionContextRegistry
 from vermay_agent.permission import PermissionGate
 from vermay_agent.progress import ProgressReporter
@@ -193,6 +194,14 @@ def call_model_node(components: GraphComponents):
             },
         )
 
+        declared_tool_name = _declared_unexecuted_tool_call(response, components.tools)
+        if declared_tool_name is not None:
+            raise ModelProtocolError(
+                "Invalid model final answer: declared a call to tool "
+                f"{declared_tool_name!r} without emitting a structured tool call.",
+                provider="runtime",
+            )
+
         updates: dict = {
             "messages": [response],
             "model_calls": int(state.get("model_calls") or 0) + 1,
@@ -224,6 +233,33 @@ def call_model_node(components: GraphComponents):
         return updates
 
     return node
+
+
+def _declared_unexecuted_tool_call(response: AIMessage, tools: list[BaseTool]) -> str | None:
+    """Detect the narrow case where a final answer narrates a pending tool call.
+
+    A final answer is allowed to mention a tool, for example when explaining
+    that a capability is unavailable. It must not claim that it is *calling*
+    a registered tool while returning no structured ``tool_calls``: ToolNode
+    would never receive that call, yet the task would otherwise be completed.
+    """
+
+    if response.tool_calls or not isinstance(response.content, str):
+        return None
+
+    for tool in tools:
+        if _final_answer_declares_tool_call(response.content, tool.name):
+            return tool.name
+    return None
+
+
+def _final_answer_declares_tool_call(content: str, tool_name: str) -> bool:
+    escaped_name = re.escape(tool_name)
+    patterns = (
+        rf"\bcalling\s+(?:the\s+)?tools?\s*:?\s*[`'\"“”]?{escaped_name}\b",
+        rf"(?:正在)?调用\s*(?:工具\s*)?[`'\"“”]?{escaped_name}\b",
+    )
+    return any(re.search(pattern, content, flags=re.IGNORECASE) is not None for pattern in patterns)
 
 
 def check_permission_node(components: GraphComponents):

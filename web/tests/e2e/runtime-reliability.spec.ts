@@ -198,6 +198,186 @@ test.describe("Single-host runtime reliability", () => {
     await expect(page.getByTestId("agent-direct-message-failure")).toHaveCount(0)
   })
 
+  test("renders a failed task instead of leaving its answer loading", async ({
+    page,
+  }) => {
+    const now = Date.now()
+    const contextId = `ctx-reliability-failed-task-${now}`
+    const taskId = `task-reliability-failed-task-${now}`
+    const threadId = `thread-reliability-failed-task-${now}`
+    const prompt = `run failing task ${now}`
+    const startedAt = new Date(now).toISOString()
+    const failedAt = new Date(now + 1000).toISOString()
+    const contexts: unknown[] = []
+    const failureMetadata = {
+      localStatus: "failed",
+      localThreadId: threadId,
+      runtimeThreadId: threadId,
+      localErrorCode: "model_error",
+      localErrorMessage: "Model request failed.",
+      localErrorRetryable: true,
+    }
+
+    await mockAgentRegressionBootstrap(page, contexts)
+    await page.route("**/api/bff/agent/a2a/message-stream", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: [
+          `event: task\ndata: ${JSON.stringify({
+            jsonrpc: "2.0",
+            id: "reliability-failed-task",
+            result: {
+              kind: "task",
+              id: taskId,
+              contextId,
+              status: { state: "working", timestamp: startedAt },
+              metadata: {
+                localStatus: "running",
+                localThreadId: threadId,
+                runtimeThreadId: threadId,
+              },
+            },
+          })}\n\n`,
+          `event: status-update\ndata: ${JSON.stringify({
+            jsonrpc: "2.0",
+            id: "reliability-failed-task",
+            result: {
+              kind: "status-update",
+              taskId,
+              contextId,
+              status: { state: "failed", timestamp: failedAt },
+              final: true,
+              metadata: {
+                localEventId: 2,
+                localEventType: "task_failed",
+                localEventCreatedAt: failedAt,
+                ...failureMetadata,
+              },
+            },
+          })}\n\n`,
+        ].join(""),
+      })
+    })
+    await page.route(`**/api/bff/agent/a2a/tasks/${taskId}`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          kind: "task",
+          id: taskId,
+          contextId,
+          status: { state: "failed", timestamp: failedAt },
+          metadata: failureMetadata,
+        }),
+      })
+    })
+    await page.route(
+      `**/api/bff/agent/contexts/${contextId}/messages`,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              message_id: "msg-reliability-failed-task-user",
+              context_id: contextId,
+              role: "user",
+              parts: [{ kind: "text", text: prompt }],
+              task_id: taskId,
+              metadata: { executionMode: "task" },
+              created_at: startedAt,
+            },
+          ]),
+        })
+      }
+    )
+    await page.route(
+      `**/api/bff/agent/contexts/${contextId}/tasks`,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([
+            {
+              task_id: taskId,
+              context_id: contextId,
+              status: "failed",
+              input_message_id: "msg-reliability-failed-task-user",
+              output_message_id: null,
+              runtime_thread_id: threadId,
+              error_code: "model_error",
+              error_message: "Model request failed.",
+              attempt: 1,
+              created_at: startedAt,
+              updated_at: failedAt,
+            },
+          ]),
+        })
+      }
+    )
+    await page.route(
+      `**/api/bff/agent/contexts/${contextId}/route-decisions`,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: "[]",
+        })
+      }
+    )
+    await page.route(
+      `**/api/bff/agent/contexts/${contextId}/delegations`,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: "[]",
+        })
+      }
+    )
+    await page.route(
+      `**/api/bff/agent/a2a/tasks/${taskId}/events**`,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "text/event-stream",
+          body: "",
+        })
+      }
+    )
+
+    await page.goto("/agent")
+    await expect(page.getByTestId("agent-console")).toBeVisible()
+    await page.getByRole("button", { name: "New session" }).click()
+    await page.getByTestId("agent-mode-task").click()
+    await page.getByTestId("agent-composer-input").fill(prompt)
+    await page.getByTestId("agent-composer-send").click()
+
+    const failure = page.getByTestId("agent-task-failure")
+    await expect(failure).toBeVisible()
+    await expect(failure).toContainText("Task failed")
+    await expect(failure).toContainText("Model request failed.")
+    await expect(failure).toContainText("model_error")
+    await expect(page.getByText("Waiting for final answer...")).toHaveCount(0)
+    await expectLatestTaskStatus(page, "failed")
+
+    contexts.push({
+      context_id: contextId,
+      title: prompt,
+      metadata: {},
+      created_at: startedAt,
+      updated_at: failedAt,
+    })
+    await page.reload()
+
+    await expect(page.getByTestId("agent-task-failure")).toBeVisible()
+    await expect(page.getByTestId("agent-task-failure")).toContainText(
+      "Model request failed."
+    )
+    await expect(page.getByText("Waiting for final answer...")).toHaveCount(0)
+  })
+
   test("separates A2A state from local process state in the Inspector", async ({
     page,
   }) => {

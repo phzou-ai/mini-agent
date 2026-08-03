@@ -9,7 +9,7 @@ from pydantic import Field
 
 from vermay_agent.checkpointing import build_sqlite_checkpointer
 from vermay_agent.execution_context import ExecutionContextRegistry, current_execution_context
-from vermay_agent.errors import ModelProviderError
+from vermay_agent.errors import ModelProtocolError, ModelProviderError
 from vermay_agent.model_clients import OllamaModelClient, OpenAICompatibleModelClient
 from vermay_agent.permission import PermissionGate
 from vermay_agent.progress import ProgressReporter
@@ -240,6 +240,43 @@ def test_langgraph_runtime_run_returns_final_answer():
     runtime = LangGraphAgentRuntime(model=FakeModel(AIMessage(content="final answer")))
 
     assert runtime.run("hello") == "final answer"
+
+
+def test_langgraph_runtime_rejects_final_answer_that_declares_an_unexecuted_tool():
+    executed = {"value": False}
+
+    def should_not_run(value: str) -> dict:
+        executed["value"] = True
+        return {"value": value}
+
+    tool = structured_tool(
+        func=should_not_run,
+        name="echo",
+        description="Echo a value.",
+        args_schema=EchoArgs,
+        dangerous=False,
+    )
+    runtime = LangGraphAgentRuntime(
+        model=FakeModel(AIMessage(content="Let me check that. Calling tool echo.")),
+        tools=[tool],
+    )
+
+    with pytest.raises(ModelProtocolError, match="without emitting a structured tool call"):
+        runtime.start("echo hello", thread_id="thread-unexecuted-tool")
+
+    assert executed["value"] is False
+
+
+def test_langgraph_runtime_allows_a_final_answer_that_only_mentions_a_tool():
+    runtime = LangGraphAgentRuntime(
+        model=FakeModel(AIMessage(content="You can call tool echo to inspect a value.")),
+        tools=[make_echo_tool()],
+    )
+
+    result = runtime.start("how can I inspect this?", thread_id="thread-tool-mention")
+
+    assert result.status == "completed"
+    assert result.final_answer == "You can call tool echo to inspect a value."
 
 
 def test_langgraph_runtime_resumes_model_requested_user_input_on_same_thread():

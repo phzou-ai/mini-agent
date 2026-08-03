@@ -1455,8 +1455,8 @@ def test_main_agent_core_model_protocol_failure_does_not_complete_task(tmp_path)
     task = store.get_task(result.task_id)
     assert task is not None
     assert task.status == TaskStatus.FAILED
-    assert task.error_code == "model_error"
-    assert task.error_message == "Model request failed."
+    assert task.error_code == "model_protocol_error"
+    assert task.error_message == "The selected model returned an invalid task action."
     assert [event.type for event in store.list_task_events(result.task_id)] == [
         "task_created",
         "task_started",

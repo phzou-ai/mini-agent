@@ -2,7 +2,7 @@
 
 ## Status
 
-**Implemented, 2026-08-02.**
+**Implemented, updated 2026-08-03.**
 
 This contract closes the presentation gap for a failed top-level direct
 Message. It does not change A2A success or error semantics, create a Task, or
@@ -69,9 +69,35 @@ That allows a newly created Context to be promoted from its local draft state
 to the persisted server Context even when no successful stream result carried
 the Context identity.
 
+A JSON-RPC error delivered over the direct-message SSE stream is terminal for
+that submission. The browser aborts its local stream reader immediately after
+handling the error so the sender's cleanup releases the composer, even when an
+intermediate proxy leaves the HTTP response open. This closes the failed
+attempt; it does not retry it automatically.
+
 This lookup returns only the delivery state, Context identity, and public
 failure contract needed by the UI. It must not expose internal exceptions,
 provider credentials, prompt state, or route/execution details.
+
+## User-Initiated Retry
+
+When a direct Message failure is marked `retryable`, the Web UI exposes an
+explicit **Retry** action on that failure activity. The action is intentionally
+a new top-level Message submission, not a replay of the failed delivery:
+
+- it creates a fresh `messageId` and keeps the original failed ingress row;
+- it sends the original text to the same Context;
+- it preserves the original execution mode and any explicit remote-agent route
+  and target; and
+- it leaves an unsent composer draft untouched.
+
+The original `messageId` remains idempotent: sending it again still replays its
+stored failure and must not route, invoke a model, or execute tools again. This
+distinction keeps a user-initiated retry auditable as a new request while
+preserving the existing ingress contract.
+
+Retry is opt-in and only applies to failed direct Messages. It does not retry
+Tasks, tool calls, write operations, or an `in_progress` ingress automatically.
 
 ## Separation From Task Failure
 
@@ -79,7 +105,7 @@ provider credentials, prompt state, or route/execution details.
 | --- | --- | --- |
 | Durable owner | `main_agent_message_ingress` | `main_agent_tasks` |
 | Failure form | ingress `failed` plus public error contract | process `failed` plus lifecycle events and task error fields |
-| UI representation | failure activity attached to the input Message | Task status, events, and task failure information |
+| UI representation | failure activity attached to the input Message | dedicated Task failure activity when no final answer exists, plus task status and events |
 | Duplicate input | replay the same persisted error; never reroute | Task lifecycle and continuation rules apply |
 
 An error must not create a fake Task solely to make it visible in the UI.
@@ -93,11 +119,16 @@ failure.
 - The rendered item is explicitly a failure, never a successful assistant
   response.
 - A retryable flag is preserved end to end.
+- A retryable direct Message offers an explicit Retry action that creates a
+  fresh `messageId` in the same Context while retaining the original failure.
 - Repeating the same `messageId` returns the stored error and creates neither a
   second failure activity nor another route/model/tool invocation.
 - The direct error stream path can recover the persisted Context identity for a
   newly created session.
-- Task failure rendering and task lifecycle contracts remain unchanged.
+- A terminal direct-message SSE error releases the composer instead of leaving
+  the Retry action disabled behind an open stream.
+- A failed Task without a final answer renders a visible failure activity from
+  its safe task error projection; it must never remain a typing indicator.
 
 ## Non-Goals
 
@@ -120,8 +151,12 @@ startup converts a residual prior-process ingress to retryable
   UI session after an SSE error.
 - The Web UI renders the projection as a distinct failure activity rather than
   an assistant Message or synthetic Task.
+- Frontend regression coverage verifies that Retry uses a new `messageId`,
+  preserves the Context and execution mode, and does not overwrite an unsent
+  composer draft.
 - Focused backend coverage verifies the read projection and ingress lookup.
 - Frontend regression coverage verifies the public SSE error presentation and
   excludes provider diagnostics.
-- Full repository regression after this increment: `492 passed`; focused
-  Playwright migration regression: `2 passed`.
+- Failed Task snapshots and terminal `status-update` events project only safe
+  `localErrorCode` and `localErrorMessage` metadata. They do not expose raw
+  provider or runtime exception details.

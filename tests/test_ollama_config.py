@@ -88,6 +88,20 @@ def test_ollama_client_raises_protocol_error_for_invalid_response(monkeypatch):
 
     assert raised.value.provider == "ollama"
     assert raised.value.retryable is False
+    assert "raw=" not in str(raised.value)
+
+
+def test_ollama_client_treats_success_error_envelope_as_provider_error(monkeypatch):
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda request, timeout: FakeResponse({"error": "cloud model temporarily unavailable"}),
+    )
+
+    with pytest.raises(ModelProviderError, match="temporarily unavailable") as raised:
+        OllamaModelClient().invoke([Message(role="user", content="hello")], tools=[])
+
+    assert raised.value.provider == "ollama"
+    assert raised.value.retryable is True
 
 
 def test_ollama_client_uses_the_smaller_task_deadline_timeout(monkeypatch):
@@ -120,6 +134,31 @@ def test_ollama_client_rejects_plain_text_when_task_action_is_required(monkeypat
 
     with pytest.raises(ModelProtocolError, match="expected a JSON object with an action field"):
         OllamaModelClient().invoke([Message(role="user", content="check nodes")], tools=[])
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "The weather is clear and 23C.",
+        '{"answer":"The weather is clear and 23C."}',
+        '{"content":"The weather is clear and 23C."}',
+    ],
+)
+def test_ollama_client_accepts_post_tool_final_answer_compatibility_shape(monkeypatch, content):
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda request, timeout: FakeResponse({"message": {"content": content}}),
+    )
+
+    response = OllamaModelClient().invoke(
+        [
+            Message(role="user", content="check weather"),
+            Message(role="tool", name="weather_forecast", content='{"temp_c":"23"}'),
+        ],
+        tools=[],
+    )
+
+    assert response.content == "The weather is clear and 23C."
 
 
 def test_ollama_stream_raises_retryable_connection_error(monkeypatch):

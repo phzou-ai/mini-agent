@@ -87,6 +87,12 @@ export type AgentTaskEvent = {
 
 export type AgentMessageRole = "user" | "assistant" | "system"
 
+export type AgentMessageRequest = {
+  executionMode: AgentA2AExecutionMode
+  route?: AgentA2ARoute
+  targetAgentId?: string
+}
+
 export type AgentMessage = {
   id: string
   role: AgentMessageRole
@@ -95,6 +101,7 @@ export type AgentMessage = {
   taskId?: string | null
   loading?: boolean
   failure?: AgentMessageFailure
+  request?: AgentMessageRequest
 }
 
 export type AgentMessageFailure = {

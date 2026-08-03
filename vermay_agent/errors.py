@@ -14,6 +14,7 @@ class AgentErrorCode(str, Enum):
     TASK_NOT_FOUND = "task_not_found"
     ARTIFACT_NOT_FOUND = "artifact_not_found"
     MODEL_ERROR = "model_error"
+    MODEL_PROTOCOL_ERROR = "model_protocol_error"
     TOOL_ERROR = "tool_error"
     MCP_ERROR = "mcp_error"
     CHECKPOINT_ERROR = "checkpoint_error"
@@ -181,12 +182,19 @@ class ArtifactNotFoundError(AgentError):
 
 
 class ModelError(AgentError):
-    def __init__(self, message: str, *, retryable: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = False,
+        code: AgentErrorCode = AgentErrorCode.MODEL_ERROR,
+        public_message: str = "Model request failed.",
+    ) -> None:
         super().__init__(
             message,
-            code=AgentErrorCode.MODEL_ERROR,
+            code=code,
             http_status=502,
-            public_message="Model request failed.",
+            public_message=public_message,
         )
         self.retryable = retryable
 
@@ -206,9 +214,21 @@ class ModelProviderError(ModelError):
 
 
 class ModelProtocolError(ModelError):
-    def __init__(self, message: str, *, provider: str) -> None:
-        super().__init__(message, retryable=False)
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str,
+        reason: str = "invalid_model_output",
+    ) -> None:
+        super().__init__(
+            message,
+            retryable=False,
+            code=AgentErrorCode.MODEL_PROTOCOL_ERROR,
+            public_message="The selected model returned an invalid task action.",
+        )
         self.provider = provider
+        self.reason = reason
 
 
 class ToolError(AgentError):

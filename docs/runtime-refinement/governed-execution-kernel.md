@@ -165,6 +165,13 @@ When a model returns a final answer, the runtime records a `completion` object
 inside the execution summary. `completion.claimed` means only that a final
 answer was produced. It is not a semantic proof that the answer is correct.
 
+Before a final answer can be recorded, the runtime also rejects the narrow
+protocol violation where an answer explicitly says it is calling a registered
+tool (for example, `Calling tool ssh_kubectl_get`) but contains no structured
+tool call. That text would otherwise bypass `ToolNode`, create no observation,
+and incorrectly complete the Task. The Task fails as a model protocol error
+instead; ordinary final answers that merely mention a tool remain valid.
+
 The surrounding fields are deterministic facts derived from recorded
 observations:
 

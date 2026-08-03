@@ -51,21 +51,27 @@ def task_to_a2a_payload(
             input_request=input_request,
             message_id=f"input-{task.task_id}",
         )
+    metadata: dict[str, Any] = {
+        "localContextId": task.context_id,
+        "localTaskId": task.task_id,
+        **thread_metadata(task.runtime_thread_id, include_runtime_alias=True),
+        "inputMessageId": task.input_message_id,
+        "outputMessageId": task.output_message_id,
+        "localStatus": task.status.value,
+        "localAttempt": task.attempt,
+        **({"inputRequest": input_request} if input_request is not None else {}),
+    }
+    _add_task_failure_metadata(
+        metadata,
+        error_code=task.error_code,
+        error_message=task.error_message,
+    )
     return {
         "kind": "task",
         "id": task.task_id,
         "contextId": task.context_id,
         "status": status,
-        "metadata": {
-            "localContextId": task.context_id,
-            "localTaskId": task.task_id,
-            **thread_metadata(task.runtime_thread_id, include_runtime_alias=True),
-            "inputMessageId": task.input_message_id,
-            "outputMessageId": task.output_message_id,
-            "localStatus": task.status.value,
-            "localAttempt": task.attempt,
-            **({"inputRequest": input_request} if input_request is not None else {}),
-        },
+        "metadata": metadata,
     }
 
 
@@ -84,6 +90,22 @@ def task_event_to_a2a_status_update(event: TaskEventRecord, *, task: TaskRecord)
             input_request=input_request,
             message_id=f"input-event-{event.event_id}",
         )
+    metadata: dict[str, Any] = {
+        "localEventId": event.event_id,
+        "localEventType": event.type,
+        "localEventCreatedAt": event.created_at,
+        **thread_metadata(task.runtime_thread_id, include_runtime_alias=True),
+        "localStatus": event.status.value,
+        **({"inputRequest": input_request} if isinstance(input_request, dict) else {}),
+    }
+    if event.status is TaskStatus.FAILED:
+        _add_task_failure_metadata(
+            metadata,
+            error_code=event.payload.get("error_code") or task.error_code,
+            error_message=event.payload.get("error_message") or task.error_message,
+            retryable=event.payload.get("retryable"),
+        )
+
     return {
         "kind": "status-update",
         "taskId": event.task_id,
@@ -94,15 +116,29 @@ def task_event_to_a2a_status_update(event: TaskEventRecord, *, task: TaskRecord)
             A2ATaskState.CANCELED,
             A2ATaskState.FAILED,
         },
-        "metadata": {
-            "localEventId": event.event_id,
-            "localEventType": event.type,
-            "localEventCreatedAt": event.created_at,
-            **thread_metadata(task.runtime_thread_id, include_runtime_alias=True),
-            "localStatus": event.status.value,
-            **({"inputRequest": input_request} if isinstance(input_request, dict) else {}),
-        },
+        "metadata": metadata,
     }
+
+
+def _add_task_failure_metadata(
+    metadata: dict[str, Any],
+    *,
+    error_code: object,
+    error_message: object,
+    retryable: object | None = None,
+) -> None:
+    """Add the public failure projection without exposing runtime diagnostics."""
+
+    if not isinstance(error_code, str) or not error_code:
+        return
+    metadata["localErrorCode"] = error_code
+    metadata["localErrorMessage"] = (
+        error_message
+        if isinstance(error_message, str) and error_message
+        else "Agent execution failed."
+    )
+    if isinstance(retryable, bool):
+        metadata["localErrorRetryable"] = retryable
 
 
 def _input_request_message(

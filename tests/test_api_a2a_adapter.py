@@ -70,6 +70,15 @@ class FakeLocalTaskRunner:
         )
 
 
+class FailingLocalTaskRunner(FakeLocalTaskRunner):
+    def run(self, messages: list[MessageRecord], *, thread_id: str) -> LocalTaskRunResult:
+        raise ModelProviderError(
+            "Ollama request failed: <urlopen error [Errno 61] Connection refused>",
+            provider="ollama",
+            retryable=True,
+        )
+
+
 class SlowFakeLocalTaskRunner(FakeLocalTaskRunner):
     def run(self, messages: list[MessageRecord], *, thread_id: str) -> LocalTaskRunResult:
         time.sleep(0.05)
@@ -1201,6 +1210,58 @@ def test_a2a_route_message_stream_emits_local_task_events(tmp_path):
     assert '"state": "completed"' in response.text
     assert "task answer" in response.text
     assert "event: error" not in response.text
+    agent_store.close()
+
+
+def test_a2a_failed_task_projects_safe_failure_metadata(tmp_path):
+    agent_store = AgentStore(tmp_path / "agent.sqlite")
+    main_store = MainAgentStore(agent_store)
+    core = MainAgentCore(
+        store=main_store,
+        local_message_responder=FakeLocalMessageResponder(),
+        local_task_runner=FailingLocalTaskRunner(),
+    )
+    adapter = A2AAdapter(main_agent_core=core)
+
+    payload = adapter.send_message_payload(
+        {
+            "jsonrpc": "2.0",
+            "id": "req-failed-task",
+            "method": "message/send",
+            "params": {
+                "message": {
+                    "kind": "message",
+                    "role": "user",
+                    "messageId": "msg-failed-task",
+                    "parts": [{"kind": "text", "text": "run failing task"}],
+                },
+                "metadata": {"executionMode": "task"},
+            },
+        }
+    )
+
+    task = payload["result"]
+    assert task["kind"] == "task"
+    assert task["status"]["state"] == "failed"
+    assert task["metadata"]["localErrorCode"] == "model_error"
+    assert task["metadata"]["localErrorMessage"] == "Model request failed."
+    assert "Ollama" not in str(task)
+    assert "Connection refused" not in str(task)
+
+    events = adapter.wait_for_task_events(
+        task["id"], after_event_id=0, timeout_seconds=0.0
+    ).events
+    failed = next(
+        event["result"]
+        for event in events
+        if event["result"]["kind"] == "status-update"
+        and event["result"]["status"]["state"] == "failed"
+    )
+    assert failed["metadata"]["localErrorCode"] == "model_error"
+    assert failed["metadata"]["localErrorMessage"] == "Model request failed."
+    assert failed["metadata"]["localErrorRetryable"] is True
+    assert "Ollama" not in str(failed)
+    assert "Connection refused" not in str(failed)
     agent_store.close()
 
 

@@ -117,5 +117,9 @@ def test_model_errors_preserve_type_and_retryability():
     assert error_info_from_exception(provider_error).retryable is True
     assert provider_error.retryable is True
     assert provider_error.status_code == 503
-    assert error_info_from_exception(protocol_error).code == AgentErrorCode.MODEL_ERROR
+    assert error_info_from_exception(protocol_error).code == AgentErrorCode.MODEL_PROTOCOL_ERROR
+    assert (
+        error_info_from_exception(protocol_error).public_message
+        == "The selected model returned an invalid task action."
+    )
     assert protocol_error.retryable is False

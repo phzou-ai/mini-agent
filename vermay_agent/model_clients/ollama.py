@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 from typing import Iterator
@@ -8,7 +9,7 @@ from typing import Iterator
 from vermay_agent.errors import ModelProtocolError, ModelProviderError
 from vermay_agent.types import Message, ModelResponse, ToolCall
 
-from .json_decision import parse_json_decision
+from .json_decision import parse_json_decision, strip_reasoning_markup
 
 
 PROVIDER = "ollama"
@@ -86,13 +87,30 @@ class OllamaModelClient:
 
         try:
             body = json.loads(raw)
-            content = body["message"]["content"]
         except (KeyError, json.JSONDecodeError, TypeError) as exc:
-            raise _protocol_error(exc, raw) from exc
-        if not isinstance(content, str):
-            raise _protocol_error(TypeError("message.content must be a string"), raw)
+            raise _protocol_error(exc) from exc
 
-        return self._parse_content(content)
+        if not isinstance(body, dict):
+            raise _protocol_error(TypeError("response body must be an object"))
+        provider_error = body.get("error")
+        if isinstance(provider_error, str) and provider_error:
+            raise ModelProviderError(
+                f"Ollama request failed: {provider_error}",
+                provider=PROVIDER,
+                retryable=True,
+            )
+
+        try:
+            content = body["message"]["content"]
+        except (KeyError, TypeError) as exc:
+            raise _protocol_error(exc) from exc
+        if not isinstance(content, str):
+            raise _protocol_error(TypeError("message.content must be a string"))
+
+        return self._parse_content(
+            content,
+            allow_unstructured_final=_has_tool_observation(messages),
+        )
 
     def stream_text(self, messages: list[Message], tools: list[dict]) -> Iterator[str]:
         if tools:
@@ -121,9 +139,9 @@ class OllamaModelClient:
                     try:
                         body = json.loads(line)
                     except json.JSONDecodeError as exc:
-                        raise _protocol_error(exc, line) from exc
+                        raise _protocol_error(exc) from exc
                     if not isinstance(body, dict):
-                        raise _protocol_error(TypeError("stream event must be an object"), line)
+                        raise _protocol_error(TypeError("stream event must be an object"))
                     error = body.get("error")
                     if isinstance(error, str) and error:
                         raise ModelProviderError(
@@ -133,10 +151,10 @@ class OllamaModelClient:
                         )
                     message = body.get("message", {})
                     if not isinstance(message, dict):
-                        raise _protocol_error(TypeError("stream message must be an object"), line)
+                        raise _protocol_error(TypeError("stream message must be an object"))
                     content = message.get("content", "")
                     if not isinstance(content, str):
-                        raise _protocol_error(TypeError("stream message.content must be a string"), line)
+                        raise _protocol_error(TypeError("stream message.content must be a string"))
                     if content:
                         yield content
                     if body.get("done") is True:
@@ -192,13 +210,27 @@ class OllamaModelClient:
             )
         return min(float(self.timeout_seconds), override)
 
-    def _parse_content(self, content: str) -> ModelResponse:
+    def _parse_content(
+        self,
+        content: str,
+        *,
+        allow_unstructured_final: bool = False,
+    ) -> ModelResponse:
         decision = parse_json_decision(content)
         if decision is None:
+            fallback = _post_tool_final_content(content) if allow_unstructured_final else None
+            if fallback is not None:
+                return ModelResponse(content=fallback)
             raise ModelProtocolError(
                 "Invalid Ollama agent action: expected a JSON object with an action field.",
                 provider=PROVIDER,
+                reason="missing_action",
             )
+
+        if allow_unstructured_final:
+            fallback = _legacy_final_content(decision)
+            if fallback is not None:
+                return ModelResponse(content=fallback)
 
         return self._parse_decision(decision)
 
@@ -210,6 +242,8 @@ class OllamaModelClient:
                 "Final answer: {\"action\":\"final\",\"content\":\"...\"}\n"
                 "Tool call: {\"action\":\"tool_call\",\"name\":\"tool_name\",\"arguments\":{...}}\n"
                 "Do not emit reasoning, <think> tags, markdown, or prose outside the JSON object.\n"
+                "Never describe a pending tool call in a final action. If a tool is needed, return "
+                "action=tool_call; use action=final only after the required tool observations exist.\n"
                 "Only call tools listed below. Dangerous tools may require approval.\n"
                 "Use request_user_input only for missing tool arguments, never for permission. "
                 "Call dangerous tools directly and let the runtime request approval.\n"
@@ -256,6 +290,7 @@ class OllamaModelClient:
             raise ModelProtocolError(
                 "Invalid Ollama agent action: action is required.",
                 provider=PROVIDER,
+                reason="missing_action",
             )
 
         if action == "tool_call":
@@ -265,6 +300,7 @@ class OllamaModelClient:
                 raise ModelProtocolError(
                     "Invalid Ollama tool_call action: name and object arguments are required.",
                     provider=PROVIDER,
+                    reason="invalid_tool_call",
                 )
             return ModelResponse(
                 content=f"Calling tool {name}.",
@@ -280,6 +316,7 @@ class OllamaModelClient:
         raise ModelProtocolError(
             f"Invalid Ollama agent action: unsupported action {action!r}.",
             provider=PROVIDER,
+            reason="unsupported_action",
         )
 
 
@@ -287,8 +324,48 @@ def _retryable_http_status(status_code: int) -> bool:
     return status_code in {408, 409, 425, 429} or status_code >= 500
 
 
-def _protocol_error(exc: Exception, raw: str) -> ModelProtocolError:
+def _has_tool_observation(messages: list[Message]) -> bool:
+    return any(message.role == "tool" for message in messages)
+
+
+def _legacy_final_content(decision: dict) -> str | None:
+    if decision.get("action") is not None:
+        return None
+    for field in ("content", "answer", "final_answer"):
+        value = decision.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _post_tool_final_content(content: str) -> str | None:
+    """Accept a plain final answer only after a real tool observation.
+
+    The first Task turn must still use the action protocol so the runtime never
+    infers or executes a tool from prose. After a tool result, however, some
+    models occasionally return their final answer as ordinary text despite the
+    JSON instruction. That text is safe to treat as a final answer because it
+    cannot trigger a tool; LangGraph separately rejects text that claims an
+    unexecuted registered tool call.
+    """
+
+    if _has_unbalanced_think_tags(content):
+        return None
+    final = strip_reasoning_markup(content).strip()
+    if not final or final.startswith("{"):
+        return None
+    return final
+
+
+def _has_unbalanced_think_tags(content: str) -> bool:
+    return len(re.findall(r"<think(?:\s[^>]*)?>", content, flags=re.IGNORECASE)) != len(
+        re.findall(r"</think\s*>", content, flags=re.IGNORECASE)
+    )
+
+
+def _protocol_error(exc: Exception) -> ModelProtocolError:
     return ModelProtocolError(
-        f"Invalid Ollama response: {exc}; raw={raw[:1000]}",
+        f"Invalid Ollama response: {type(exc).__name__}",
         provider=PROVIDER,
+        reason="invalid_response_envelope",
     )

@@ -60,6 +60,7 @@ import {
 import type {
   AgentA2AAgentCard,
   AgentA2AExecutionMode,
+  AgentA2ARoute,
   AgentA2AStreamEnvelope,
   AgentA2ATask,
   AgentContextRecord,
@@ -67,6 +68,7 @@ import type {
   AgentDelegation,
   AgentMessage,
   AgentMessageFailure,
+  AgentMessageRequest,
   AgentModelConfig,
   AgentRegisteredAgent,
   AgentRouteDecision,
@@ -109,6 +111,13 @@ type AgentRegistryForm = {
   name: string
   cardUrl: string
   keywords: string
+}
+
+type SendMessageOptions = {
+  prompt?: string
+  contextId?: string
+  request?: AgentMessageRequest
+  preserveComposerInput?: boolean
 }
 
 const EVENT_LABELS: Record<
@@ -433,6 +442,42 @@ function taskStatusFromA2A(
   )
 }
 
+function taskErrorFromA2AMetadata(
+  metadata?: Record<string, unknown> | null
+): NonNullable<AgentTask["error"]> | null {
+  const code = metadataString(metadata ?? undefined, "localErrorCode")
+  const message = metadataString(metadata ?? undefined, "localErrorMessage")
+  if (!code && !message) return null
+
+  return {
+    code: code || "task_failed",
+    message: message || "Agent execution failed.",
+  }
+}
+
+function taskErrorFromA2AEvent(event: AgentTaskEvent) {
+  const metadata = event.payload.metadata
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return null
+  }
+  return taskErrorFromA2AMetadata(metadata as Record<string, unknown>)
+}
+
+function taskFailureForDisplay(
+  task?: AgentTask
+): NonNullable<AgentTask["error"]> | null {
+  if (!task || isMessageDisplayTask(task) || task.status !== "failed") {
+    return null
+  }
+
+  return (
+    task.error ?? {
+      code: "task_failed",
+      message: "The task failed before it produced a final answer.",
+    }
+  )
+}
+
 function threadIdFromMetadata(metadata?: Record<string, unknown> | null) {
   return (
     metadataString(metadata ?? undefined, "runtimeThreadId") ||
@@ -522,6 +567,10 @@ function storedMessagesToConversation(
         content: textFromParts(message.parts),
         createdAt: message.created_at,
         taskId: message.task_id ?? null,
+        request:
+          message.role === "user"
+            ? messageRequestFromMetadata(message.metadata)
+            : undefined,
       }
       return message.failure
         ? [
@@ -554,6 +603,29 @@ function approvalTasksToConversation(
         "",
         task.updated_at,
         true,
+        task.task_id
+      )
+    )
+}
+
+function failedTasksToConversation(
+  tasks: AgentContextTaskRecord[],
+  messages: AgentStoredMessage[]
+): AgentMessage[] {
+  const messageIds = new Set(messages.map((message) => message.message_id))
+  return tasks
+    .filter(
+      (task) =>
+        normalizeStatus(task.status) === "failed" &&
+        !task.output_message_id &&
+        messageIds.has(task.input_message_id)
+    )
+    .map((task) =>
+      buildAssistantConversationMessage(
+        `task-failure:${task.task_id}`,
+        "",
+        task.updated_at,
+        false,
         task.task_id
       )
     )
@@ -685,7 +757,8 @@ function buildUserConversationMessage(
   messageId: string,
   prompt: string,
   createdAt: string,
-  taskId?: string | null
+  taskId?: string | null,
+  request?: AgentMessageRequest
 ): AgentMessage {
   return {
     id: messageId,
@@ -693,6 +766,7 @@ function buildUserConversationMessage(
     content: prompt,
     createdAt,
     taskId,
+    request,
   }
 }
 
@@ -715,6 +789,37 @@ function buildAssistantConversationMessage(
 
 function directMessageFailureId(inputMessageId: string) {
   return `failure:${inputMessageId}`
+}
+
+function inputMessageIdFromFailureMessage(message: AgentMessage) {
+  return message.id.startsWith("failure:")
+    ? message.id.slice("failure:".length)
+    : ""
+}
+
+function messageRequestFromMetadata(
+  metadata: Record<string, unknown>
+): AgentMessageRequest {
+  const executionMode = metadata.executionMode
+  const route = metadata.route
+  const targetAgentId = metadata.targetAgentId
+
+  return {
+    executionMode:
+      executionMode === "message" ||
+      executionMode === "task" ||
+      executionMode === "auto"
+        ? executionMode
+        : "auto",
+    ...(route === "local_message" ||
+    route === "local_task" ||
+    route === "remote_agent"
+      ? { route: route as AgentA2ARoute }
+      : {}),
+    ...(typeof targetAgentId === "string" && targetAgentId
+      ? { targetAgentId }
+      : {}),
+  }
 }
 
 function buildDirectMessageFailure(
@@ -956,6 +1061,7 @@ export function AgentConsole() {
         snapshot.metadata,
         task.local_process_status
       )
+      const taskError = taskErrorFromA2AMetadata(snapshot.metadata)
       return {
         ...previous,
         [snapshot.id]: {
@@ -965,7 +1071,11 @@ export function AgentConsole() {
           local_process_status: stateProjection.local_process_status,
           status,
           updated_at: updatedAt,
-          metadata: snapshot.metadata ?? task.metadata,
+          error: status === "failed" ? taskError ?? task.error : task.error,
+          metadata: {
+            ...(task.metadata ?? {}),
+            ...(snapshot.metadata ?? {}),
+          },
         },
       }
     })
@@ -1055,6 +1165,7 @@ export function AgentConsole() {
               undefined,
               event.local_process_status ?? task.local_process_status
             )
+            const taskError = taskErrorFromA2AEvent(event)
             return {
               ...previous,
               [event.task_id]: {
@@ -1063,6 +1174,7 @@ export function AgentConsole() {
                 local_process_status: stateProjection.local_process_status,
                 status,
                 updated_at: event.created_at,
+                error: status === "failed" ? taskError ?? task.error : task.error,
               },
             }
           })
@@ -1125,6 +1237,7 @@ export function AgentConsole() {
           [
             ...storedMessagesToConversation(storedMessages),
             ...approvalTasksToConversation(storedTasks, storedMessages),
+            ...failedTasksToConversation(storedTasks, storedMessages),
           ]
         ),
       }))
@@ -1253,9 +1366,33 @@ export function AgentConsole() {
     }
   }, [closeStream, loadContextMessages])
 
-  async function sendMessage() {
-    const prompt = input.trim()
-    if (!prompt || busy || isCurrentSessionTaskActive) return
+  async function sendMessage(options?: SendMessageOptions) {
+    const prompt = (options?.prompt ?? input).trim()
+    if (!prompt) return
+    if (busy) {
+      setError("The previous request is still finishing. Try again in a moment.")
+      return
+    }
+    if (isCurrentSessionTaskActive) {
+      setError(
+        "This session has an active task. Wait for it to finish or cancel it before sending another request."
+      )
+      return
+    }
+
+    const messageRequest: AgentMessageRequest = options?.request ?? {
+      executionMode,
+      ...(selectedRemoteAgentId
+        ? {
+            route: "remote_agent",
+            targetAgentId: selectedRemoteAgentId,
+          }
+        : {}),
+    }
+    const requestContextId = options?.contextId ?? currentSessionId
+    const requestRoute =
+      messageRequest.route ??
+      (messageRequest.targetAgentId ? "remote_agent" : undefined)
 
     if (currentTask && isApprovalRequiredStatus(currentTask.status)) {
       setInput("")
@@ -1284,7 +1421,7 @@ export function AgentConsole() {
     const outgoingMessageId = `msg-${crypto.randomUUID()}`
     const outgoingCreatedAt = new Date().toISOString()
     const draftContextId = `draft:${crypto.randomUUID()}`
-    const displayContextId = currentSessionId || draftContextId
+    const displayContextId = requestContextId || draftContextId
     const pendingActivityId = `pending:${outgoingMessageId}`
     const pendingAssistantMessageId = `${pendingActivityId}:assistant`
 
@@ -1292,21 +1429,26 @@ export function AgentConsole() {
     messageStreamAbortRef.current = abortController
     setBusy(true)
     setError("")
-    setInput("")
+    if (!options?.preserveComposerInput) {
+      setInput("")
+    }
     setSelectedEventId("")
     const pendingTask: AgentTask = {
       task_id: pendingActivityId,
       session_id: displayContextId,
       thread_id: "",
-      a2a_state: executionMode === "message" ? null : "working",
-      local_process_status: executionMode === "message" ? null : "running",
+      a2a_state: messageRequest.executionMode === "message" ? null : "working",
+      local_process_status:
+        messageRequest.executionMode === "message" ? null : "running",
       status: "running",
       input: prompt,
       attempt: 1,
       final_answer: null,
       metadata: {
-        displayKind: executionMode === "message" ? "message" : "task",
-        displayTitle: executionMode === "message" ? "Direct message" : prompt,
+        displayKind:
+          messageRequest.executionMode === "message" ? "message" : "task",
+        displayTitle:
+          messageRequest.executionMode === "message" ? "Direct message" : prompt,
       },
       created_at: outgoingCreatedAt,
       updated_at: outgoingCreatedAt,
@@ -1340,7 +1482,8 @@ export function AgentConsole() {
         outgoingMessageId,
         prompt,
         outgoingCreatedAt,
-        pendingActivityId
+        pendingActivityId,
+        messageRequest
       ),
       buildAssistantConversationMessage(
         pendingAssistantMessageId,
@@ -1495,12 +1638,17 @@ export function AgentConsole() {
     try {
       await openAgentA2AMessageStream(
         {
-          contextId: currentSessionId || undefined,
+          contextId: requestContextId || undefined,
           messageId: outgoingMessageId,
           text: prompt,
-          executionMode,
-          ...(selectedRemoteAgentId
-            ? { route: "remote_agent", targetAgentId: selectedRemoteAgentId }
+          executionMode: messageRequest.executionMode,
+          ...(requestRoute
+            ? {
+                route: requestRoute,
+                ...(messageRequest.targetAgentId
+                  ? { targetAgentId: messageRequest.targetAgentId }
+                  : {}),
+              }
             : {}),
         },
         {
@@ -1509,6 +1657,9 @@ export function AgentConsole() {
             receivedStreamEvent = true
             if (envelope.error) {
               const failure = errorFromA2AStreamEnvelope(envelope)
+              // A JSON-RPC error is terminal. Abort so the sender's finally
+              // block releases the composer even if a proxy keeps SSE open.
+              abortController.abort()
               void recoverMessageStreamFailure(failure)
               return
             }
@@ -1519,7 +1670,7 @@ export function AgentConsole() {
             if (result.kind === "message") {
               const metadata = result.metadata ?? {}
               const messageText = textFromParts(result.parts)
-              promoteDraftContext(result.contextId)
+              promoteDraftContext(result.contextId, pendingAssistantMessageId)
               if (
                 result.contextId &&
                 diagnosticsRequestedForContext !== result.contextId
@@ -1570,10 +1721,11 @@ export function AgentConsole() {
                     outgoingMessageId,
                     prompt,
                     outgoingCreatedAt,
-                    displayTask.task_id
+                    displayTask.task_id,
+                    messageRequest
                   ),
                   buildAssistantConversationMessage(
-                    pendingAssistantMessageId,
+                    result.messageId,
                     streamedMessageText,
                     displayTask.updated_at,
                     true,
@@ -1614,10 +1766,11 @@ export function AgentConsole() {
                   outgoingMessageId,
                   prompt,
                   outgoingCreatedAt,
-                  displayTask.task_id
+                  displayTask.task_id,
+                  messageRequest
                 ),
                 buildAssistantConversationMessage(
-                  pendingAssistantMessageId,
+                  result.messageId,
                   textFromParts(result.parts),
                   displayTask.updated_at,
                   false,
@@ -1657,7 +1810,8 @@ export function AgentConsole() {
                   outgoingMessageId,
                   prompt,
                   outgoingCreatedAt,
-                  task.task_id
+                  task.task_id,
+                  messageRequest
                 ),
                 buildAssistantConversationMessage(
                   pendingAssistantMessageId,
@@ -1725,8 +1879,12 @@ export function AgentConsole() {
                   undefined,
                   event.local_process_status ?? task.local_process_status
                 )
+                const taskError = taskErrorFromA2AEvent(event)
                 const inputRequest = result.metadata?.inputRequest
-                const metadata = { ...(task.metadata ?? {}) }
+                const metadata = {
+                  ...(task.metadata ?? {}),
+                  ...(result.metadata ?? {}),
+                }
                 if (
                   event.status === "interrupted" &&
                   inputRequest &&
@@ -1744,6 +1902,10 @@ export function AgentConsole() {
                     local_process_status: stateProjection.local_process_status,
                     status: event.status ?? task.status,
                     updated_at: event.created_at,
+                    error:
+                      event.status === "failed"
+                        ? taskError ?? task.error
+                        : task.error,
                     metadata,
                   },
                 }
@@ -1801,7 +1963,7 @@ export function AgentConsole() {
         }
       )
     } catch (sendError) {
-      if (!receivedStreamEvent) {
+      if (!receivedStreamEvent && !options?.preserveComposerInput) {
         setInput(prompt)
       }
       setError(getRequestErrorMessage(sendError, "Failed to send message"))
@@ -1814,6 +1976,30 @@ export function AgentConsole() {
       }
       setBusy(false)
     }
+  }
+
+  function retryDirectMessage(failureMessage: AgentMessage) {
+    if (!failureMessage.failure?.retryable) return
+    if (busy) {
+      setError("The previous request is still finishing. Try again in a moment.")
+      return
+    }
+
+    const inputMessageId = inputMessageIdFromFailureMessage(failureMessage)
+    const originalMessage = conversationMessages.find(
+      (message) => message.id === inputMessageId && message.role === "user"
+    )
+    if (!currentSessionId || !originalMessage?.content.trim()) {
+      setError("The original request is no longer available to retry.")
+      return
+    }
+
+    void sendMessage({
+      prompt: originalMessage.content,
+      contextId: currentSessionId,
+      request: originalMessage.request ?? { executionMode: "auto" },
+      preserveComposerInput: true,
+    })
   }
 
   async function newSession() {
@@ -2291,6 +2477,7 @@ export function AgentConsole() {
                 copiedMessageId={copiedMessageId}
                 onCopyMessage={copyMessage}
                 onSelectMessage={selectMessage}
+                onRetryMessage={retryDirectMessage}
                 onResumeTask={resumeTask}
                 onSubmitTaskInput={submitTaskInput}
                 resumingTaskId={resumingTaskId}
@@ -2824,6 +3011,7 @@ function MessageList({
   busy,
   onCopyMessage,
   onSelectMessage,
+  onRetryMessage,
   onResumeTask,
   onSubmitTaskInput,
   resumingTaskId,
@@ -2836,6 +3024,7 @@ function MessageList({
   busy: boolean
   onCopyMessage: (message: AgentMessage) => void
   onSelectMessage: (message: AgentMessage) => void
+  onRetryMessage: (message: AgentMessage) => void
   onResumeTask: (taskId: string, approved: boolean) => void
   onSubmitTaskInput: (taskId: string, value: string) => void
   resumingTaskId: string
@@ -2890,6 +3079,7 @@ function MessageList({
                 submittingInput={message.taskId === submittingTaskInputId}
                 onSelect={() => onSelectMessage(message)}
                 onCopy={() => onCopyMessage(message)}
+                onRetry={() => onRetryMessage(message)}
                 onResume={(approved) => {
                   if (message.taskId) onResumeTask(message.taskId, approved)
                 }}
@@ -2919,6 +3109,7 @@ function MessageItem({
   submittingInput,
   onSelect,
   onCopy,
+  onRetry,
   onResume,
   onSubmitInput,
 }: {
@@ -2931,11 +3122,16 @@ function MessageItem({
   submittingInput: boolean
   onSelect: () => void
   onCopy: () => void
+  onRetry: () => void
   onResume: (approved: boolean) => void
   onSubmitInput: (value: string) => void
 }) {
   const isUser = message.role === "user"
   const isDirectMessageFailure = Boolean(message.failure)
+  const taskFailure = taskFailureForDisplay(task)
+  const isTaskFailure = Boolean(
+    !isUser && !isDirectMessageFailure && taskFailure && !message.content
+  )
   const isInputPending = Boolean(
     !isUser &&
       !isDirectMessageFailure &&
@@ -2944,7 +3140,11 @@ function MessageItem({
       !message.content
   )
   const isLoadingOnly =
-    message.loading && !message.content && !isInputPending && !isDirectMessageFailure
+    message.loading &&
+    !message.content &&
+    !isInputPending &&
+    !isDirectMessageFailure &&
+    !isTaskFailure
   const hasTaskEvents = Boolean(task && !isMessageDisplayTask(task))
 
   return (
@@ -2981,7 +3181,7 @@ function MessageItem({
                 ? "max-w-[520px] rounded-[4px_0_4px_4px] border border-[#E2E8F0] bg-[#EFF6FF] text-[#0F172A]"
                 : cn(
                     "max-w-[844px] rounded-[0_4px_4px_4px] border bg-white text-[#1F0013]",
-                    isDirectMessageFailure
+                    isDirectMessageFailure || isTaskFailure
                       ? "border-[#FCA5A5] bg-[#FFF7F7]"
                       : "border-[#E7E5E8]",
                     isInputPending ? "w-full" : "w-fit"
@@ -3001,7 +3201,13 @@ function MessageItem({
             }}
           >
             {isDirectMessageFailure && message.failure ? (
-              <DirectMessageFailureCard failure={message.failure} />
+              <DirectMessageFailureCard
+                failure={message.failure}
+                retrying={busy}
+                onRetry={onRetry}
+              />
+            ) : isTaskFailure && taskFailure ? (
+              <TaskFailureCard failure={taskFailure} />
             ) : isInputPending && task ? (
               isGeneralInputRequiredTask(task) ? (
                 <TaskInputRequiredCard
@@ -3083,10 +3289,40 @@ function MessageItem({
   )
 }
 
-function DirectMessageFailureCard({
+function TaskFailureCard({
   failure,
 }: {
+  failure: NonNullable<AgentTask["error"]>
+}) {
+  return (
+    <div
+      className="flex min-w-0 items-start gap-2.5"
+      data-testid="agent-task-failure"
+    >
+      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[#B91C1C]" />
+      <div className="min-w-0">
+        <p className="m-0 text-[13px] font-semibold leading-5 text-[#7F1D1D]">
+          Task failed
+        </p>
+        <p className="m-0 mt-1 break-words text-[13px] leading-5 text-[#7F1D1D] [overflow-wrap:anywhere]">
+          {failure.message}
+        </p>
+        <span className="mt-2 inline-flex rounded-full bg-[#FEE2E2] px-2 py-0.5 font-mono text-[10px] leading-4 text-[#B91C1C]">
+          {failure.code}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function DirectMessageFailureCard({
+  failure,
+  retrying,
+  onRetry,
+}: {
   failure: AgentMessageFailure
+  retrying: boolean
+  onRetry: () => void
 }) {
   return (
     <div
@@ -3101,9 +3337,26 @@ function DirectMessageFailureCard({
         <p className="m-0 mt-1 break-words text-[13px] leading-5 text-[#7F1D1D] [overflow-wrap:anywhere]">
           {failure.message}
         </p>
-        <span className="mt-2 inline-flex rounded-full bg-[#FEE2E2] px-2 py-0.5 font-mono text-[10px] leading-4 text-[#B91C1C]">
-          {failure.code}
-        </span>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="inline-flex rounded-full bg-[#FEE2E2] px-2 py-0.5 font-mono text-[10px] leading-4 text-[#B91C1C]">
+            {failure.code}
+          </span>
+          {failure.retryable && (
+            <button
+              className="inline-flex h-7 items-center gap-1.5 rounded-[4px] border border-[#FCA5A5] bg-white px-2.5 text-[11px] font-semibold text-[#B91C1C] transition hover:border-[#DC2626] hover:bg-[#FEF2F2] disabled:cursor-not-allowed disabled:opacity-60"
+              type="button"
+              disabled={retrying}
+              data-testid="agent-direct-message-retry"
+              onClick={(event) => {
+                event.stopPropagation()
+                onRetry()
+              }}
+            >
+              <RefreshCcw className="h-3.5 w-3.5" />
+              {retrying ? "Retrying..." : "Retry"}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )
