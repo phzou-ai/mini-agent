@@ -24,6 +24,22 @@ deterministic Playwright server. It therefore does not reuse or overwrite the
 normal `web/.next` directory used by a local `pnpm dev` session. This allows the
 regression command to run without stopping the developer's frontend server.
 
+### Browser fixture isolation
+
+Browser tests that exercise an asynchronous Task error or cancellation branch
+must own the complete Task lifecycle through BFF fixtures. They must not create
+a real local Task and then depend on the model, SQLite timing, or a background
+worker to make cleanup succeed. In particular, a rejected cancellation leaves
+the Task active; the browser must show that error rather than bypassing the
+core's active-Task deletion protection. The corresponding E2E test therefore
+uses a mocked working Task, cancellation `409`, Task snapshot, diagnostics, and
+Context deletion response.
+
+This keeps the test focused on the browser contract while preserving the real
+backend safety rule: an active Task must finish or be successfully canceled
+before its Context can be deleted. Live model and MCP behavior remains an
+optional, separately configured check.
+
 ## Focused Single-Host Reliability Gate
 
 Run the focused reliability matrix when changing ingress, A2A streaming,
@@ -92,7 +108,7 @@ Model failures have two deliberately separate codes:
 | Code | Meaning | Retry guidance |
 | --- | --- | --- |
 | `model_error` | The model provider or transport could not complete the request, such as a timeout, connection error, rate limit, or upstream `5xx`. | May be retryable when the provider classifies it as transient. |
-| `model_protocol_error` | The provider responded, but the response did not satisfy the Task action contract. | Not retryable automatically. The runtime safely accepts a plain final answer only after a real tool observation; it never infers or executes a tool from prose. |
+| `model_protocol_error` | The provider responded, but its output did not satisfy the configured native or explicit compatibility tool-call contract. | Not retryable automatically. The runtime never infers or executes a tool from prose. |
 
 This distinction prevents a Task action-format problem from being presented as
 an unavailable model. Internal parser diagnostics and raw provider bodies stay
@@ -102,9 +118,17 @@ The frontend represents normalized failures as `RequestError`, carrying the same
 
 For a retryable failed direct Message, the frontend exposes a user-triggered
 Retry action. It submits the original input with a new `messageId` in the same
-Context; it never reuses the failed ingress ID. The frontend must not
-automatically retry tasks, write operations, or tool calls because they may be
-non-idempotent or may already have produced side effects.
+Context; it never reuses the failed ingress ID.
+
+A retryable failed local Task can also expose a separate, user-triggered
+Retry action. The first-party management endpoint creates one new Task attempt
+in the same Context; it never replays the failed Task, its `taskId`, or its
+LangGraph thread. The core permits this only when the failed Task is locally
+owned, has persisted `error_retryable=true`, and has no recorded potentially
+side-effecting tool invocation. Repeated clicks converge on the same direct
+retry child through a durable retry-lineage uniqueness constraint. The frontend
+must not automatically retry Tasks, write operations, or tool calls because
+they may be non-idempotent or may already have produced side effects.
 
 Provider URLs, credentials, raw response bodies, and connection exception strings are not public error messages. Backend logs retain the internal exception for local diagnosis. Failed task records and transcript messages store or display the public message.
 
@@ -114,10 +138,15 @@ For a failed local Task, the A2A Task snapshot and its terminal
 ```json
 {
   "localErrorCode": "model_error",
-  "localErrorMessage": "Model request failed."
+  "localErrorMessage": "Model request failed.",
+  "localErrorRetryable": true
 }
 ```
 
 The browser uses this projection to replace a pending task answer with a
 visible Task failure activity. It does not turn the error into a successful
 assistant Message or expose raw provider diagnostics.
+
+The first-party Context Task read model persists the same information as
+`error_code`, `error_message`, and `error_retryable`, so a reload does not
+need to infer retry behavior from an individual event payload.

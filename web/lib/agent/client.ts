@@ -107,6 +107,13 @@ export function listAgentContextTasks(contextId: string) {
   )
 }
 
+export function retryAgentTask(taskId: string) {
+  return requestPost<AgentContextTaskRecord>(
+    `/api/bff/agent/tasks/${encodeURIComponent(taskId)}/retry`,
+    {}
+  )
+}
+
 export function listAgentContextRouteDecisions(contextId: string) {
   return requestGet<AgentRouteDecision[]>(
     `/api/bff/agent/contexts/${encodeURIComponent(contextId)}/route-decisions`

@@ -48,6 +48,7 @@ import {
   listAgentContextTasks,
   listAgentRegisteredAgents,
   refreshAgentRegisteredAgent,
+  retryAgentTask,
   resumeAgentA2ATask,
   submitAgentA2ATaskInput,
   updateAgentContext,
@@ -452,6 +453,7 @@ function taskErrorFromA2AMetadata(
   return {
     code: code || "task_failed",
     message: message || "Agent execution failed.",
+    retryable: metadata?.localErrorRetryable === true,
   }
 }
 
@@ -474,6 +476,7 @@ function taskFailureForDisplay(
     task.error ?? {
       code: "task_failed",
       message: "The task failed before it produced a final answer.",
+      retryable: false,
     }
   )
 }
@@ -525,6 +528,25 @@ function mergeConversationMessages(
 ) {
   const byId = new Map(previous.map((message) => [message.id, message]))
   for (const message of incoming) {
+    // Task SSE uses a client-only pending assistant message until the durable
+    // final assistant Message is available. Once that Message arrives, it is
+    // the canonical conversation record; retaining the pending entry would
+    // render the same answer twice.
+    if (
+      message.role === "assistant" &&
+      message.taskId &&
+      !message.id.startsWith("pending:")
+    ) {
+      for (const [messageId, existing] of byId) {
+        if (
+          messageId.startsWith("pending:") &&
+          existing.role === "assistant" &&
+          existing.taskId === message.taskId
+        ) {
+          byId.delete(messageId)
+        }
+      }
+    }
     byId.set(message.id, {
       ...byId.get(message.id),
       ...message,
@@ -718,6 +740,7 @@ function storedTaskToAgentTask(
       ? {
           code: task.error_code,
           message: task.error_message || task.error_code,
+          retryable: task.error_retryable === true,
         }
       : null,
     model: task.model,
@@ -969,12 +992,16 @@ export function AgentConsole() {
   const [updatingSessionId, setUpdatingSessionId] = useState("")
   const [resumingTaskId, setResumingTaskId] = useState("")
   const [submittingTaskInputId, setSubmittingTaskInputId] = useState("")
+  const [retryingTaskId, setRetryingTaskId] = useState("")
   const [error, setError] = useState("")
   const messageStreamAbortRef = useRef<AbortController | null>(null)
   const hydratingTaskEventsRef = useRef(new Set<string>())
+  const completedTaskEventHydrationsRef = useRef(new Set<string>())
+  const taskEventRecoveryAttemptsRef = useRef(new Set<string>())
   const currentTaskIdRef = useRef("")
   const eventsByTaskRef = useRef<Record<string, AgentTaskEvent[]>>({})
   const tasksRef = useRef<Record<string, AgentTask>>({})
+  const refreshContextMessagesRef = useRef<(contextId: string) => void>(() => {})
   const userSessionSelectionRef = useRef(false)
 
   const taskList = useMemo(
@@ -1110,8 +1137,14 @@ export function AgentConsole() {
     [applyA2ATaskSnapshot]
   )
 
-  const hydrateTaskEvents = useCallback((taskId: string) => {
-    if (!taskId || hydratingTaskEventsRef.current.has(taskId)) return
+  const hydrateTaskEvents = useCallback((taskId: string, knownTerminal = false) => {
+    if (
+      !taskId ||
+      hydratingTaskEventsRef.current.has(taskId) ||
+      completedTaskEventHydrationsRef.current.has(taskId)
+    ) {
+      return
+    }
 
     hydratingTaskEventsRef.current.add(taskId)
     const afterEventId = Math.max(
@@ -1123,14 +1156,28 @@ export function AgentConsole() {
     let finished = false
     let source: EventSource | null = null
 
-    const finish = () => {
+    // EventSource reports a normal EOF from a finite terminal Task stream as an
+    // error. Remember terminal replays so that EOF cannot restart hydration.
+    const taskIsTerminal = () =>
+      knownTerminal || isTerminalStatus(tasksRef.current[taskId]?.status)
+
+    const finish = (terminal = false) => {
       if (finished) return
       finished = true
       source?.close()
       hydratingTaskEventsRef.current.delete(taskId)
+      if (terminal) {
+        completedTaskEventHydrationsRef.current.add(taskId)
+        taskEventRecoveryAttemptsRef.current.delete(taskId)
+      }
     }
 
-    const timeout = window.setTimeout(finish, 1800)
+    const refreshTaskContext = (fallbackContextId?: string) => {
+      void reconcileA2ATaskSnapshot(taskId).finally(() => {
+        const contextId = tasksRef.current[taskId]?.session_id || fallbackContextId
+        if (contextId) refreshContextMessagesRef.current(contextId)
+      })
+    }
 
     source = openAgentA2ATaskEventStream(taskId, {
       after: afterEventId,
@@ -1192,14 +1239,26 @@ export function AgentConsole() {
         }
 
         if (event.status === "interrupted" || isTerminalStatus(event.status)) {
-          void reconcileA2ATaskSnapshot(event.task_id)
-          window.clearTimeout(timeout)
-          finish()
+          finish(true)
+          refreshTaskContext(event.session_id)
         }
       },
-      onDone: () => {
-        window.clearTimeout(timeout)
+      onError: () => {
+        if (finished) return
+        if (taskIsTerminal()) {
+          finish(true)
+          return
+        }
+
+        const alreadyRecovered = taskEventRecoveryAttemptsRef.current.has(taskId)
         finish()
+        if (alreadyRecovered) return
+
+        taskEventRecoveryAttemptsRef.current.add(taskId)
+        refreshTaskContext(tasksRef.current[taskId]?.session_id)
+      },
+      onDone: () => {
+        finish(taskIsTerminal())
       },
     })
   }, [reconcileA2ATaskSnapshot])
@@ -1273,7 +1332,10 @@ export function AgentConsole() {
           return next
         })
         setCurrentTaskId(latestTask.task_id)
-        hydrateTaskEvents(latestTask.task_id)
+        hydrateTaskEvents(
+          latestTask.task_id,
+          isTerminalStatus(latestTask.status)
+        )
         setSessions((previous) =>
           previous.map((session) =>
             session.session_id === contextId
@@ -1301,6 +1363,12 @@ export function AgentConsole() {
     },
     [hydrateTaskEvents, loadContextDiagnostics]
   )
+
+  useEffect(() => {
+    refreshContextMessagesRef.current = (contextId) => {
+      void loadContextMessages(contextId)
+    }
+  }, [loadContextMessages])
 
   const reloadRegisteredAgents = useCallback(async () => {
     const agents = await listAgentRegisteredAgents()
@@ -1949,7 +2017,12 @@ export function AgentConsole() {
             }
 
             if (result.kind === "status-update" && result.final) {
-              void reconcileA2ATaskSnapshot(event.task_id)
+              // The artifact may have updated a client-only pending assistant
+              // message. Reconcile the durable Context after the Task reaches
+              // a terminal A2A state so that record replaces the pending item.
+              void reconcileA2ATaskSnapshot(event.task_id).finally(() => {
+                refreshContextMessagesRef.current(event.session_id)
+              })
             }
           },
           onError: (streamError) => {
@@ -2240,6 +2313,32 @@ export function AgentConsole() {
     }
   }
 
+  async function retryFailedTask(taskId: string) {
+    const task = tasks[taskId]
+    if (
+      !task ||
+      task.status !== "failed" ||
+      !task.error?.retryable ||
+      retryingTaskId
+    )
+      return
+
+    setError("")
+    setRetryingTaskId(taskId)
+    try {
+      const retriedTask = await retryAgentTask(taskId)
+      setCurrentSessionId(retriedTask.context_id)
+      setCurrentTaskId(retriedTask.task_id)
+      setSelectedMessageId(retriedTask.input_message_id)
+      setSelectedEventId("")
+      await loadContextMessages(retriedTask.context_id)
+    } catch (retryError) {
+      setError(getRequestErrorMessage(retryError, "Failed to retry task"))
+    } finally {
+      setRetryingTaskId("")
+    }
+  }
+
   async function submitTaskInput(taskId: string, value: string) {
     const task = tasks[taskId]
     const text = value.trim()
@@ -2423,7 +2522,7 @@ export function AgentConsole() {
     setCurrentTaskId(message.taskId)
     setCurrentSessionId(task?.session_id ?? currentSessionId)
     if (!eventsByTask[message.taskId]?.length) {
-      hydrateTaskEvents(message.taskId)
+      hydrateTaskEvents(message.taskId, isTerminalStatus(task?.status))
     }
     setSelectedEventId(preferredEventId(eventsByTask[message.taskId] ?? []))
   }
@@ -2478,10 +2577,12 @@ export function AgentConsole() {
                 onCopyMessage={copyMessage}
                 onSelectMessage={selectMessage}
                 onRetryMessage={retryDirectMessage}
+                onRetryTask={retryFailedTask}
                 onResumeTask={resumeTask}
                 onSubmitTaskInput={submitTaskInput}
                 resumingTaskId={resumingTaskId}
                 submittingTaskInputId={submittingTaskInputId}
+                retryingTaskId={retryingTaskId}
                 busy={busy}
               />
             ) : (
@@ -3012,10 +3113,12 @@ function MessageList({
   onCopyMessage,
   onSelectMessage,
   onRetryMessage,
+  onRetryTask,
   onResumeTask,
   onSubmitTaskInput,
   resumingTaskId,
   submittingTaskInputId,
+  retryingTaskId,
 }: {
   messages: AgentMessage[]
   tasks: Record<string, AgentTask>
@@ -3025,10 +3128,12 @@ function MessageList({
   onCopyMessage: (message: AgentMessage) => void
   onSelectMessage: (message: AgentMessage) => void
   onRetryMessage: (message: AgentMessage) => void
+  onRetryTask: (taskId: string) => void
   onResumeTask: (taskId: string, approved: boolean) => void
   onSubmitTaskInput: (taskId: string, value: string) => void
   resumingTaskId: string
   submittingTaskInputId: string
+  retryingTaskId: string
 }) {
   const listRef = useRef<HTMLDivElement>(null)
   const latestMessage = messages.at(-1)
@@ -3077,9 +3182,13 @@ function MessageList({
                 busy={busy}
                 resuming={message.taskId === resumingTaskId}
                 submittingInput={message.taskId === submittingTaskInputId}
+                retryingTask={message.taskId === retryingTaskId}
                 onSelect={() => onSelectMessage(message)}
                 onCopy={() => onCopyMessage(message)}
                 onRetry={() => onRetryMessage(message)}
+                onRetryTask={() => {
+                  if (message.taskId) onRetryTask(message.taskId)
+                }}
                 onResume={(approved) => {
                   if (message.taskId) onResumeTask(message.taskId, approved)
                 }}
@@ -3107,9 +3216,11 @@ function MessageItem({
   busy,
   resuming,
   submittingInput,
+  retryingTask,
   onSelect,
   onCopy,
   onRetry,
+  onRetryTask,
   onResume,
   onSubmitInput,
 }: {
@@ -3120,9 +3231,11 @@ function MessageItem({
   busy: boolean
   resuming: boolean
   submittingInput: boolean
+  retryingTask: boolean
   onSelect: () => void
   onCopy: () => void
   onRetry: () => void
+  onRetryTask: () => void
   onResume: (approved: boolean) => void
   onSubmitInput: (value: string) => void
 }) {
@@ -3207,7 +3320,11 @@ function MessageItem({
                 onRetry={onRetry}
               />
             ) : isTaskFailure && taskFailure ? (
-              <TaskFailureCard failure={taskFailure} />
+              <TaskFailureCard
+                failure={taskFailure}
+                retrying={retryingTask}
+                onRetry={onRetryTask}
+              />
             ) : isInputPending && task ? (
               isGeneralInputRequiredTask(task) ? (
                 <TaskInputRequiredCard
@@ -3291,8 +3408,12 @@ function MessageItem({
 
 function TaskFailureCard({
   failure,
+  retrying,
+  onRetry,
 }: {
   failure: NonNullable<AgentTask["error"]>
+  retrying: boolean
+  onRetry: () => void
 }) {
   return (
     <div
@@ -3307,9 +3428,26 @@ function TaskFailureCard({
         <p className="m-0 mt-1 break-words text-[13px] leading-5 text-[#7F1D1D] [overflow-wrap:anywhere]">
           {failure.message}
         </p>
-        <span className="mt-2 inline-flex rounded-full bg-[#FEE2E2] px-2 py-0.5 font-mono text-[10px] leading-4 text-[#B91C1C]">
-          {failure.code}
-        </span>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="inline-flex rounded-full bg-[#FEE2E2] px-2 py-0.5 font-mono text-[10px] leading-4 text-[#B91C1C]">
+            {failure.code}
+          </span>
+          {failure.retryable && (
+            <button
+              className="inline-flex h-7 items-center gap-1.5 rounded-[4px] border border-[#FCA5A5] bg-white px-2.5 text-[11px] font-semibold text-[#B91C1C] transition hover:border-[#DC2626] hover:bg-[#FEF2F2] disabled:cursor-not-allowed disabled:opacity-60"
+              type="button"
+              disabled={retrying}
+              data-testid="agent-task-retry"
+              onClick={(event) => {
+                event.stopPropagation()
+                onRetry()
+              }}
+            >
+              <RefreshCcw className="h-3.5 w-3.5" />
+              {retrying ? "Retrying..." : "Retry"}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )

@@ -175,6 +175,16 @@ def create_app(
             raise HTTPException(status_code=404, detail={"code": "context_not_found", "message": "context not found"})
         return [_task_to_dict(record) for record in core.store.list_context_tasks(context_id)]
 
+    @api_router.post("/management/tasks/{task_id}/retry")
+    def retry_failed_task(task_id: str) -> dict[str, Any]:
+        """Create a new local Task attempt from an eligible failed Task."""
+
+        core = _main_agent_core(app)
+        try:
+            return _task_to_dict(core.retry_failed_task(task_id))
+        except Exception as exc:
+            raise _http_exception(exc) from exc
+
     @api_router.get("/tasks/{task_id}/tool-invocations")
     def list_task_tool_invocations(task_id: str) -> list[dict[str, Any]]:
         core = _main_agent_core(app)
@@ -479,6 +489,7 @@ def _task_to_dict(record) -> dict[str, Any]:
         "mcp": record.mcp,
         "error_code": record.error_code,
         "error_message": record.error_message,
+        "error_retryable": record.error_retryable,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
     }

@@ -330,7 +330,8 @@ curl -X POST http://127.0.0.1:8000/rpc \
       "options": {
         "model": "deepseek-v4-flash:cloud",
         "base_url": "http://127.0.0.1:11434",
-        "timeout_seconds": 120
+        "timeout_seconds": 120,
+        "tool_calling": "native"
       }
     },
     "ollama_gemma4_31b": {
@@ -346,6 +347,13 @@ curl -X POST http://127.0.0.1:8000/rpc \
 ```
 
 `primary_model` 用于普通 message 和 task execution。
+
+`tool_calling` 用于选择模型返回工具调用的方式。当前主 Ollama 模型使用
+`native`：Task 会使用 Ollama 标准的 `tools` 与 `tool_calls` 字段；没有工具的
+直接 message 则使用普通文本回答。只有无法返回原生 tool call 的 Ollama endpoint
+才应显式使用 `prompt_json`；使用 `none` 可禁止该模型使用工具。
+OpenAI-compatible 模型支持 `native` 和 `none`。runtime 不会在这些策略之间自动
+fallback。
 
 `router_model` 由 `executionMode=auto` 使用，用于判断请求应该进入：
 

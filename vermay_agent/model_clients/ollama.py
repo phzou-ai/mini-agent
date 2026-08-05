@@ -4,29 +4,43 @@ import json
 import re
 import urllib.error
 import urllib.request
-from typing import Iterator
+from typing import Any, Iterator
 
 from vermay_agent.errors import ModelProtocolError, ModelProviderError
 from vermay_agent.types import Message, ModelResponse, ToolCall
 
 from .json_decision import parse_json_decision, strip_reasoning_markup
+from .tool_calling import (
+    ToolCallingMode,
+    model_response_from_tool_calls,
+    parse_function_tool_calls,
+    resolve_tool_calling_mode,
+    to_function_tool,
+)
 
 
 PROVIDER = "ollama"
 
 
 class OllamaModelClient:
-    """Ollama chat adapter using a small JSON protocol for tool calls."""
+    """Ollama chat adapter with explicit native and prompt-JSON tool modes."""
 
     def __init__(
         self,
         model: str | None = None,
         base_url: str | None = None,
         timeout_seconds: int | None = None,
+        tool_calling: str | None = None,
     ) -> None:
         self.model = model or "deepseek-v4-flash:cloud"
         self.base_url = (base_url or "http://127.0.0.1:11434").rstrip("/")
         self.timeout_seconds = timeout_seconds if timeout_seconds is not None else 120
+        self.tool_calling: ToolCallingMode = resolve_tool_calling_mode(
+            tool_calling,
+            provider=PROVIDER,
+            default="prompt_json",
+            supported=frozenset({"native", "prompt_json", "none"}),
+        )
 
     def invoke(
         self,
@@ -35,14 +49,12 @@ class OllamaModelClient:
         *,
         timeout_seconds: float | None = None,
     ) -> ModelResponse:
-        ollama_messages = self._to_ollama_messages(messages, tools)
-        payload = {
-            "model": self.model,
-            "messages": ollama_messages,
-            "stream": False,
-            "format": "json",
-            "options": {"temperature": 0},
-        }
+        use_native_tools = self.tool_calling == "native" and bool(tools)
+        payload = self._invoke_payload(
+            messages=messages,
+            tools=tools,
+            use_native_tools=use_native_tools,
+        )
 
         request = urllib.request.Request(
             f"{self.base_url}/api/chat",
@@ -100,17 +112,102 @@ class OllamaModelClient:
                 retryable=True,
             )
 
+        if use_native_tools:
+            return self._parse_native_response(body)
+        if self.tool_calling != "prompt_json":
+            return self._parse_plain_response(body)
+
         try:
             content = body["message"]["content"]
         except (KeyError, TypeError) as exc:
             raise _protocol_error(exc) from exc
         if not isinstance(content, str):
             raise _protocol_error(TypeError("message.content must be a string"))
-
         return self._parse_content(
             content,
             allow_unstructured_final=_has_tool_observation(messages),
         )
+
+    def _invoke_payload(
+        self,
+        *,
+        messages: list[Message],
+        tools: list[dict],
+        use_native_tools: bool,
+    ) -> dict[str, Any]:
+        if use_native_tools:
+            return {
+                "model": self.model,
+                "messages": self._to_native_ollama_messages(messages),
+                "tools": [to_function_tool(tool) for tool in tools],
+                "stream": False,
+                "options": {"temperature": 0},
+            }
+
+        # ``none`` makes tool use unavailable to this invocation. Native mode
+        # also uses a normal direct-answer request when no tools are exposed.
+        # Neither path may prompt the model with the legacy action protocol.
+        if self.tool_calling != "prompt_json":
+            return {
+                "model": self.model,
+                "messages": self._to_plain_ollama_messages(messages),
+                "stream": False,
+                "options": {"temperature": 0},
+            }
+
+        return {
+            "model": self.model,
+            "messages": self._to_prompt_json_ollama_messages(messages, tools),
+            "stream": False,
+            "format": "json",
+            "options": {"temperature": 0},
+        }
+
+    def _parse_native_response(self, body: dict[str, Any]) -> ModelResponse:
+        message = body.get("message")
+        if not isinstance(message, dict):
+            raise _protocol_error(TypeError("message must be an object"))
+
+        raw_tool_calls = message.get("tool_calls")
+        if raw_tool_calls is not None:
+            tool_calls = parse_function_tool_calls(
+                raw_tool_calls,
+                provider=PROVIDER,
+                provider_label="Ollama",
+            )
+            if tool_calls:
+                return model_response_from_tool_calls(tool_calls)
+
+        content = message.get("content")
+        if not isinstance(content, str):
+            raise _protocol_error(TypeError("message.content must be a string when no tool calls are returned"))
+        return ModelResponse(content=content)
+
+    def _parse_plain_response(self, body: dict[str, Any]) -> ModelResponse:
+        """Parse a response from an invocation where tools were not exposed."""
+
+        message = body.get("message")
+        if not isinstance(message, dict):
+            raise _protocol_error(TypeError("message must be an object"))
+
+        raw_tool_calls = message.get("tool_calls")
+        if raw_tool_calls is not None:
+            tool_calls = parse_function_tool_calls(
+                raw_tool_calls,
+                provider=PROVIDER,
+                provider_label="Ollama",
+            )
+            if tool_calls:
+                raise ModelProtocolError(
+                    "Invalid Ollama response: native tool calls were returned when tools were unavailable.",
+                    provider=PROVIDER,
+                    reason="unexpected_tool_calls",
+                )
+
+        content = message.get("content")
+        if not isinstance(content, str):
+            raise _protocol_error(TypeError("message.content must be a string when tools are unavailable"))
+        return ModelResponse(content=content)
 
     def stream_text(self, messages: list[Message], tools: list[dict]) -> Iterator[str]:
         if tools:
@@ -235,6 +332,11 @@ class OllamaModelClient:
         return self._parse_decision(decision)
 
     def _to_ollama_messages(self, messages: list[Message], tools: list[dict]) -> list[dict[str, str]]:
+        """Compatibility alias for tests and explicit ``prompt_json`` mode."""
+
+        return self._to_prompt_json_ollama_messages(messages, tools)
+
+    def _to_prompt_json_ollama_messages(self, messages: list[Message], tools: list[dict]) -> list[dict[str, str]]:
         protocol = {
             "role": "system",
             "content": (
@@ -269,6 +371,29 @@ class OllamaModelClient:
                 continue
 
             converted.append({"role": message.role, "content": message.content})
+        return converted
+
+    def _to_native_ollama_messages(self, messages: list[Message]) -> list[dict[str, Any]]:
+        """Convert project messages to Ollama's native tool conversation form."""
+
+        converted: list[dict[str, Any]] = []
+        for message in messages:
+            if message.role == "tool":
+                # Ollama associates results by name and the ordered tool-call
+                # list rather than OpenAI's ``tool_call_id``.
+                tool_result: dict[str, Any] = {"role": "tool", "content": message.content}
+                if message.name:
+                    tool_result["tool_name"] = message.name
+                converted.append(tool_result)
+                continue
+
+            payload: dict[str, Any] = {"role": message.role, "content": message.content}
+            if message.role == "assistant" and message.tool_calls:
+                payload["tool_calls"] = [
+                    _to_ollama_tool_call(tool_call, index=index)
+                    for index, tool_call in enumerate(message.tool_calls)
+                ]
+            converted.append(payload)
         return converted
 
     def _to_plain_ollama_messages(self, messages: list[Message]) -> list[dict[str, str]]:
@@ -369,3 +494,17 @@ def _protocol_error(exc: Exception) -> ModelProtocolError:
         provider=PROVIDER,
         reason="invalid_response_envelope",
     )
+
+
+def _to_ollama_tool_call(tool_call: dict[str, Any], *, index: int) -> dict[str, Any]:
+    arguments = tool_call.get("args", tool_call.get("arguments", {}))
+    if not isinstance(arguments, dict):
+        arguments = {}
+    return {
+        "type": "function",
+        "function": {
+            "index": index,
+            "name": str(tool_call.get("name") or ""),
+            "arguments": arguments,
+        }
+    }

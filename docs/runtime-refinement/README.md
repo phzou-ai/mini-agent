@@ -38,10 +38,12 @@ The target is an A2A-native main-agent runtime and inspectable process host. Lan
 | [runtime-composition-and-remote-proxy.md](runtime-composition-and-remote-proxy.md) | Implemented executor-composition and monotonic remote-proxy contract. |
 | [refactor-wave-2026-08-02.md](refactor-wave-2026-08-02.md) | Implemented cleanup decisions: product-path ownership, bounded context, tool registry, and remote identity validation. |
 | [governed-execution-kernel.md](governed-execution-kernel.md) | Implemented R2 policy limits, stop-reason projection, normalized tool observations, and evidence/risk summaries. |
+| [model-tool-calling.md](model-tool-calling.md) | Implemented model-provider tool-calling strategy, canonical tool-call normalization, and fail-closed compatibility boundary. |
 | [workspace-and-isolation-boundary.md](workspace-and-isolation-boundary.md) | Implemented R3.1 SSH/Kubernetes execution-control boundary and the explicit non-goals before a real workspace or sandbox is needed. |
 | [clean-slate-storage.md](clean-slate-storage.md) | Intentional retirement of the old service/session stack and the active SQLite baseline. |
 | [current-architecture-assessment.md](current-architecture-assessment.md) | Current strengths, tradeoffs, deployment limits, and rationale for the active order. |
 | [single-host-reliability-matrix.md](single-host-reliability-matrix.md) | Active P0 deterministic verification matrix for ingress, Tasks, continuation, cancellation, restart, and browser recovery. |
+| [task-failure-retry.md](task-failure-retry.md) | Durable failed-Task error projection, canonical browser final-answer reconciliation, and safe manual retry lineage. |
 | [review-2026-08-01.md](review-2026-08-01.md) | Dated review evidence and historical findings; not a second roadmap. |
 
 When these documents differ in emphasis, use the roadmap for current priority,
@@ -56,6 +58,7 @@ recorded at that time.
 | A2A lifecycle ownership | Implemented for the current single-host path; the default core receives an application-owned executor. | [runtime-composition-and-remote-proxy.md](runtime-composition-and-remote-proxy.md) |
 | Durable message ingress | Implemented. Repeated top-level `messageId` values do not route or execute twice. | [message-ingress.md](message-ingress.md) |
 | Direct-message failure presentation | Implemented. Failed ingress records project to distinct UI activities, not assistant answers. | [direct-message-failures.md](direct-message-failures.md) |
+| Task failure projection and retry | Implemented. Task failures persist safe `code`, `message`, and retryability; eligible manual retry creates one new lineage-linked Task attempt, never a replay. | [task-failure-retry.md](task-failure-retry.md) |
 | Continuation handoff | Implemented for local approval and user-input continuations. | [state-ownership.md](state-ownership.md#pending-continuation) |
 | Local process transitions | Implemented. Owned-process transitions and lifecycle events are atomic and validated. | [local-process-transitions.md](local-process-transitions.md) |
 | Causal task input and prompt bounds | Implemented for current character-bounded history and injected runtime context. | [context-input-cut.md](context-input-cut.md) |
@@ -68,6 +71,7 @@ recorded at that time.
 | R2 governed execution kernel | Complete, 2026-08-02. Local LangGraph Tasks have immutable per-process limits, typed stop reasons, normalized tool observations, and deterministic execution evidence. | [governed-execution-kernel.md](governed-execution-kernel.md) |
 | R3.1 SSH execution control | Complete, 2026-08-02. Active SSH/Kubernetes capability calls receive a bounded ephemeral execution context, local subprocess cancellation, timeout metadata, and conservative write uncertainty. | [workspace-and-isolation-boundary.md](workspace-and-isolation-boundary.md) |
 | R3.2 model execution control | Complete, 2026-08-02. Active model calls honor configured provider and optional Task-budget limits, while cancellation is projected at the next safe boundary. | [governed-execution-kernel.md](governed-execution-kernel.md) |
+| Model tool-calling boundary | Implemented. The active Ollama primary model uses native function calls for Tasks; provider-specific responses normalize into project-owned tool calls before the existing permission and ToolNode path. | [model-tool-calling.md](model-tool-calling.md) |
 | Single-host reliability matrix | Implemented. Deterministic backend and browser checks exercise the P0 failure, continuation, cancellation, restart, and terminal-projection contract. | [single-host-reliability-matrix.md](single-host-reliability-matrix.md) |
 | Inspector state presentation | Implemented. The web Inspector separately presents public A2A Task state, durable local process state, and LangGraph checkpoint thread; raw event diagnostics are collapsed by default. | [state-ownership.md](state-ownership.md#inspector-presentation) |
 
@@ -117,6 +121,10 @@ scope is recorded before code changes begin.
 - The governed execution kernel owns bounded model/tool progression and
   normalized observations for one local runtime thread. Its stop reason is
   projected by the core; it is not an additional process or A2A status model.
+- Provider adapters own only request/response translation. They do not own
+  execution: the active primary model uses native tool calls, while
+  `prompt_json` is an explicit Ollama compatibility strategy and never a
+  silent runtime fallback.
 - The R3.1 execution context is an in-memory bridge from a durable
   cancellation request to an active SSH capability call. It is not persisted,
   not a workspace, and not an additional lifecycle owner.

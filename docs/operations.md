@@ -214,6 +214,7 @@ Advanced model provider options can be passed as repeated flat `key=value` pairs
 vermay-agent "weather forecast for Beijing" \
   --model-provider ollama \
   --model-option model=deepseek-v4-flash:cloud \
+  --model-option tool_calling=native \
   --model-option timeout_seconds=120
 ```
 
@@ -236,7 +237,12 @@ vermay-agent "weather forecast for Beijing" \
 
 The OpenAI-compatible adapter uses Chat Completions request semantics: `{base_url}/chat/completions`, Bearer authentication when an API key is configured, standard `tools` with `tool_choice: auto` when tools are present, and standard assistant `tool_calls` plus `role: tool` messages with `tool_call_id` for tool results. When no tools are present, `tools` and `tool_choice` are omitted.
 
-Ollama remains separate and uses the project's JSON action protocol rather than OpenAI tool message formatting.
+`tool_calling` selects a provider's explicit tool-call strategy. Ollama supports
+`native`, `prompt_json`, and `none`; the checked-in primary model uses
+`native`. OpenAI-compatible endpoints support `native` and `none`. The runtime
+does not silently retry a request with another strategy. See
+[model-tool-calling.md](runtime-refinement/model-tool-calling.md) for the
+supported matrix and safety behavior.
 
 ## Memory
 

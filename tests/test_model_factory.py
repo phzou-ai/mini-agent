@@ -18,6 +18,7 @@ def test_model_factory_builds_ollama_adapter_with_options():
                 "model": "test-model",
                 "base_url": "http://ollama.example/",
                 "timeout_seconds": "7",
+                "tool_calling": "native",
             },
         )
     )
@@ -26,6 +27,7 @@ def test_model_factory_builds_ollama_adapter_with_options():
     assert model.client.model == "test-model"
     assert model.client.base_url == "http://ollama.example"
     assert model.client.timeout_seconds == 7
+    assert model.client.tool_calling == "native"
 
 
 def test_model_factory_rejects_unknown_provider():
@@ -70,6 +72,20 @@ def test_model_factory_builds_openai_compatible_adapter():
     assert model.client.model == "qwen"
     assert model.client.base_url == "http://localhost:8000/v1"
     assert model.client.timeout_seconds == 12
+
+
+def test_model_factory_rejects_unsupported_provider_tool_calling_mode():
+    with pytest.raises(ValueError, match="openai_compatible does not support tool_calling='prompt_json'"):
+        build_model_client(
+            ModelProviderConfig(
+                provider="openai_compatible",
+                options={
+                    "model": "qwen",
+                    "base_url": "http://localhost:8000/v1",
+                    "tool_calling": "prompt_json",
+                },
+            )
+        )
 
 
 def test_model_factory_rejects_missing_openai_compatible_options():

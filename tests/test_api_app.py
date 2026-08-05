@@ -5,7 +5,15 @@ from dataclasses import dataclass
 from fastapi.testclient import TestClient
 
 from vermay_agent.api.app import _router_model_name, create_app
-from vermay_agent.main_agent import MainAgentCore, MainAgentStore, MessageRole
+from vermay_agent.errors import ModelProviderError
+from vermay_agent.main_agent import (
+    LocalTaskRunResult,
+    MainAgentCore,
+    MainAgentRequest,
+    MainAgentStore,
+    MessageRole,
+    TaskStatus,
+)
 from vermay_agent.storage import AgentStore
 
 
@@ -401,6 +409,60 @@ def test_legacy_local_rest_routes_are_not_exposed(tmp_path):
         assert response.json() == {"detail": "Not Found"}
 
     store.close()
+
+
+def test_management_api_retries_a_safe_failed_local_task(tmp_path):
+    class FailingThenSuccessfulRunner:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run(self, messages, *, thread_id):
+            self.calls += 1
+            if self.calls == 1:
+                raise ModelProviderError(
+                    "temporary model failure",
+                    provider="test",
+                    retryable=True,
+                )
+            return LocalTaskRunResult(
+                status=TaskStatus.COMPLETED,
+                parts=[{"kind": "text", "text": "retry answer"}],
+            )
+
+    backend = AgentStore(tmp_path / "agent.sqlite")
+    store = MainAgentStore(backend)
+    runner = FailingThenSuccessfulRunner()
+    core = MainAgentCore(
+        store=store,
+        local_message_responder=FakeResponder(),
+        local_task_runner=runner,
+    )
+    client = TestClient(create_app(main_agent_core=core))
+    context = store.create_context(context_id="ctx-1")
+    source_result = core.handle_message(
+        MainAgentRequest(
+            context_id=context.context_id,
+            message_id="msg-user-1",
+            role=MessageRole.USER,
+            parts=[{"kind": "text", "text": "inspect cluster"}],
+            metadata={"executionMode": "task"},
+        )
+    )
+
+    response = client.post(f"/api/management/tasks/{source_result.task_id}/retry")
+
+    assert response.status_code == 200
+    retried = response.json()
+    assert retried["task_id"] != source_result.task_id
+    assert retried["retry_of_task_id"] == source_result.task_id
+    assert retried["attempt"] == 2
+    assert retried["status"] == "completed"
+
+    duplicate = client.post(f"/api/management/tasks/{source_result.task_id}/retry")
+    assert duplicate.status_code == 200
+    assert duplicate.json()["task_id"] == retried["task_id"]
+    assert runner.calls == 2
+    backend.close()
 
 
 def test_unprefixed_local_rest_routes_are_not_exposed(tmp_path):

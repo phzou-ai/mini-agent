@@ -204,6 +204,7 @@ class TaskRecord:
     mcp: dict[str, Any] | None
     error_code: str | None
     error_message: str | None
+    error_retryable: bool
     created_at: str
     updated_at: str
 

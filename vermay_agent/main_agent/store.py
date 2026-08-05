@@ -542,9 +542,9 @@ class MainAgentStore:
             INSERT INTO main_agent_tasks(
                 task_id, context_id, status, input_message_id, input_context_sequence, output_message_id, runtime_thread_id,
                 assigned_agent_id, retry_of_task_id, attempt, model, max_loops, mcp, error_code,
-                error_message, created_at, updated_at
+                error_message, error_retryable, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -562,6 +562,7 @@ class MainAgentStore:
                 _dumps(mcp) if mcp is not None else None,
                 None,
                 None,
+                0,
                 now,
                 now,
             ),
@@ -620,6 +621,8 @@ class MainAgentStore:
         task_id: str,
         runtime_thread_id: str,
         queue_execution: bool,
+        retry_of_task_id: str | None = None,
+        attempt: int = 1,
     ) -> tuple[RouteDecisionRecord, TaskRecord]:
         """Persist one local Task acceptance as a single durable boundary.
 
@@ -652,6 +655,8 @@ class MainAgentStore:
                 context_id=context_id,
                 input_message_id=input_message_id,
                 runtime_thread_id=runtime_thread_id,
+                retry_of_task_id=retry_of_task_id,
+                attempt=attempt,
             )
             self.resolve_message_ingress(
                 input_message_id,
@@ -672,9 +677,28 @@ class MainAgentStore:
             """
             SELECT task_id, context_id, status, input_message_id, input_context_sequence, output_message_id, runtime_thread_id,
                    assigned_agent_id, retry_of_task_id, attempt, model, max_loops, mcp, error_code,
-                   error_message, created_at, updated_at
+                   error_message, error_retryable, created_at, updated_at
             FROM main_agent_tasks
             WHERE task_id=?
+            """,
+            (task_id,),
+        )
+        if not rows:
+            return None
+        return _task_from_row(rows[0])
+
+    def get_direct_task_retry(self, task_id: str) -> TaskRecord | None:
+        """Return the single retry attempt created directly from a Task."""
+
+        rows = self.store.query(
+            """
+            SELECT task_id, context_id, status, input_message_id, input_context_sequence, output_message_id,
+                   runtime_thread_id, assigned_agent_id, retry_of_task_id, attempt, model, max_loops, mcp,
+                   error_code, error_message, error_retryable, created_at, updated_at
+            FROM main_agent_tasks
+            WHERE retry_of_task_id=?
+            ORDER BY created_at ASC, task_id ASC
+            LIMIT 1
             """,
             (task_id,),
         )
@@ -687,7 +711,7 @@ class MainAgentStore:
             """
             SELECT task_id, context_id, status, input_message_id, input_context_sequence, output_message_id,
                    runtime_thread_id, assigned_agent_id, retry_of_task_id, attempt, model, max_loops, mcp,
-                   error_code, error_message, created_at, updated_at
+                   error_code, error_message, error_retryable, created_at, updated_at
             FROM main_agent_tasks
             WHERE runtime_thread_id=?
             """,
@@ -702,7 +726,7 @@ class MainAgentStore:
             """
             SELECT task_id, context_id, status, input_message_id, input_context_sequence, output_message_id, runtime_thread_id,
                    assigned_agent_id, retry_of_task_id, attempt, model, max_loops, mcp, error_code,
-                   error_message, created_at, updated_at
+                   error_message, error_retryable, created_at, updated_at
             FROM main_agent_tasks
             WHERE context_id=?
             ORDER BY created_at ASC
@@ -722,7 +746,7 @@ class MainAgentStore:
             f"""
             SELECT task_id, context_id, status, input_message_id, input_context_sequence, output_message_id,
                    runtime_thread_id, assigned_agent_id, retry_of_task_id, attempt, model, max_loops, mcp,
-                   error_code, error_message, created_at, updated_at
+                   error_code, error_message, error_retryable, created_at, updated_at
             FROM main_agent_tasks
             WHERE assigned_agent_id IS NULL AND status IN ({placeholders})
             ORDER BY created_at ASC, task_id ASC
@@ -730,6 +754,26 @@ class MainAgentStore:
             values,
         )
         return [_task_from_row(row) for row in rows]
+
+    def has_potentially_side_effecting_tool_invocation(self, task_id: str) -> bool:
+        """Return whether a Task has recorded any non-read-only tool work.
+
+        A retry must never guess whether a previously prepared, running, or
+        uncertain invocation took effect. Any invocation whose side-effect
+        level is not ``none`` is therefore a hard retry boundary.
+        """
+
+        rows = self.store.query(
+            """
+            SELECT 1
+            FROM main_agent_tool_invocations
+            WHERE task_id=?
+              AND COALESCE(side_effect_level, '') <> 'none'
+            LIMIT 1
+            """,
+            (task_id,),
+        )
+        return bool(rows)
 
     def create_or_get_tool_invocation(
         self,
@@ -1246,6 +1290,7 @@ class MainAgentStore:
         payload: dict[str, Any] | None = None,
         error_code: str | None = None,
         error_message: str | None = None,
+        error_retryable: bool = False,
     ) -> TaskRecord:
         """Apply one validated local-process transition and its lifecycle event.
 
@@ -1267,10 +1312,10 @@ class MainAgentStore:
             self.store.execute(
                 """
                 UPDATE main_agent_tasks
-                SET status=?, error_code=?, error_message=?, updated_at=?
+                SET status=?, error_code=?, error_message=?, error_retryable=?, updated_at=?
                 WHERE task_id=?
                 """,
-                (target_status.value, error_code, error_message, utc_now(), task_id),
+                (target_status.value, error_code, error_message, int(error_retryable), utc_now(), task_id),
             )
             updated = self.get_task(task_id)
             if updated is None:
@@ -1290,6 +1335,7 @@ class MainAgentStore:
         *,
         error_code: str | None = None,
         error_message: str | None = None,
+        error_retryable: bool = False,
     ) -> TaskRecord:
         """Raw update reserved for core-owned remote proxy synchronization.
 
@@ -1299,10 +1345,10 @@ class MainAgentStore:
         self.store.execute(
             """
             UPDATE main_agent_tasks
-            SET status=?, error_code=?, error_message=?, updated_at=?
+            SET status=?, error_code=?, error_message=?, error_retryable=?, updated_at=?
             WHERE task_id=?
             """,
-            (status.value, error_code, error_message, utc_now(), task_id),
+            (status.value, error_code, error_message, int(error_retryable), utc_now(), task_id),
         )
         record = self.get_task(task_id)
         if record is None:
@@ -1981,6 +2027,7 @@ def _task_from_row(row: Any) -> TaskRecord:
         mcp=_loads(row["mcp"]) if row["mcp"] is not None else None,
         error_code=row["error_code"],
         error_message=row["error_message"],
+        error_retryable=bool(row["error_retryable"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )

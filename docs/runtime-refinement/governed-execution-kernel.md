@@ -64,19 +64,26 @@ The Web console preserves this distinction: an A2A `working` status with
 requested**, disables duplicate stop/send actions, and explains that the
 runtime is waiting for the current operation to reach a safe boundary.
 
-## Structured Task Model Actions
+## Structured Model Tool Calls
 
-The Ollama adapter uses a project-owned JSON action protocol for Task-mode
-model calls: every response is either a `final` action or a `tool_call`
-action. This boundary is intentionally fail-closed. If a model emits natural
-language such as "Calling tool ..." without a valid action object, the runtime
-records a typed `model_error` rather than treating the announcement as a final
-answer or guessing which tool to execute.
+Provider adapters normalize a configured native or explicit compatibility
+response into the project-owned `ModelResponse` and `ToolCall` values before
+LangGraph sees it. The active `local_ollama` model uses native Ollama function
+calling for local Tasks: it receives the tool schema and returns structured
+`message.tool_calls`. The adapter then maps those calls into the ordinary
+LangChain `AIMessage.tool_calls` path.
 
-Reasoning markup is not a second protocol. The shared parser may recover a
-valid action embedded after model-specific `<think>...</think>` text, but that
-text is never presented as an accepted Task answer. Direct A2A Messages retain
-their plain-text response contract and do not use this Task action parser.
+This boundary is intentionally fail-closed. A malformed native call, a tool
+call returned while tools are unavailable, or an invalid explicit
+`prompt_json` action becomes a typed `model_protocol_error` before ToolNode or
+the permission gate can execute anything. The runtime never guesses a tool
+call from prose.
+
+`prompt_json` remains an explicit Ollama compatibility strategy; it is not a
+fallback from native calling. Direct A2A Messages use normal plain-text model
+responses when no tools are exposed. See
+[model-tool-calling.md](model-tool-calling.md) for the supported provider
+matrix and adapter contract.
 
 ## Current Timeout Boundary
 

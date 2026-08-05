@@ -4,6 +4,7 @@ from copy import deepcopy
 import hashlib
 import json
 import logging
+import sqlite3
 import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Protocol
@@ -11,11 +12,13 @@ from uuid import uuid4
 
 from vermay_agent.errors import (
     ContextDeletionConflictError,
+    InvalidSessionStateError,
     MessageIngressInProgressError,
     MessageIngressStaleError,
     MessageStreamAbortedError,
     PersistedMessageIngressError,
     RegisteredAgentDeletionConflictError,
+    TaskNotFoundError,
     error_info_from_exception,
 )
 
@@ -604,6 +607,116 @@ class MainAgentCore:
             return self._mark_local_task_failed(task_id, exc)
         return task
 
+    def retry_failed_task(self, task_id: str) -> TaskRecord:
+        """Create one new, safe local Task attempt from a retryable failure.
+
+        The original Task remains immutable. Retrying creates a new user
+        message, ingress record, route decision, Task, and LangGraph thread in
+        the same Context. It deliberately does not re-route or replay any
+        previous tool invocation.
+        """
+
+        if self.local_task_runner is None:
+            raise InvalidSessionStateError("local task runner is not configured")
+
+        source = self._retryable_failed_local_task(task_id)
+        existing = self.store.get_direct_task_retry(source.task_id)
+        if existing is not None:
+            return existing
+
+        input_message = self.store.get_message(source.input_message_id)
+        if input_message is None or input_message.role != MessageRole.USER:
+            raise InvalidSessionStateError("The original task input is unavailable.")
+
+        retry_message_id = _new_id("msg")
+        retry_task_id = _new_id("task")
+        retry_thread_id = _new_id("thread")
+        retry_attempt = source.attempt + 1
+        retry_metadata = _retry_message_metadata(input_message.metadata, source, retry_attempt)
+        queue_execution = self._queue_execution_enabled()
+
+        try:
+            with self.store.transaction():
+                # Re-check inside the durable acceptance boundary so retry
+                # eligibility cannot change between the initial read and insert.
+                source = self._retryable_failed_local_task(task_id)
+                existing = self.store.get_direct_task_retry(source.task_id)
+                if existing is not None:
+                    return existing
+
+                retry_message = self.store.append_message(
+                    message_id=retry_message_id,
+                    context_id=source.context_id,
+                    role=MessageRole.USER,
+                    parts=deepcopy(input_message.parts),
+                    metadata=retry_metadata,
+                )
+                self.store.reserve_message_ingress(
+                    message_id=retry_message.message_id,
+                    context_id=source.context_id,
+                    request_fingerprint=_message_fingerprint(
+                        role=MessageRole.USER,
+                        parts=retry_message.parts,
+                        metadata=retry_metadata,
+                    ),
+                )
+                _decision, task = self.store.accept_local_task_from_message(
+                    decision_id=_new_id("route"),
+                    context_id=source.context_id,
+                    input_message_id=retry_message.message_id,
+                    route_kind=RouteDecisionKind.LOCAL_TASK,
+                    route_reason="Manual retry of a retryable failed local task.",
+                    route_target_agent_id=None,
+                    route_confidence=1.0,
+                    route_metadata={
+                        "source": "manual_retry",
+                        "retryOfTaskId": source.task_id,
+                        "retryAttempt": retry_attempt,
+                    },
+                    task_id=retry_task_id,
+                    runtime_thread_id=retry_thread_id,
+                    queue_execution=queue_execution,
+                    retry_of_task_id=source.task_id,
+                    attempt=retry_attempt,
+                )
+                self.store.append_task_event(
+                    task_id=source.task_id,
+                    type="task_retry_requested",
+                    status=None,
+                    payload={"retry_task_id": task.task_id, "retry_attempt": task.attempt},
+                )
+                self.store.append_task_event(
+                    task_id=task.task_id,
+                    type="task_retried",
+                    status=None,
+                    payload={"retry_of_task_id": source.task_id, "retry_attempt": task.attempt},
+                )
+        except sqlite3.IntegrityError:
+            # The direct-retry lineage index is the concurrency boundary. A
+            # simultaneous click should converge on the already-created child.
+            existing = self.store.get_direct_task_retry(task_id)
+            if existing is not None:
+                return existing
+            raise
+
+        return self._start_accepted_local_task(task)
+
+    def _retryable_failed_local_task(self, task_id: str) -> TaskRecord:
+        task = self.store.get_task(task_id)
+        if task is None:
+            raise TaskNotFoundError(task_id)
+        if task.assigned_agent_id is not None:
+            raise InvalidSessionStateError("Only locally owned tasks can be retried.")
+        if task.status != TaskStatus.FAILED:
+            raise InvalidSessionStateError("Only failed tasks can be retried.")
+        if not task.error_retryable:
+            raise InvalidSessionStateError("This task failure is not retryable.")
+        if self.store.has_potentially_side_effecting_tool_invocation(task.task_id):
+            raise InvalidSessionStateError(
+                "This task cannot be retried because it has potentially side-effecting tool work."
+            )
+        return task
+
     def _accept_pending_continuation(
         self,
         task_id: str,
@@ -1058,7 +1171,7 @@ class MainAgentCore:
         input_message_id: str,
         route_decision: MainAgentRouteDecision,
     ) -> LocalTaskResult:
-        queue_execution = self.local_task_runner is not None and self.task_submitter is not None
+        queue_execution = self._queue_execution_enabled()
         decision, task = self.store.accept_local_task_from_message(
             decision_id=_new_id("route"),
             context_id=context_id,
@@ -1072,14 +1185,7 @@ class MainAgentCore:
             runtime_thread_id=_new_id("thread"),
             queue_execution=queue_execution,
         )
-        if self.local_task_runner is not None:
-            if queue_execution:
-                try:
-                    self._schedule_queued_task_execution(task.task_id)
-                except Exception as exc:
-                    task = self._mark_local_task_failed(task.task_id, exc)
-            else:
-                task = self._run_local_task(task.task_id)
+        task = self._start_accepted_local_task(task)
         return LocalTaskResult(
             kind=RouteDecisionKind.LOCAL_TASK,
             context_id=context_id,
@@ -1087,6 +1193,22 @@ class MainAgentCore:
             input_message_id=input_message_id,
             route_decision_id=decision.decision_id,
         )
+
+    def _queue_execution_enabled(self) -> bool:
+        return self.local_task_runner is not None and self.task_submitter is not None
+
+    def _start_accepted_local_task(self, task: TaskRecord) -> TaskRecord:
+        """Schedule or synchronously run an already-durable local Task."""
+
+        if self.local_task_runner is None:
+            return task
+        if self._queue_execution_enabled():
+            try:
+                self._schedule_queued_task_execution(task.task_id)
+            except Exception as exc:
+                return self._mark_local_task_failed(task.task_id, exc)
+            return task
+        return self._run_local_task(task.task_id)
 
     def _run_local_task(
         self,
@@ -1364,10 +1486,12 @@ class MainAgentCore:
                     "error_code": result.error_code or "task_not_completed",
                     "error_message": result.error_message
                     or f"local task ended with unsupported status: {result_status.value}",
+                    "retryable": result.error_retryable,
                     **_task_result_lifecycle_payload(result, observation_artifact_id=observation_artifact_id),
                 },
                 error_code=result.error_code or "task_not_completed",
                 error_message=result.error_message or f"local task ended with unsupported status: {result_status.value}",
+                error_retryable=result.error_retryable,
             )
             self.store.mark_running_tool_invocations_uncertain(
                 task_id,
@@ -1445,6 +1569,7 @@ class MainAgentCore:
                 payload=failure_payload,
                 error_code=error_code,
                 error_message=error_message,
+                error_retryable=error.retryable,
             )
             self.store.mark_running_tool_invocations_uncertain(
                 task_id,
@@ -1487,6 +1612,7 @@ class MainAgentCore:
                 payload=payload,
                 error_code=error_code,
                 error_message=error_message,
+                error_retryable=True,
             )
             self.store.mark_running_tool_invocations_uncertain(
                 task_id,
@@ -1898,6 +2024,26 @@ def _message_fingerprint(*, role: MessageRole, parts: list[dict], metadata: dict
         default=str,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _retry_message_metadata(
+    metadata: dict,
+    source_task: TaskRecord,
+    retry_attempt: int,
+) -> dict:
+    """Carry user-facing metadata forward without reusing its routing intent."""
+
+    retry_metadata = deepcopy(metadata)
+    retry_metadata.pop("route", None)
+    retry_metadata.pop("targetAgentId", None)
+    retry_metadata.update(
+        {
+            "executionMode": "task",
+            "retryOfTaskId": source_task.task_id,
+            "retryAttempt": retry_attempt,
+        }
+    )
+    return retry_metadata
 
 
 def _new_id(prefix: str) -> str:

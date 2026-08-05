@@ -42,6 +42,67 @@ def test_openai_compatible_client_omits_tools_when_no_tools(monkeypatch):
     assert "tool_choice" not in captured["payload"]
 
 
+def test_openai_compatible_client_none_mode_omits_supplied_tools(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["payload"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse({"choices": [{"message": {"content": "done"}}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = OpenAICompatibleModelClient(
+        model="gpt-4o",
+        base_url="https://api.openai.com/v1",
+        tool_calling="none",
+    )
+    response = client.invoke([Message(role="user", content="hello")], tools=[{"name": "echo"}])
+
+    assert response.content == "done"
+    assert "tools" not in captured["payload"]
+    assert "tool_choice" not in captured["payload"]
+
+
+def test_openai_compatible_client_none_mode_rejects_unexpected_tool_calls(monkeypatch):
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda request, timeout: FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "function": {"name": "echo", "arguments": "{}"},
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        ),
+    )
+    client = OpenAICompatibleModelClient(
+        model="gpt-4o",
+        base_url="https://api.openai.com/v1",
+        tool_calling="none",
+    )
+
+    with pytest.raises(ModelProtocolError, match="tools were unavailable") as raised:
+        client.invoke([Message(role="user", content="hello")], tools=[{"name": "echo"}])
+
+    assert raised.value.reason == "unexpected_tool_calls"
+
+
+def test_openai_compatible_client_rejects_prompt_json_tool_mode():
+    with pytest.raises(ValueError, match="does not support tool_calling='prompt_json'"):
+        OpenAICompatibleModelClient(
+            model="gpt-4o",
+            base_url="https://api.openai.com/v1",
+            tool_calling="prompt_json",
+        )
+
+
 def test_openai_compatible_client_sends_standard_tool_messages(monkeypatch):
     captured = {}
 
@@ -288,32 +349,3 @@ def test_openai_compatible_client_rejects_invalid_tool_arguments(monkeypatch):
 
     with pytest.raises(ModelProtocolError, match="arguments must be a JSON object"):
         client.invoke([Message(role="user", content="hello")], tools=[{"name": "echo"}])
-
-
-def test_openai_compatible_client_parses_embedded_json_tool_action(monkeypatch):
-    def fake_urlopen(request, timeout):
-        return FakeResponse(
-            {
-                "choices": [
-                    {
-                        "message": {
-                            "content": (
-                                "I will read the cluster state.\n\n"
-                                '{"action":"tool_call","name":"ssh_kubectl_get",'
-                                '"arguments":{"resource":"pods","namespace":"all"}}'
-                            )
-                        }
-                    }
-                ]
-            }
-        )
-
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-
-    client = OpenAICompatibleModelClient(model="qwen", base_url="http://localhost:8000/v1")
-    response = client.invoke([Message(role="user", content="check k8s")], tools=[{"name": "ssh_kubectl_get"}])
-
-    assert response.content == "Calling tool ssh_kubectl_get."
-    assert response.tool_call is not None
-    assert response.tool_call.name == "ssh_kubectl_get"
-    assert response.tool_call.arguments == {"resource": "pods", "namespace": "all"}

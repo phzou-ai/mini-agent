@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage
 
 from vermay_agent.errors import (
     ContextDeletionConflictError,
+    InvalidSessionStateError,
     MessageIngressInProgressError,
     ModelProtocolError,
     ModelProviderError,
@@ -1408,6 +1409,7 @@ def test_main_agent_core_model_failure_uses_model_error_code_and_retryability(tm
     assert task.status == TaskStatus.FAILED
     assert task.error_code == "model_error"
     assert task.error_message == "Model request failed."
+    assert task.error_retryable is True
     assert store.list_task_events(result.task_id)[-1].payload == {
         "error_code": "model_error",
         "error_message": "Model request failed.",
@@ -1457,12 +1459,128 @@ def test_main_agent_core_model_protocol_failure_does_not_complete_task(tmp_path)
     assert task.status == TaskStatus.FAILED
     assert task.error_code == "model_protocol_error"
     assert task.error_message == "The selected model returned an invalid task action."
+    assert task.error_retryable is False
     assert [event.type for event in store.list_task_events(result.task_id)] == [
         "task_created",
         "task_started",
         "task_failed",
     ]
     assert store.list_task_artifacts(result.task_id) == []
+
+
+def test_main_agent_core_retries_a_safe_model_failure_as_a_new_task_attempt(tmp_path):
+    class FailingThenSuccessfulRunner:
+        def __init__(self) -> None:
+            self.calls: list[tuple[list[MessageRecord], str]] = []
+
+        def run(self, messages: list[MessageRecord], *, thread_id: str) -> LocalTaskRunResult:
+            self.calls.append((messages, thread_id))
+            if len(self.calls) == 1:
+                raise ModelProviderError(
+                    "Ollama request failed: connection refused",
+                    provider="ollama",
+                    retryable=True,
+                )
+            return LocalTaskRunResult(
+                status=TaskStatus.COMPLETED,
+                parts=[{"kind": "text", "text": "retry succeeded"}],
+            )
+
+    store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
+    runner = FailingThenSuccessfulRunner()
+    core = MainAgentCore(
+        store=store,
+        local_message_responder=FakeResponder(),
+        local_task_runner=runner,
+    )
+    context = store.create_context(context_id="ctx-1")
+
+    result = core.handle_message(
+        MainAgentRequest(
+            context_id=context.context_id,
+            message_id="msg-user-1",
+            role=MessageRole.USER,
+            parts=[{"kind": "text", "text": "inspect cluster"}],
+            metadata={"executionMode": "task"},
+        )
+    )
+    source = store.get_task(result.task_id)
+
+    assert source is not None
+    assert source.status == TaskStatus.FAILED
+    assert source.error_retryable is True
+
+    retried = core.retry_failed_task(source.task_id)
+    retried_input = store.get_message(retried.input_message_id)
+
+    assert retried.task_id != source.task_id
+    assert retried.context_id == source.context_id
+    assert retried.retry_of_task_id == source.task_id
+    assert retried.attempt == source.attempt + 1
+    assert retried.runtime_thread_id != source.runtime_thread_id
+    assert retried.status == TaskStatus.COMPLETED
+    assert retried_input is not None
+    assert retried_input.parts == [{"kind": "text", "text": "inspect cluster"}]
+    assert retried_input.metadata["retryOfTaskId"] == source.task_id
+    assert retried_input.metadata["retryAttempt"] == retried.attempt
+    assert [thread_id for _, thread_id in runner.calls] == [
+        source.runtime_thread_id,
+        retried.runtime_thread_id,
+    ]
+    assert core.retry_failed_task(source.task_id).task_id == retried.task_id
+    assert len(store.list_context_tasks(context.context_id)) == 2
+    assert store.list_task_events(source.task_id)[-1].type == "task_retry_requested"
+    assert "task_retried" in [event.type for event in store.list_task_events(retried.task_id)]
+
+
+def test_main_agent_core_does_not_retry_a_failed_task_with_side_effecting_tool_work(tmp_path):
+    class FailingRunner:
+        def run(self, messages: list[MessageRecord], *, thread_id: str) -> LocalTaskRunResult:
+            raise ModelProviderError(
+                "Ollama request failed: connection refused",
+                provider="ollama",
+                retryable=True,
+            )
+
+    store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
+    core = MainAgentCore(
+        store=store,
+        local_message_responder=FakeResponder(),
+        local_task_runner=FailingRunner(),
+    )
+    context = store.create_context(context_id="ctx-1")
+    result = core.handle_message(
+        MainAgentRequest(
+            context_id=context.context_id,
+            message_id="msg-user-1",
+            role=MessageRole.USER,
+            parts=[{"kind": "text", "text": "delete the pod"}],
+            metadata={"executionMode": "task"},
+        )
+    )
+    source = store.get_task(result.task_id)
+
+    assert source is not None
+    store.create_or_get_tool_invocation(
+        invocation_id="invoke-delete-pod",
+        task_id=source.task_id,
+        context_id=source.context_id,
+        runtime_thread_id=source.runtime_thread_id,
+        loop_index=1,
+        tool_call_id="call-delete-pod",
+        tool_name="delete_pod",
+        normalized_arguments={"name": "pod-a"},
+        arguments_digest="delete-pod-a",
+        capability={"readOnly": False, "sideEffectLevel": "destructive"},
+        side_effect_level="destructive",
+        idempotency_key=None,
+        approval_required=True,
+    )
+
+    with pytest.raises(InvalidSessionStateError, match="potentially side-effecting"):
+        core.retry_failed_task(source.task_id)
+
+    assert len(store.list_context_tasks(context.context_id)) == 1
 
 
 def test_main_agent_core_persists_execution_summary_and_normalized_observations(tmp_path):

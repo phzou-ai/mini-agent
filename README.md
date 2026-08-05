@@ -330,7 +330,8 @@ Models are configured in `config/models.json`.
       "options": {
         "model": "deepseek-v4-flash:cloud",
         "base_url": "http://127.0.0.1:11434",
-        "timeout_seconds": 120
+        "timeout_seconds": 120,
+        "tool_calling": "native"
       }
     },
     "ollama_gemma4_31b": {
@@ -346,6 +347,14 @@ Models are configured in `config/models.json`.
 ```
 
 `primary_model` is used for normal message and task execution.
+
+`tool_calling` selects how a model may return tool calls. The configured
+primary Ollama model uses `native`: Task calls use Ollama's standard `tools`
+and `tool_calls` fields, while direct messages without tools use normal plain
+text. Use `prompt_json` only for an Ollama endpoint that cannot return native
+tool calls, or `none` to suppress tool use for that model. OpenAI-compatible
+models support `native` and `none`; the runtime never falls back between these
+strategies automatically.
 
 `router_model` is used by `executionMode=auto` to classify whether a request should become:
 

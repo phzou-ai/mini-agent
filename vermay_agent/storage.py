@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 STORE_SCHEMA_FAMILY = "main_agent_clean_slate_v1"
 SQLITE_BUSY_TIMEOUT_MS = 5_000
 
@@ -179,8 +179,9 @@ def _create_main_agent_core_tables(conn: sqlite3.Connection) -> None:
             ON main_agent_tasks(context_id, updated_at);
         CREATE INDEX IF NOT EXISTS idx_main_agent_tasks_input_message_id
             ON main_agent_tasks(input_message_id);
-        CREATE INDEX IF NOT EXISTS idx_main_agent_tasks_retry_of_task_id
-            ON main_agent_tasks(retry_of_task_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_main_agent_tasks_one_direct_retry
+            ON main_agent_tasks(retry_of_task_id)
+            WHERE retry_of_task_id IS NOT NULL;
 
         CREATE TABLE IF NOT EXISTS main_agent_task_events (
             event_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -373,9 +374,27 @@ def _apply_schema_v2(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_schema_v3(conn: sqlite3.Connection) -> None:
+    """Persist Task retryability and make retry lineage idempotent."""
+
+    conn.executescript(
+        """
+        ALTER TABLE main_agent_tasks
+            ADD COLUMN error_retryable INTEGER NOT NULL DEFAULT 0;
+
+        DROP INDEX IF EXISTS idx_main_agent_tasks_retry_of_task_id;
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_main_agent_tasks_one_direct_retry
+            ON main_agent_tasks(retry_of_task_id)
+            WHERE retry_of_task_id IS NOT NULL;
+        """
+    )
+
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(1, "main_agent_clean_slate_baseline", _apply_schema_v1),
     SchemaMigration(2, "tool_invocation_ledger", _apply_schema_v2),
+    SchemaMigration(3, "task_failure_retryability", _apply_schema_v3),
 )
 
 

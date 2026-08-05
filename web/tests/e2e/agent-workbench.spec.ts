@@ -432,6 +432,7 @@ test.describe("Agent Workbench", () => {
     await expectLatestTaskStatus(page, "completed")
     await expect(userMessages(page).filter({ hasText: prompt })).toBeVisible()
     await expect(assistantMessages(page).last()).not.toBeEmpty()
+    await expect(assistantMessages(page)).toHaveCount(1)
   })
 
   test("keeps a completed task answer visible after page reload", async ({
@@ -681,18 +682,69 @@ test.describe("Agent Workbench", () => {
   test("shows a cancel error when the task cancel request is rejected", async ({
     page,
   }) => {
-    const prompt = `cancel error e2e task ${Date.now()}`
+    const now = Date.now()
+    const prompt = `cancel error e2e task ${now}`
+    const contextId = `ctx-e2e-cancel-error-${now}`
+    const taskId = `task-e2e-cancel-error-${now}`
     const errorMessage = "task is terminal and cannot be canceled: e2e"
 
-    await page.goto("/agent")
-    await expect(page.getByTestId("agent-console")).toBeVisible()
-
-    await page.getByTestId("agent-mode-task").click()
-    await page.getByTestId("agent-composer-input").fill(prompt)
-    await page.getByTestId("agent-composer-send").click()
-
-    await expectLatestTaskStatus(page, "running")
-
+    await mockAgentBootstrap(page)
+    await page.route(
+      `**/api/bff/agent/contexts/${contextId}/route-decisions`,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([]),
+        })
+      }
+    )
+    await page.route(
+      `**/api/bff/agent/contexts/${contextId}/delegations`,
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify([]),
+        })
+      }
+    )
+    await page.route("**/api/bff/agent/a2a/message-stream", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: `event: task\ndata: ${JSON.stringify({
+          jsonrpc: "2.0",
+          id: "e2e-cancel-error-task",
+          result: {
+            kind: "task",
+            id: taskId,
+            contextId,
+            status: {
+              state: "working",
+              timestamp: new Date(now).toISOString(),
+            },
+            metadata: {},
+          },
+        })}\n\n`,
+      })
+    })
+    await page.route(`**/api/bff/agent/a2a/tasks/${taskId}`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          kind: "task",
+          id: taskId,
+          contextId,
+          status: {
+            state: "working",
+            timestamp: new Date(now).toISOString(),
+          },
+          metadata: {},
+        }),
+      })
+    })
     await page.route("**/api/bff/agent/a2a/tasks/*/cancel", async (route) => {
       await route.fulfill({
         status: 409,
@@ -703,6 +755,22 @@ test.describe("Agent Workbench", () => {
         }),
       })
     })
+    await page.route(
+      new RegExp(`/api/bff/agent/contexts/${contextId}\\?force=true$`),
+      async (route) => {
+        await route.fulfill({ status: 204 })
+      }
+    )
+
+    await page.goto("/agent")
+    await expect(page.getByTestId("agent-console")).toBeVisible()
+
+    await page.getByRole("button", { name: "New session" }).click()
+    await page.getByTestId("agent-mode-task").click()
+    await page.getByTestId("agent-composer-input").fill(prompt)
+    await page.getByTestId("agent-composer-send").click()
+
+    await expectLatestTaskStatus(page, "running")
 
     await page.getByTestId("agent-composer-send").click()
     await expect(page.getByText(errorMessage)).toBeVisible()
@@ -712,7 +780,7 @@ test.describe("Agent Workbench", () => {
     )
     await expect(selectedSession).toBeVisible()
     const sessionId = await selectedSession.getAttribute("data-session-id")
-    expect(sessionId).toBeTruthy()
+    expect(sessionId).toBe(contextId)
 
     page.once("dialog", (dialog) => dialog.accept())
     await selectedSession.getByTestId("agent-session-delete").click()

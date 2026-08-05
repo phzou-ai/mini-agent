@@ -6,9 +6,15 @@ import urllib.error
 import urllib.request
 
 from vermay_agent.errors import ModelProtocolError, ModelProviderError
-from vermay_agent.types import Message, ModelResponse, ToolCall
+from vermay_agent.types import Message, ModelResponse
 
-from .json_decision import parse_json_decision
+from .tool_calling import (
+    ToolCallingMode,
+    model_response_from_tool_calls,
+    parse_function_tool_calls,
+    resolve_tool_calling_mode,
+    to_function_tool,
+)
 
 
 PROVIDER = "openai_compatible"
@@ -25,11 +31,18 @@ class OpenAICompatibleModelClient:
         api_key: str | None = None,
         api_key_env: str | None = None,
         timeout_seconds: int = 120,
+        tool_calling: str | None = None,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key or (os.environ.get(api_key_env) if api_key_env else None)
         self.timeout_seconds = timeout_seconds
+        self.tool_calling: ToolCallingMode = resolve_tool_calling_mode(
+            tool_calling,
+            provider=PROVIDER,
+            default="native",
+            supported=frozenset({"native", "none"}),
+        )
 
     def invoke(
         self,
@@ -43,7 +56,7 @@ class OpenAICompatibleModelClient:
             "messages": [_to_openai_message(message) for message in messages],
             "temperature": 0,
         }
-        if tools:
+        if tools and self.tool_calling == "native":
             payload["tools"] = [_to_openai_tool(tool) for tool in tools]
             payload["tool_choice"] = "auto"
         request = urllib.request.Request(
@@ -96,20 +109,23 @@ class OpenAICompatibleModelClient:
 
         tool_calls = message.get("tool_calls")
         if tool_calls is not None:
-            parsed_tool_calls = _parse_tool_calls(tool_calls)
-            if parsed_tool_calls:
-                names = ", ".join(tool_call.name for tool_call in parsed_tool_calls)
-                return ModelResponse(
-                    content=f"Calling tools: {names}." if len(parsed_tool_calls) > 1 else f"Calling tool {names}.",
-                    tool_calls=parsed_tool_calls,
+            if self.tool_calling != "native" or not tools:
+                raise ModelProtocolError(
+                    "Invalid OpenAI-compatible response: native tool calls were returned when tools were unavailable.",
+                    provider=PROVIDER,
+                    reason="unexpected_tool_calls",
                 )
+            parsed_tool_calls = parse_function_tool_calls(
+                tool_calls,
+                provider=PROVIDER,
+                provider_label="OpenAI-compatible",
+            )
+            if parsed_tool_calls:
+                return model_response_from_tool_calls(parsed_tool_calls)
 
         content = message.get("content")
         if not isinstance(content, str):
             raise _protocol_error(TypeError("message.content must be a string when no tool calls are returned"), raw)
-        parsed = _parse_json_action(content)
-        if parsed is not None:
-            return parsed
         return ModelResponse(content=str(content))
 
     def _headers(self) -> dict[str, str]:
@@ -170,64 +186,7 @@ def _to_openai_tool_call(tool_call: dict) -> dict:
 
 
 def _to_openai_tool(tool: dict) -> dict:
-    return {
-        "type": "function",
-        "function": {
-            "name": tool["name"],
-            "description": tool.get("description") or "",
-            "parameters": tool.get("parameters") or {"type": "object", "properties": {}},
-        },
-    }
-
-
-def _parse_tool_calls(raw_tool_calls: object) -> list[ToolCall]:
-    if not isinstance(raw_tool_calls, list):
-        raise ModelProtocolError(
-            "Invalid OpenAI-compatible response: message.tool_calls must be an array",
-            provider=PROVIDER,
-        )
-
-    parsed: list[ToolCall] = []
-    for index, raw_tool_call in enumerate(raw_tool_calls):
-        if not isinstance(raw_tool_call, dict):
-            raise ModelProtocolError(
-                f"Invalid OpenAI-compatible response: tool_calls[{index}] must be an object",
-                provider=PROVIDER,
-            )
-        function = raw_tool_call.get("function") or {}
-        if not isinstance(function, dict):
-            raise ModelProtocolError(
-                f"Invalid OpenAI-compatible response: tool_calls[{index}].function must be an object",
-                provider=PROVIDER,
-            )
-        name = function.get("name")
-        if not isinstance(name, str) or not name:
-            raise ModelProtocolError(
-                f"Invalid OpenAI-compatible response: tool_calls[{index}].function.name is required",
-                provider=PROVIDER,
-            )
-        raw_arguments = function.get("arguments") or "{}"
-        try:
-            arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else dict(raw_arguments)
-        except (TypeError, ValueError) as exc:
-            raise ModelProtocolError(
-                f"Invalid OpenAI-compatible response: tool_calls[{index}].function.arguments must be a JSON object",
-                provider=PROVIDER,
-            ) from exc
-        if not isinstance(arguments, dict):
-            raise ModelProtocolError(
-                f"Invalid OpenAI-compatible response: tool_calls[{index}].function.arguments must be a JSON object",
-                provider=PROVIDER,
-            )
-        tool_call_id = raw_tool_call.get("id")
-        parsed.append(
-            ToolCall(
-                name=name,
-                arguments=arguments,
-                id=tool_call_id if isinstance(tool_call_id, str) else None,
-            )
-        )
-    return parsed
+    return to_function_tool(tool)
 
 
 def _retryable_http_status(status_code: int) -> bool:
@@ -239,23 +198,3 @@ def _protocol_error(exc: Exception, raw: str) -> ModelProtocolError:
         f"Invalid OpenAI-compatible response: {exc}; raw={raw[:1000]}",
         provider=PROVIDER,
     )
-
-
-def _parse_json_action(content: str) -> ModelResponse | None:
-    decision = parse_json_decision(content)
-    if decision is None:
-        return None
-    if decision.get("action") == "tool_call":
-        name = decision.get("name")
-        arguments = decision.get("arguments", {})
-        if isinstance(name, str) and isinstance(arguments, dict):
-            return ModelResponse(
-                content=f"Calling tool {name}.",
-                tool_calls=[ToolCall(name=name, arguments=arguments)],
-            )
-    if decision.get("action") == "final" or "content" in decision:
-        content_value = decision.get("content", "")
-        if not isinstance(content_value, str):
-            content_value = json.dumps(content_value, ensure_ascii=False, indent=2)
-        return ModelResponse(content=content_value)
-    return None

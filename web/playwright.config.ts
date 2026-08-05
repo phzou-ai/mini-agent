@@ -13,7 +13,6 @@ const backendCommand =
   [
     "cd .. &&",
     ".venv/bin/python -m vermay_agent.main serve",
-    "--enable-a2a",
     "--host 127.0.0.1",
     `--port ${backendPort}`,
   ].join(" ")

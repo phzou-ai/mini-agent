@@ -120,7 +120,9 @@ The active tool schema source is each tool's Pydantic `args_schema`. Model adapt
 `vermay_agent/model_clients/ollama.py`
 
 - Calls Ollama `/api/chat`.
-- Uses a small JSON action protocol for final answers and tool calls.
+- Supports explicit `native`, `prompt_json`, and `none` tool-calling modes.
+- Uses native `tools` and `message.tool_calls` for the active Task path; the
+  JSON action format is an explicit compatibility mode only.
 - Reads model configuration from `config/models.json` or explicit runtime overrides.
 
 `vermay_agent/model_clients/openai_compatible.py`
@@ -129,6 +131,8 @@ The active tool schema source is each tool's Pydantic `args_schema`. Model adapt
 - Sends Bearer authentication when `api_key` or `api_key_env` is configured.
 - Uses standard Chat Completions `tools`, `tool_choice`, assistant `tool_calls`, and `role: tool` messages with `tool_call_id`.
 - Omits `tools` and `tool_choice` when no tools are available.
+- Supports `native` and `none` tool-calling modes; it does not interpret the
+  project JSON action compatibility format.
 
 `vermay_agent/langgraph_runtime/model_factory.py`
 

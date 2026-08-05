@@ -37,7 +37,7 @@ def test_agent_store_creates_the_active_main_agent_baseline(tmp_path):
         "schema_migrations",
     } <= names
     assert {"sessions", "legacy_sessions", "tasks", "task_events", "task_artifacts"}.isdisjoint(names)
-    assert store.schema_version() == storage.SCHEMA_VERSION == 2
+    assert store.schema_version() == storage.SCHEMA_VERSION
     assert store.query("SELECT value FROM store_metadata WHERE key='schema_family'")[0]["value"] == (
         storage.STORE_SCHEMA_FAMILY
     )
@@ -48,6 +48,7 @@ def test_agent_store_creates_the_active_main_agent_baseline(tmp_path):
     assert "next_message_sequence" in context_columns
     assert "context_sequence" in message_columns
     assert "input_context_sequence" in task_columns
+    assert "error_retryable" in task_columns
     store.close()
 
 
@@ -78,8 +79,10 @@ def test_agent_store_baseline_is_idempotent_across_reopening(tmp_path):
     reopened = AgentStore(path)
     rows = reopened.query("SELECT version, COUNT(*) AS count FROM schema_migrations GROUP BY version")
 
-    assert {int(row["version"]): int(row["count"]) for row in rows} == {1: 1, 2: 1}
-    assert reopened.schema_version() == storage.SCHEMA_VERSION == 2
+    assert {int(row["version"]): int(row["count"]) for row in rows} == {
+        migration.version: 1 for migration in storage.MIGRATIONS
+    }
+    assert reopened.schema_version() == storage.SCHEMA_VERSION
     reopened.close()
 
 
@@ -109,7 +112,7 @@ def test_agent_store_discards_a_retired_schema_and_recreates_the_baseline(tmp_pa
 
     names = _table_names(store)
     assert "sessions" not in names
-    assert store.schema_version() == storage.SCHEMA_VERSION == 2
+    assert store.schema_version() == storage.SCHEMA_VERSION
     assert store.query("SELECT value FROM store_metadata WHERE key='schema_family'")[0]["value"] == (
         storage.STORE_SCHEMA_FAMILY
     )
@@ -127,7 +130,7 @@ def test_agent_store_discards_unversioned_retired_schema(tmp_path):
     store = AgentStore(path)
 
     assert "sessions" not in _table_names(store)
-    assert store.schema_version() == storage.SCHEMA_VERSION == 2
+    assert store.schema_version() == storage.SCHEMA_VERSION
     store.close()
 
 
@@ -176,10 +179,12 @@ def test_agent_store_failed_future_migration_is_not_marked_applied(tmp_path, mon
         conn.execute("CREATE TABLE broken_migration_probe (id INTEGER PRIMARY KEY)")
         raise RuntimeError("migration failed")
 
+    applied_versions = [migration.version for migration in storage.MIGRATIONS]
     monkeypatch.setattr(
         storage,
         "MIGRATIONS",
-        storage.MIGRATIONS + (SchemaMigration(3, "broken", broken_migration),),
+        storage.MIGRATIONS
+        + (SchemaMigration(storage.SCHEMA_VERSION + 1, "broken", broken_migration),),
     )
     path = tmp_path / "agent.sqlite"
 
@@ -190,4 +195,4 @@ def test_agent_store_failed_future_migration_is_not_marked_applied(tmp_path, mon
     rows = connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
     connection.close()
 
-    assert [int(row[0]) for row in rows] == [1, 2]
+    assert [int(row[0]) for row in rows] == applied_versions

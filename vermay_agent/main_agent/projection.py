@@ -65,6 +65,7 @@ def task_to_a2a_payload(
         metadata,
         error_code=task.error_code,
         error_message=task.error_message,
+        retryable=task.error_retryable,
     )
     return {
         "kind": "task",
@@ -103,7 +104,7 @@ def task_event_to_a2a_status_update(event: TaskEventRecord, *, task: TaskRecord)
             metadata,
             error_code=event.payload.get("error_code") or task.error_code,
             error_message=event.payload.get("error_message") or task.error_message,
-            retryable=event.payload.get("retryable"),
+            retryable=event.payload.get("retryable", task.error_retryable),
         )
 
     return {

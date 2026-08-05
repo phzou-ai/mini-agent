@@ -23,6 +23,7 @@ def build_model_client(config: ModelProviderConfig) -> ModelClient:
                 model=_optional_str(config.options, "model"),
                 base_url=_optional_str(config.options, "base_url"),
                 timeout_seconds=_optional_int(config.options, "timeout_seconds"),
+                tool_calling=_optional_str(config.options, "tool_calling"),
             )
         )
     if config.provider == "openai_compatible":
@@ -35,6 +36,7 @@ def build_model_client(config: ModelProviderConfig) -> ModelClient:
                 api_key=_optional_str(config.options, "api_key", provider="openai_compatible"),
                 api_key_env=_optional_str(config.options, "api_key_env", provider="openai_compatible"),
                 timeout_seconds=timeout,
+                tool_calling=_optional_str(config.options, "tool_calling", provider="openai_compatible"),
             )
         )
 
@@ -75,7 +77,7 @@ def _optional_int(options: Mapping[str, object], key: str, *, provider: str = "o
 
 
 def _validate_ollama_options(options: Mapping[str, object]) -> None:
-    allowed = {"model", "base_url", "timeout_seconds"}
+    allowed = {"model", "base_url", "timeout_seconds", "tool_calling"}
     unknown = sorted(set(options) - allowed)
     if unknown:
         joined = ", ".join(unknown)
@@ -83,7 +85,7 @@ def _validate_ollama_options(options: Mapping[str, object]) -> None:
 
 
 def _validate_openai_compatible_options(options: Mapping[str, object]) -> None:
-    allowed = {"model", "base_url", "api_key", "api_key_env", "timeout_seconds"}
+    allowed = {"model", "base_url", "api_key", "api_key_env", "timeout_seconds", "tool_calling"}
     unknown = sorted(set(options) - allowed)
     if unknown:
         joined = ", ".join(unknown)

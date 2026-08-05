@@ -41,6 +41,7 @@ export type AgentModelConfig = {
 export type AgentTaskError = {
   code: string
   message: string
+  retryable: boolean
 }
 
 export type AgentTask = {
@@ -280,6 +281,7 @@ export type AgentContextTaskRecord = {
   mcp?: Record<string, unknown> | null
   error_code?: string | null
   error_message?: string | null
+  error_retryable?: boolean | null
   created_at: string
   updated_at: string
 }

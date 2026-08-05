@@ -20,6 +20,7 @@ class LocalTaskRunResult:
     artifact_parts: list[dict] = field(default_factory=list)
     error_code: str | None = None
     error_message: str | None = None
+    error_retryable: bool = False
     input_request: dict | None = None
     observations: list[dict[str, Any]] = field(default_factory=list)
     execution: dict[str, Any] = field(default_factory=dict)
@@ -179,8 +180,19 @@ def _run_result_to_local_task_result(result) -> LocalTaskRunResult:
         status=TaskStatus.FAILED,
         error_code=getattr(result, "stop_reason", None) or result.status,
         error_message=result.stop_message or "Local task did not complete.",
+        error_retryable=_execution_failure_is_retryable(execution),
         observations=observations,
         execution=execution,
+    )
+
+
+def _execution_failure_is_retryable(execution: dict[str, Any]) -> bool:
+    residual_risks = execution.get("residual_risks")
+    if not isinstance(residual_risks, list):
+        return False
+    return any(
+        isinstance(risk, dict) and risk.get("retryable") is True
+        for risk in residual_risks
     )
 
 
