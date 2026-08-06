@@ -419,7 +419,8 @@ test.describe("Agent Workbench", () => {
   test("submits a task and renders the streamed final answer", async ({
     page,
   }) => {
-    const prompt = `run e2e task ${Date.now()}`
+    const expectedAnswer = `task e2e completed ${Date.now()}`
+    const prompt = `Reply with exactly: ${expectedAnswer}`
 
     await page.goto("/agent")
     await expect(page.getByTestId("agent-console")).toBeVisible()
@@ -431,7 +432,7 @@ test.describe("Agent Workbench", () => {
 
     await expectLatestTaskStatus(page, "completed")
     await expect(userMessages(page).filter({ hasText: prompt })).toBeVisible()
-    await expect(assistantMessages(page).last()).not.toBeEmpty()
+    await expect(assistantMessages(page).last()).toContainText(expectedAnswer)
     await expect(assistantMessages(page)).toHaveCount(1)
   })
 
