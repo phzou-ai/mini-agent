@@ -57,9 +57,10 @@ export function AgentComposer({
   return (
     <div className={embedded ? "pb-3 pt-4" : "px-4 pb-3 pt-4 md:px-6 lg:px-8"}>
       <div
+        data-testid="agent-composer-content"
         className={cn(
           "mx-auto w-full",
-          embedded ? "max-w-none" : "max-w-[1120px]"
+          embedded ? "max-w-none" : "max-w-[980px]"
         )}
       >
         <div

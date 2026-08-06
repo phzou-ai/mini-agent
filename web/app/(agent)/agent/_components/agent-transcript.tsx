@@ -10,7 +10,9 @@ import {
   X,
 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
+import rehypeKatex from "rehype-katex"
 import remarkGfm from "remark-gfm"
+import remarkMath from "remark-math"
 
 import {
   formatTime,
@@ -90,7 +92,10 @@ export function AgentTranscript({
       className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-6 md:px-8"
       data-testid="agent-message-list"
     >
-      <div className="mx-auto grid w-full max-w-[980px] gap-5">
+      <div
+        className="mx-auto grid min-w-0 w-full max-w-[980px] gap-5"
+        data-testid="agent-transcript-content"
+      >
         {messages.length ? (
           messages.map((message) => {
             const task = message.taskId ? tasks[message.taskId] : undefined
@@ -186,13 +191,16 @@ function MessageItem({
 
   return (
     <div
-      className={cn("flex w-full", isUser ? "justify-end" : "justify-start")}
+      className={cn(
+        "flex min-w-0 w-full",
+        isUser ? "justify-end" : "justify-start"
+      )}
       data-agent-role={message.role}
       data-testid="agent-message-item"
     >
       <div
         className={cn(
-          "flex w-full max-w-[min(100%,980px)] items-start gap-3",
+          "flex min-w-0 w-full max-w-full items-start gap-3",
           isUser ? "flex-row-reverse" : ""
         )}
       >
@@ -203,7 +211,7 @@ function MessageItem({
         )}
         <div
           className={cn(
-            "flex min-w-0 flex-col",
+            "flex min-w-0 max-w-full flex-col",
             !isUser && isInputPending ? "w-full" : "",
             isUser ? "items-end" : "items-start"
           )}
@@ -215,9 +223,9 @@ function MessageItem({
               "cursor-pointer text-[14px] leading-6 shadow-sm outline-none transition-[border-color,box-shadow]",
               isLoadingOnly ? "px-3 py-2.5" : "px-4 py-4",
               isUser
-                ? "max-w-[520px] rounded-[4px_0_4px_4px] border border-[#E2E8F0] bg-[#EFF6FF] text-[#0F172A]"
+                ? "max-w-[min(100%,520px)] rounded-[4px_0_4px_4px] border border-[#E2E8F0] bg-[#EFF6FF] text-[#0F172A]"
                 : cn(
-                    "max-w-[844px] rounded-[0_4px_4px_4px] border bg-white text-[#1F0013]",
+                    "max-w-[min(100%,844px)] rounded-[0_4px_4px_4px] border bg-white text-[#1F0013]",
                     isDirectMessageFailure || isTaskFailure
                       ? "border-[#FCA5A5] bg-[#FFF7F7]"
                       : "border-[#E7E5E8]",
@@ -583,26 +591,71 @@ function TaskInputRequiredCard({
 
 function MarkdownText({ content }: { content: string }) {
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        p: ({ children }) => <p className="m-0 [&+p]:mt-2">{children}</p>,
-        ul: ({ children }) => (
-          <ul className="m-0 list-disc space-y-1 pl-5">{children}</ul>
-        ),
-        ol: ({ children }) => (
-          <ol className="m-0 list-decimal space-y-1 pl-5">{children}</ol>
-        ),
-        code: ({ children }) => (
-          <code className="rounded-[4px] bg-slate-900/10 px-1.5 py-0.5 font-mono text-[0.92em]">
-            {children}
-          </code>
-        ),
-      }}
-    >
-      {content}
-    </ReactMarkdown>
+    <div className="agent-markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
+        components={{
+          table: ({ children }) => (
+            <div
+              aria-label="Scrollable table"
+              className="agent-markdown-table-wrap"
+              role="region"
+              tabIndex={0}
+            >
+              <table>{children}</table>
+            </div>
+          ),
+          a: ({ children, href }) => {
+            const external =
+              href?.startsWith("https://") || href?.startsWith("http://")
+
+            return (
+              <a
+                href={href}
+                rel={external ? "noreferrer" : undefined}
+                target={external ? "_blank" : undefined}
+              >
+                {children}
+              </a>
+            )
+          },
+        }}
+      >
+        {normalizeMathDelimiters(content)}
+      </ReactMarkdown>
+    </div>
   )
+}
+
+function normalizeMathDelimiters(content: string): string {
+  let fence: "```" | "~~~" | null = null
+
+  return content
+    .split("\n")
+    .map((line) => {
+      const fenceMatch = line.match(/^\s*(```|~~~)/)
+      if (fenceMatch) {
+        const marker = fenceMatch[1] as "```" | "~~~"
+        fence = fence === marker ? null : fence ?? marker
+        return line
+      }
+
+      if (fence) {
+        return line
+      }
+
+      return line
+        .replace(
+          /\\\[(.*?)\\\]/g,
+          (_match, expression: string) => `$$\n${expression}\n$$`
+        )
+        .replace(/\\\[/g, () => "$$")
+        .replace(/\\\]/g, () => "$$")
+        .replace(/\\\(/g, "$")
+        .replace(/\\\)/g, "$")
+    })
+    .join("\n")
 }
 
 function TypingIndicator() {
