@@ -84,7 +84,9 @@ local graph execution and checkpoint continuation.
 - `runner.py`: runtime wrapper around the compiled graph.
 - `results.py`: structured runtime result type and API-facing result payload helpers.
 - `model_adapters.py`: adapters from project model clients to a thin `AIMessage` wrapper.
-- `model_factory.py`: provider factory for constructing runtime model adapters.
+- `model_factory.py`: provider factory for constructing `GraphModelClient`
+  adapters. The explicit graph prefix distinguishes this LangChain-facing
+  protocol from the lower-level provider `model_clients.ModelClient` protocol.
 
 This package is the only active runtime path. It is the production-oriented path and uses LangChain / LangGraph standard message and tool execution types.
 

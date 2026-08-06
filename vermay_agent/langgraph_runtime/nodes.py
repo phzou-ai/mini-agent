@@ -34,13 +34,13 @@ from .routing import latest_ai_message
 from .state import AgentState
 
 
-class ModelClient(Protocol):
+class GraphModelClient(Protocol):
     def invoke(self, messages: list[BaseMessage], tools: list[BaseTool]) -> ModelInvocation: ...
 
 
 @dataclass
 class GraphComponents:
-    model: ModelClient
+    model: GraphModelClient
     tools: list[BaseTool]
     permission_gate: PermissionGate | None = None
     progress: ProgressReporter | None = None

@@ -19,13 +19,13 @@ from vermay_agent.trace import TraceLogger
 
 from .graph import build_graph
 from .invocations import ToolInvocationRecorder
-from .nodes import GraphComponents, ModelClient
+from .nodes import GraphComponents, GraphModelClient
 from .state import AgentState, build_initial_state
 
 
 @dataclass
 class LangGraphAgentRuntime:
-    model: ModelClient
+    model: GraphModelClient
     tools: list[BaseTool] = field(default_factory=list)
     permission_gate: PermissionGate | None = None
     system_prompt: str | None = None

@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from vermay_agent.app_factory import DEFAULT_AGENT_STORE_PATH, DEFAULT_MODEL_CONFIG_PATH, RuntimeFactoryConfig, build_runtime
 from vermay_agent.errors import error_info_from_exception, public_error_payload
 from vermay_agent.env_config import load_prefixed_env
-from vermay_agent.langgraph_runtime import build_model_client
+from vermay_agent.langgraph_runtime import build_graph_model_client
 from vermay_agent.main_agent import (
     DirectA2ARemoteAgentClient,
     DirectLangGraphLocalTaskRunner,
@@ -332,7 +332,7 @@ def _build_default_main_agent_core() -> tuple[
     main_agent_store = MainAgentStore(store)
     runtime_config = RuntimeFactoryConfig(show_progress=False)
     active_model = resolve_model_selection(config_path=DEFAULT_MODEL_CONFIG_PATH)
-    local_message_responder = DirectModelLocalMessageResponder(build_model_client(active_model))
+    local_message_responder = DirectModelLocalMessageResponder(build_graph_model_client(active_model))
     task_runner = DirectLangGraphLocalTaskRunner(
         build_runtime(
             runtime_config,

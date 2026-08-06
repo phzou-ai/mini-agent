@@ -6,12 +6,12 @@ from vermay_agent.langgraph_runtime import (
     ModelProviderConfig,
     OllamaModelAdapter,
     OpenAICompatibleModelAdapter,
-    build_model_client,
+    build_graph_model_client,
 )
 
 
 def test_model_factory_builds_ollama_adapter_with_options():
-    model = build_model_client(
+    model = build_graph_model_client(
         ModelProviderConfig(
             provider="ollama",
             options={
@@ -32,32 +32,32 @@ def test_model_factory_builds_ollama_adapter_with_options():
 
 def test_model_factory_rejects_unknown_provider():
     with pytest.raises(ValueError, match="unsupported model provider: missing"):
-        build_model_client(ModelProviderConfig(provider="missing"))
+        build_graph_model_client(ModelProviderConfig(provider="missing"))
 
 
 def test_model_factory_rejects_unknown_ollama_option():
     with pytest.raises(ValueError, match="unsupported ollama model option\\(s\\): typo"):
-        build_model_client(ModelProviderConfig(provider="ollama", options={"typo": "value"}))
+        build_graph_model_client(ModelProviderConfig(provider="ollama", options={"typo": "value"}))
 
 
 def test_model_factory_rejects_invalid_ollama_timeout():
     with pytest.raises(ValueError, match="ollama option 'timeout_seconds' must be a positive integer"):
-        build_model_client(ModelProviderConfig(provider="ollama", options={"timeout_seconds": "slow"}))
+        build_graph_model_client(ModelProviderConfig(provider="ollama", options={"timeout_seconds": "slow"}))
 
 
 @pytest.mark.parametrize("value", [True, 1.5, "12.5", "", "0", 0, -1])
 def test_model_factory_rejects_non_positive_integer_ollama_timeout(value):
     with pytest.raises(ValueError, match="ollama option 'timeout_seconds' must be .*integer"):
-        build_model_client(ModelProviderConfig(provider="ollama", options={"timeout_seconds": value}))
+        build_graph_model_client(ModelProviderConfig(provider="ollama", options={"timeout_seconds": value}))
 
 
 def test_model_factory_rejects_non_string_ollama_model():
     with pytest.raises(ValueError, match="ollama option 'model' must be a string"):
-        build_model_client(ModelProviderConfig(provider="ollama", options={"model": 123}))
+        build_graph_model_client(ModelProviderConfig(provider="ollama", options={"model": 123}))
 
 
 def test_model_factory_builds_openai_compatible_adapter():
-    model = build_model_client(
+    model = build_graph_model_client(
         ModelProviderConfig(
             provider="openai_compatible",
             options={
@@ -76,7 +76,7 @@ def test_model_factory_builds_openai_compatible_adapter():
 
 def test_model_factory_rejects_unsupported_provider_tool_calling_mode():
     with pytest.raises(ValueError, match="openai_compatible does not support tool_calling='prompt_json'"):
-        build_model_client(
+        build_graph_model_client(
             ModelProviderConfig(
                 provider="openai_compatible",
                 options={
@@ -90,7 +90,7 @@ def test_model_factory_rejects_unsupported_provider_tool_calling_mode():
 
 def test_model_factory_rejects_missing_openai_compatible_options():
     with pytest.raises(ValueError, match="openai_compatible option 'model' is required"):
-        build_model_client(
+        build_graph_model_client(
             ModelProviderConfig(
                 provider="openai_compatible",
                 options={"base_url": "http://localhost:8000/v1"},

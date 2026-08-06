@@ -223,16 +223,6 @@ class A2AAdapter:
             task=task,
         )
 
-def _extract_user_input(message: A2AMessage) -> str:
-    if message.role not in {None, "user"}:
-        raise InvalidRequestError("A2A message role must be 'user'.")
-    text_parts = [str(part["text"]).strip() for part in message.parts if isinstance(part.get("text"), str)]
-    text = "\n".join(part for part in text_parts if part)
-    if not text:
-        raise InvalidRequestError("A2A message must include at least one text part.")
-    return text
-
-
 def _validate_jsonrpc_user_message(message: A2AMessage) -> None:
     if message.role not in {None, "user"}:
         raise InvalidRequestError("A2A message role must be 'user'.")

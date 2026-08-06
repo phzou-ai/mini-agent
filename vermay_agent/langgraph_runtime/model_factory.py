@@ -6,7 +6,7 @@ from typing import Mapping
 from vermay_agent.model_clients import OllamaModelClient, OpenAICompatibleModelClient
 
 from .model_adapters import OllamaModelAdapter, OpenAICompatibleModelAdapter
-from .nodes import ModelClient
+from .nodes import GraphModelClient
 
 
 @dataclass(frozen=True)
@@ -15,7 +15,7 @@ class ModelProviderConfig:
     options: Mapping[str, object] = field(default_factory=dict)
 
 
-def build_model_client(config: ModelProviderConfig) -> ModelClient:
+def build_graph_model_client(config: ModelProviderConfig) -> GraphModelClient:
     if config.provider == "ollama":
         _validate_ollama_options(config.options)
         return OllamaModelAdapter(

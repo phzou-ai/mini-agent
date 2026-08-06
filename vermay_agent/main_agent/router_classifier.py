@@ -6,7 +6,7 @@ from typing import Any, Protocol
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from vermay_agent.langgraph_runtime.nodes import ModelClient
+from vermay_agent.langgraph_runtime.nodes import GraphModelClient
 
 from .models import MainAgentRequest, MessageRecord, RegisteredAgentRecord, RouteDecisionKind
 
@@ -39,7 +39,7 @@ class RouterRawJsonClient(Protocol):
 class DirectModelRouterModelClient:
     def __init__(
         self,
-        model: ModelClient | None = None,
+        model: GraphModelClient | None = None,
         *,
         raw_json_client: RouterRawJsonClient | None = None,
         confidence_threshold: float = 0.65,

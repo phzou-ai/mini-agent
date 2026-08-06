@@ -8,7 +8,7 @@ from vermay_agent.langgraph_runtime import (
     LangGraphAgentRuntime,
     ModelProviderConfig,
     ToolInvocationRecorder,
-    build_model_client,
+    build_graph_model_client,
 )
 from vermay_agent.model_selection import resolve_model_selection
 
@@ -108,7 +108,7 @@ def build_runtime(
     )
 
     return LangGraphAgentRuntime(
-        model=build_model_client(active_model),
+        model=build_graph_model_client(active_model),
         tools=registry.tools_for_model(),
         permission_gate=PermissionGate(registry),
         system_prompt=default_system_prompt(),

@@ -268,6 +268,7 @@ unexecuted check as a pass.
 | C8 | Made `create_app()` a single A2A-native application composition and removed `--disable-a2a`. | API, A2A compatibility, Main Agent API, and CLI configuration tests passed. |
 | C9 | Replaced mixed-purpose `context_builder.py` with `system_prompt.py`; removed unused DTOs, exception wrappers, and `ModelResponse.has_tool_call`. | Reference scan and active runtime targeted suite passed. |
 | Second-pass closeout | Ran the documented source-release boundary with the reviewed dirty tree allowed. | Python: 464/464; Web typecheck and production build passed; deterministic Playwright regression: 9/9; source-release boundary passed. |
+| C10 | Third-pass naming and dead-code review: distinguished provider `ModelClient` from `GraphModelClient`, renamed its factory to `build_graph_model_client`, and removed the superseded A2A `_extract_user_input` helper. | Repository-wide symbol/reference scan; Python 464/464; Web typecheck/build; Playwright 9/9; source-release boundary passed. |
 
 ## Second-Pass Decision Record
 
@@ -284,6 +285,12 @@ evidence rather than age or line count:
   the documented A2A service boundary.
 - Large cohesive modules were retained. This pass did not create speculative
   service, repository, node-folder, or browser-state abstractions.
+
+The third pass also reviewed duplicated private helpers and low-reference
+frontend exports. No broader extraction was justified: provider adapters,
+router JSON calls, MCP prompt/resource selection, BFF routes, and page-level
+browser state each retain different contracts. The scan found no additional
+unreferenced public Python class, function, or constant in the active package.
 
 ## Completion Criteria
 

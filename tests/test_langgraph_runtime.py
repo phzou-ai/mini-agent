@@ -20,7 +20,7 @@ from vermay_agent.langgraph_runtime import (
     OpenAICompatibleModelAdapter,
 )
 from vermay_agent.langgraph_runtime.graph import build_graph
-from vermay_agent.langgraph_runtime.model_factory import ModelProviderConfig, build_model_client
+from vermay_agent.langgraph_runtime.model_factory import ModelProviderConfig, build_graph_model_client
 from vermay_agent.langgraph_runtime.nodes import GraphComponents
 from vermay_agent.langgraph_runtime.execution import model_call_limit, policy_from_state
 from vermay_agent.langgraph_runtime.observations import normalize_tool_observation
@@ -1258,6 +1258,6 @@ def test_ollama_adapter_uses_tools_argument_for_each_invocation():
 
 
 def test_model_factory_builds_default_provider_adapter():
-    model = build_model_client(ModelProviderConfig(provider="ollama"))
+    model = build_graph_model_client(ModelProviderConfig(provider="ollama"))
 
     assert isinstance(model, OllamaModelAdapter)

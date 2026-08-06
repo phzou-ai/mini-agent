@@ -4,7 +4,7 @@ from typing import Iterator, Protocol
 
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 
-from vermay_agent.langgraph_runtime.nodes import ModelClient
+from vermay_agent.langgraph_runtime.nodes import GraphModelClient
 from vermay_agent.system_prompt import default_system_prompt
 
 from .context import text_from_parts, to_langchain_message
@@ -16,7 +16,7 @@ class LocalMessageResponder(Protocol):
 
 
 class DirectModelLocalMessageResponder:
-    def __init__(self, model: ModelClient, *, system_prompt: str | None = None) -> None:
+    def __init__(self, model: GraphModelClient, *, system_prompt: str | None = None) -> None:
         self.model = model
         self.system_prompt = system_prompt or default_system_prompt()
 

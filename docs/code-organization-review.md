@@ -38,6 +38,17 @@ by runtime assembly and direct Message response.
 The former `context_builder.py` mixed that active prompt with an unused legacy
 project-message builder. It was replaced by the narrower `system_prompt.py`.
 
+The model boundary has two deliberate protocols with distinct names:
+
+- `model_clients.ModelClient` accepts project `Message` values and returns a
+  provider-neutral `ModelResponse`.
+- `langgraph_runtime.GraphModelClient` accepts LangChain messages and tools and
+  returns a `ModelInvocation` containing an `AIMessage`.
+
+`build_graph_model_client()` constructs the second protocol through the
+provider adapters. This naming prevents raw provider clients and graph-ready
+adapters from being treated as interchangeable.
+
 ## Tool Boundary
 
 ```text
@@ -79,6 +90,9 @@ documentation and Git history instead of executable product source.
   decision-gated public contracts.
 - Provider-specific clients remain separate because router classification and
   task model invocation have different payload and parsing contracts.
+- MCP prompt and resource providers retain separate selection and safety
+  semantics. Their small truncation/deduplication helpers do not justify a
+  shared abstraction yet.
 
 ## Next Refactor Trigger
 
