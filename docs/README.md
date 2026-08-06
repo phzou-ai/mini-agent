@@ -15,8 +15,9 @@ The project is positioned as an A2A-native main-agent runtime and inspectable pr
 5. [runtime-and-release.md](runtime-and-release.md) - supported runtime topology, secrets and persistence boundaries, and release gate.
 6. [langgraph-interrupt-resume.md](langgraph-interrupt-resume.md) - approval interrupt, checkpoint, and resume flow.
 7. [server-api-readiness.md](server-api-readiness.md) - local API surface, session metadata, and approval resume contract.
-8. [code-organization-review.md](code-organization-review.md) - current code organization assessment and cleanup order.
-9. [runtime-refinement/README.md](runtime-refinement/README.md) - current runtime roadmap, ownership contracts, focused implementation specifications, staged evolution criteria, and dated review records.
+8. [code-organization-review.md](code-organization-review.md) - current code organization assessment and historical cleanup guidance.
+9. [cleanup-and-refactor-plan.md](cleanup-and-refactor-plan.md) - completed maintenance-pass scope, protected compatibility boundaries, execution order, and regression evidence.
+10. [runtime-refinement/README.md](runtime-refinement/README.md) - current runtime roadmap, ownership contracts, focused implementation specifications, staged evolution criteria, and dated review records.
 
 For active runtime work, start with the runtime-refinement index. Its roadmap is
 the authoritative source for implementation priority; its dated review is

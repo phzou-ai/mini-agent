@@ -51,6 +51,14 @@ from .remote_agent import RemoteAgentClient, RemoteAgentProtocolError, RemoteAge
 from .responder import LocalMessageResponder
 from .router import DefaultMainAgentRouter, MainAgentRouteDecision, MainAgentRouter
 from .store import MainAgentStore
+from .task_result_projection import (
+    continuation_input_request as _continuation_input_request,
+    local_process_status as _local_process_status,
+    task_result_error_payload as _task_result_error_payload,
+    task_result_execution_metadata as _task_result_execution_metadata,
+    task_result_lifecycle_payload as _task_result_lifecycle_payload,
+    task_result_observations as _task_result_observations,
+)
 from .task_runner import LocalTaskRunResult, LocalTaskRunner
 
 
@@ -1923,83 +1931,6 @@ def _optional_str(value: object) -> str | None:
     if value is None:
         return None
     return str(value)
-
-
-def _local_process_status(result: LocalTaskRunResult) -> TaskStatus:
-    if result.status not in {TaskStatus.INPUT_REQUIRED, TaskStatus.AUTH_REQUIRED}:
-        return result.status
-    input_request = _continuation_input_request(result)
-    if input_request is None:
-        return result.status
-    if input_request["kind"] == "approval_required":
-        return TaskStatus.AUTH_REQUIRED
-    return TaskStatus.INPUT_REQUIRED
-
-
-def _continuation_input_request(result: LocalTaskRunResult) -> dict | None:
-    input_request = result.input_request
-    if not isinstance(input_request, dict):
-        return None
-    kind = input_request.get("kind")
-    if kind not in {"approval_required", "user_input_required"}:
-        return None
-    return dict(input_request)
-
-
-def _task_result_error_payload(
-    result: LocalTaskRunResult,
-    *,
-    observation_artifact_id: str | None = None,
-) -> dict:
-    payload: dict = {}
-    if result.error_code:
-        payload["error_code"] = result.error_code
-    if result.error_message:
-        payload["error_message"] = result.error_message
-    if result.input_request:
-        payload["input_request"] = result.input_request
-    payload.update(_task_result_lifecycle_payload(result, observation_artifact_id=observation_artifact_id))
-    return payload
-
-
-def _task_result_lifecycle_payload(
-    result: LocalTaskRunResult,
-    *,
-    observation_artifact_id: str | None = None,
-) -> dict:
-    payload: dict[str, Any] = {}
-    execution = _task_result_execution(result)
-    if execution:
-        payload["execution"] = execution
-    if observation_artifact_id is not None:
-        payload["observation_artifact_id"] = observation_artifact_id
-    return payload
-
-
-def _task_result_execution_metadata(
-    result: LocalTaskRunResult,
-    *,
-    observation_artifact_id: str | None = None,
-) -> dict[str, Any]:
-    metadata: dict[str, Any] = {}
-    execution = _task_result_execution(result)
-    if execution:
-        metadata["execution"] = execution
-    if observation_artifact_id is not None:
-        metadata["observationArtifactId"] = observation_artifact_id
-    return metadata
-
-
-def _task_result_execution(result: LocalTaskRunResult) -> dict[str, Any]:
-    execution = getattr(result, "execution", None)
-    return dict(execution) if isinstance(execution, dict) else {}
-
-
-def _task_result_observations(result: LocalTaskRunResult) -> list[dict[str, Any]]:
-    observations = getattr(result, "observations", None)
-    if not isinstance(observations, list):
-        return []
-    return [dict(observation) for observation in observations if isinstance(observation, dict)]
 
 
 def _message_request_fingerprint(request: MainAgentRequest) -> str:
