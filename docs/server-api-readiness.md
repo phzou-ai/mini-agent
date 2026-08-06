@@ -15,7 +15,8 @@ Start the server:
 vermay-agent serve
 ```
 
-`serve` exposes the A2A-first service boundary by default. Use `--disable-a2a` only when you explicitly need management APIs without public A2A routes.
+`serve` always exposes the A2A service boundary. The same process also hosts
+the first-party management and diagnostic APIs used by the Web UI.
 
 Default bind address:
 

@@ -40,13 +40,12 @@ Use a different port:
 vermay-agent serve --host 127.0.0.1 --port 9000
 ```
 
-The local server exposes the A2A-first main-agent service surface by default:
+The local server exposes the A2A main-agent service surface together with the
+first-party management and diagnostic APIs used by the Web UI:
 
 ```bash
 vermay-agent serve
 ```
-
-Use `--disable-a2a` only when you explicitly need management APIs without public A2A routes.
 
 Current public A2A service boundary:
 

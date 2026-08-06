@@ -13,7 +13,6 @@ from vermay_agent.langgraph_runtime import (
 from vermay_agent.model_selection import resolve_model_selection
 
 from .checkpointing import build_sqlite_checkpointer
-from .context_builder import default_system_prompt
 from .mcp.client import MCPClientManager
 from .mcp.prompts import MCPPromptProvider
 from .mcp.resources import MCPResourceProvider
@@ -23,6 +22,7 @@ from .progress import ProgressReporter
 from .runtime_context import RuntimeContextProvider
 from .skills import SkillStore
 from .storage import AgentStore
+from .system_prompt import default_system_prompt
 from .tool_registry import ToolRegistry
 from .tools.devops import register_devops_tools
 from .tools.user_input import register_user_input_tool
@@ -111,7 +111,7 @@ def build_runtime(
         model=build_model_client(active_model),
         tools=registry.tools_for_model(),
         permission_gate=PermissionGate(registry),
-        system_prompt=_default_system_prompt(),
+        system_prompt=default_system_prompt(),
         trace=trace,
         max_loops=active_config.max_loops,
         execution_policy=ExecutionPolicy.from_max_loops(
@@ -131,7 +131,3 @@ def build_runtime(
         tool_invocation_recorder=tool_invocation_recorder,
         close_callbacks=[checkpointer.conn.close, agent_store.close],
     )
-
-
-def _default_system_prompt() -> str:
-    return default_system_prompt()

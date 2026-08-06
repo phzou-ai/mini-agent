@@ -30,15 +30,3 @@ class A2AJsonRpcMessageSendRequest(BaseModel):
     method: Literal["message/send"]
     params: dict[str, Any]
     id: Any = None
-
-
-class A2ACancelTaskRequest(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    reason: str | None = None
-
-
-class A2AAdapterResponse(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    payload: dict[str, Any]

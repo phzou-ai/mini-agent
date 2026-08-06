@@ -20,7 +20,7 @@ def make_client(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
     return client, agent_store, core
 
 

@@ -4,8 +4,8 @@ from typing import Iterator, Protocol
 
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 
-from vermay_agent.context_builder import default_system_prompt
 from vermay_agent.langgraph_runtime.nodes import ModelClient
+from vermay_agent.system_prompt import default_system_prompt
 
 from .context import text_from_parts, to_langchain_message
 from .models import MessageRecord

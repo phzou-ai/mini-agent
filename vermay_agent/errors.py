@@ -231,31 +231,6 @@ class ModelProtocolError(ModelError):
         self.reason = reason
 
 
-class ToolError(AgentError):
-    def __init__(self, message: str) -> None:
-        super().__init__(message, code=AgentErrorCode.TOOL_ERROR, http_status=500, public_message="tool error")
-
-
-class CheckpointError(AgentError):
-    def __init__(self, message: str) -> None:
-        super().__init__(
-            message,
-            code=AgentErrorCode.CHECKPOINT_ERROR,
-            http_status=500,
-            public_message="checkpoint error",
-        )
-
-
-class PermissionBoundaryError(AgentError):
-    def __init__(self, message: str) -> None:
-        super().__init__(
-            message,
-            code=AgentErrorCode.PERMISSION_ERROR,
-            http_status=403,
-            public_message="permission error",
-        )
-
-
 def error_info_from_exception(exc: Exception) -> AgentErrorInfo:
     if isinstance(exc, AgentError):
         return AgentErrorInfo(

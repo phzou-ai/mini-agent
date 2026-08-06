@@ -258,6 +258,10 @@ def _final_answer_declares_tool_call(content: str, tool_name: str) -> bool:
     patterns = (
         rf"\bcalling\s+(?:the\s+)?tools?\s*:?\s*[`'\"“”]?{escaped_name}\b",
         rf"(?:正在)?调用\s*(?:工具\s*)?[`'\"“”]?{escaped_name}\b",
+        # Some models leak their internal tool template into message content
+        # instead of using the provider's structured tool-call channel. Treat
+        # the envelope as an invalid final answer, but never parse or execute it.
+        rf"<tool_calls?\b[^>]*>[\s\S]*?\binvoke\s+name\s*=\s*['\"]{escaped_name}['\"]",
     )
     return any(re.search(pattern, content, flags=re.IGNORECASE) is not None for pattern in patterns)
 

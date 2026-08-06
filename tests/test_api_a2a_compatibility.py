@@ -90,7 +90,7 @@ def make_task(core: MainAgentCore, *, context_id: str = "ctx-1"):
 
 def test_a2a_routes_map_invalid_message_and_unknown_task_errors(tmp_path):
     core, store, _runner = make_core(tmp_path)
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     invalid = client.post("/message:send", json={"message": {"role": "agent", "parts": [{"text": "hello"}]}})
     missing = client.get("/tasks/missing-task")
@@ -112,7 +112,7 @@ def test_a2a_routes_map_invalid_message_and_unknown_task_errors(tmp_path):
 
 def test_a2a_subscribe_route_maps_unknown_task_to_http_error_without_jsonrpc_body(tmp_path):
     core, store, _runner = make_core(tmp_path)
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post("/tasks/missing-task:subscribe")
 
@@ -214,7 +214,7 @@ def test_a2a_get_cancel_and_subscribe_use_core_boundary(tmp_path):
 
 def test_a2a_subscribe_path_replays_core_status_and_artifact_events(tmp_path):
     core, store, _runner = make_core(tmp_path, answer="done")
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
     sent = client.post(
         "/message:send",
         json={

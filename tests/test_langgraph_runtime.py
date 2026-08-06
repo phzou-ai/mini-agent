@@ -267,6 +267,54 @@ def test_langgraph_runtime_rejects_final_answer_that_declares_an_unexecuted_tool
     assert executed["value"] is False
 
 
+def test_langgraph_runtime_rejects_dsml_tool_call_emitted_as_text():
+    executed = {"value": False}
+
+    def should_not_run(value: str) -> dict:
+        executed["value"] = True
+        return {"value": value}
+
+    tool = structured_tool(
+        func=should_not_run,
+        name="echo",
+        description="Echo a value.",
+        args_schema=EchoArgs,
+        dangerous=False,
+    )
+    runtime = LangGraphAgentRuntime(
+        model=FakeModel(
+            AIMessage(
+                content=(
+                    "Let me check.\n"
+                    '<tool_calls><｜DSML｜invoke name="echo">'
+                    '<｜DSML｜parameter name="value">hello</｜DSML｜parameter>'
+                    "</｜DSML｜invoke></tool_calls>"
+                )
+            )
+        ),
+        tools=[tool],
+    )
+
+    with pytest.raises(ModelProtocolError, match="without emitting a structured tool call") as raised:
+        runtime.start("echo hello", thread_id="thread-dsml-tool-text")
+
+    assert raised.value.reason == "invalid_model_output"
+    assert executed["value"] is False
+
+
+def test_langgraph_runtime_allows_tool_call_markup_without_a_registered_tool():
+    content = '<tool_calls><｜DSML｜invoke name="unavailable_tool"></｜DSML｜invoke></tool_calls>'
+    runtime = LangGraphAgentRuntime(
+        model=FakeModel(AIMessage(content=content)),
+        tools=[make_echo_tool()],
+    )
+
+    result = runtime.start("show an example", thread_id="thread-unregistered-tool-markup")
+
+    assert result.status == "completed"
+    assert result.final_answer == content
+
+
 def test_langgraph_runtime_allows_a_final_answer_that_only_mentions_a_tool():
     runtime = LangGraphAgentRuntime(
         model=FakeModel(AIMessage(content="You can call tool echo to inspect a value.")),

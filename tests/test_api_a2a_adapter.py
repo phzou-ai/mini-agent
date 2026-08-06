@@ -246,27 +246,14 @@ def test_a2a_agent_card_includes_enabled_registered_agent_summaries(tmp_path):
     store.close()
 
 
-def test_a2a_router_is_not_exposed_by_default_app(tmp_path):
-    adapter, store = make_adapter(tmp_path)
-    core = MainAgentCore(store=MainAgentStore(store), local_message_responder=FakeLocalMessageResponder())
-
-    router = create_a2a_router(adapter)
-    client = TestClient(create_app(main_agent_core=core))
-
-    assert router.routes
-    assert client.get("/.well-known/agent-card.json").status_code == 404
-    assert client.post("/message:send", json={}).status_code == 404
-    store.close()
-
-
-def test_a2a_routes_are_exposed_when_enabled(tmp_path):
+def test_a2a_routes_are_exposed_by_the_default_app(tmp_path):
     store = AgentStore(tmp_path / "agent.sqlite")
     core = MainAgentCore(
         store=MainAgentStore(store),
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     card = client.get("/.well-known/agent-card.json")
     sent = client.post(
@@ -314,7 +301,7 @@ def test_create_app_with_fake_main_agent_supports_a2a_message_task_get_and_subsc
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     message_response = client.post(
         "/message:send",
@@ -379,7 +366,7 @@ def test_create_app_with_fake_main_agent_can_hold_and_cancel_task(tmp_path):
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeHoldingLocalTaskRunner(),
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     task_response = client.post(
         "/message:send",
@@ -456,7 +443,7 @@ def test_a2a_route_jsonrpc_message_send_uses_injected_main_agent_core(tmp_path):
     main_store = MainAgentStore(agent_store)
     responder = FakeLocalMessageResponder()
     core = MainAgentCore(store=main_store, local_message_responder=responder)
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
         "/message:send",
@@ -507,7 +494,7 @@ def test_a2a_route_jsonrpc_remote_agent_message_is_projected(tmp_path):
         local_message_responder=FakeLocalMessageResponder(),
         remote_agent_client=remote_client,
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
         "/message:send",
@@ -575,7 +562,7 @@ def test_a2a_route_jsonrpc_remote_agent_task_is_projected_as_proxy_task(tmp_path
         local_message_responder=FakeLocalMessageResponder(),
         remote_agent_client=remote_client,
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
         "/message:send",
@@ -659,7 +646,7 @@ def test_a2a_route_jsonrpc_remote_proxy_task_get_syncs_remote_status(tmp_path):
         local_message_responder=FakeLocalMessageResponder(),
         remote_agent_client=remote_client,
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
     sent = client.post(
         "/message:send",
         json={
@@ -746,7 +733,7 @@ def test_a2a_route_jsonrpc_remote_proxy_ignores_stale_status_regression(tmp_path
         local_message_responder=FakeLocalMessageResponder(),
         remote_agent_client=remote_client,
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
         "/message:send",
@@ -829,7 +816,7 @@ def test_a2a_route_jsonrpc_remote_proxy_ignores_terminal_regression(tmp_path):
         local_message_responder=FakeLocalMessageResponder(),
         remote_agent_client=remote_client,
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
         "/message:send",
@@ -900,7 +887,7 @@ def test_a2a_route_jsonrpc_remote_proxy_task_cancel_forwards_to_remote_agent(tmp
         local_message_responder=FakeLocalMessageResponder(),
         remote_agent_client=remote_client,
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
     sent = client.post(
         "/message:send",
         json={
@@ -937,7 +924,7 @@ def test_a2a_route_jsonrpc_errors_use_jsonrpc_error_envelope(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
         "/message:send",
@@ -1002,7 +989,7 @@ def test_a2a_route_jsonrpc_message_validation_errors_are_jsonrpc_errors(
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
         "/message:send",
@@ -1063,7 +1050,7 @@ def test_a2a_route_jsonrpc_message_shape_errors_are_jsonrpc_errors(
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
         "/message:send",
@@ -1124,7 +1111,7 @@ def test_a2a_route_jsonrpc_envelope_validation_errors_are_jsonrpc_errors(tmp_pat
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post("/message:send", json=payload)
 
@@ -1145,7 +1132,7 @@ def test_a2a_route_message_stream_emits_local_message_result(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
         "/message:stream",
@@ -1182,7 +1169,7 @@ def test_a2a_route_message_stream_emits_local_task_events(tmp_path):
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
         "/message:stream",
@@ -1301,7 +1288,7 @@ def test_a2a_route_message_stream_emits_jsonrpc_error_event(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
         "/message:stream",
@@ -1324,7 +1311,7 @@ def test_a2a_rpc_masks_model_provider_details_and_preserves_retryability(tmp_pat
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FailingLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
         "/rpc",
@@ -1367,7 +1354,7 @@ def test_a2a_route_message_stream_emits_jsonrpc_error_event_for_invalid_message(
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
         "/message:stream",
@@ -1399,7 +1386,7 @@ def test_a2a_route_jsonrpc_local_task_get_cancel_and_subscribe(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
         "/message:send",
@@ -1441,7 +1428,7 @@ def test_a2a_rpc_send_message_supports_pascal_case_method(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
         "/rpc",
@@ -1474,7 +1461,7 @@ def test_a2a_rpc_get_and_cancel_task_support_pascal_case_methods(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
         "/rpc",
@@ -1538,7 +1525,7 @@ def test_a2a_rpc_resume_task_supports_pascal_case_method(tmp_path):
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=runner,
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
         "/rpc",
@@ -1610,7 +1597,7 @@ def test_a2a_send_message_continues_input_required_task_without_router(tmp_path)
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=runner,
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     started = client.post(
         "/rpc",
@@ -1696,7 +1683,7 @@ def test_a2a_rpc_accepts_current_slash_method_aliases(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
         "/rpc",
@@ -1733,7 +1720,7 @@ def test_a2a_rpc_missing_task_preserves_request_id_in_jsonrpc_error(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
         "/rpc",
@@ -1758,7 +1745,7 @@ def test_a2a_rpc_send_streaming_message_emits_local_message_result(tmp_path):
     main_store = MainAgentStore(agent_store)
     responder = FakeLocalMessageResponder()
     core = MainAgentCore(store=main_store, local_message_responder=responder)
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
         "/rpc",
@@ -1793,7 +1780,7 @@ def test_a2a_rpc_send_streaming_message_emits_partial_local_message_events(tmp_p
     main_store = MainAgentStore(agent_store)
     responder = FakeStreamingLocalMessageResponder()
     core = MainAgentCore(store=main_store, local_message_responder=responder)
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
         "/rpc",
@@ -1848,7 +1835,7 @@ def test_a2a_rpc_send_streaming_auto_falls_back_to_local_message(tmp_path):
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
         "/rpc",
@@ -1888,7 +1875,7 @@ def test_a2a_rpc_send_streaming_message_emits_local_task_events(tmp_path):
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
         "/rpc",
@@ -1930,7 +1917,7 @@ def test_a2a_rpc_send_streaming_message_follows_background_task_to_terminal_stat
         local_task_runner=SlowFakeLocalTaskRunner(),
         task_submitter=executor,
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
         "/rpc",
@@ -1967,7 +1954,7 @@ def test_a2a_rpc_subscribe_to_task_replays_artifact_update(tmp_path):
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
         "/rpc",
@@ -2021,7 +2008,7 @@ def test_a2a_rpc_subscribe_to_task_validation_errors_stream_jsonrpc_error(tmp_pa
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
         "/rpc",
@@ -2081,7 +2068,7 @@ def test_a2a_rpc_validation_errors(request_json, code, message, local_code, tmp_
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post("/rpc", json=request_json)
 
@@ -2102,7 +2089,7 @@ def test_a2a_rpc_invalid_json_returns_parse_error(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     response = client.post("/rpc", content="{", headers={"content-type": "application/json"})
 
@@ -2123,7 +2110,7 @@ def test_a2a_route_jsonrpc_task_cancel_accepts_request_body_and_preserves_id(tmp
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
         "/message:send",
@@ -2171,7 +2158,7 @@ def test_a2a_route_jsonrpc_local_task_subscribe_replays_artifact_update(tmp_path
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
         "/message:send",
@@ -2214,7 +2201,7 @@ def test_a2a_route_jsonrpc_task_subscribe_accepts_request_body_after_event_id(tm
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
         "/message:send",
@@ -2271,7 +2258,7 @@ def test_a2a_route_jsonrpc_task_subscribe_request_validation_errors(tmp_path, pa
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     subscribed = client.post(
         "/tasks/task-1:subscribe",
@@ -2294,7 +2281,7 @@ def test_a2a_route_jsonrpc_task_subscribe_unknown_task_streams_jsonrpc_error(tmp
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     subscribed = client.post(
         "/tasks/missing-task:subscribe",
@@ -2331,7 +2318,7 @@ def test_a2a_route_jsonrpc_task_cancel_request_validation_errors(tmp_path, param
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     canceled = client.post(
         "/tasks/task-1:cancel",
@@ -2360,7 +2347,7 @@ def test_a2a_route_jsonrpc_completed_local_task_cancel_is_rejected(tmp_path):
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
         "/message:send",
@@ -2403,7 +2390,7 @@ def test_a2a_route_jsonrpc_completed_local_task_cancel_returns_jsonrpc_error(tmp
         local_message_responder=FakeLocalMessageResponder(),
         local_task_runner=FakeLocalTaskRunner(),
     )
-    client = TestClient(create_app(enable_a2a=True, main_agent_core=core))
+    client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
         "/message:send",

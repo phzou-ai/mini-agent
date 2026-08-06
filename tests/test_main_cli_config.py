@@ -200,26 +200,8 @@ def test_serve_command_runs_uvicorn_with_local_defaults(monkeypatch):
 
     run_serve_command([])
 
-    assert created == [{"enable_a2a": True}]
+    assert created == [{}]
     assert calls == [(("app",), {"host": "127.0.0.1", "port": 8000})]
-
-
-def test_serve_command_can_disable_a2a_routes(monkeypatch):
-    calls = []
-
-    def fake_run(*args, **kwargs):
-        calls.append((args, kwargs))
-
-    monkeypatch.setattr("uvicorn.run", fake_run)
-
-    run_serve_command(["--disable-a2a"])
-
-    assert calls == [
-        (
-            ("vermay_agent.api.app:create_app",),
-            {"factory": True, "host": "127.0.0.1", "port": 8000},
-        )
-    ]
 
 
 def test_serve_command_accepts_host_and_port(monkeypatch):

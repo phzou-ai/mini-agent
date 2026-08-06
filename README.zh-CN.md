@@ -169,11 +169,7 @@ host: 127.0.0.1
 port: 8000
 ```
 
-`serve` 默认暴露 A2A 服务。只有当你只想运行本地 management APIs，且不需要 agent 通信入口时，才禁用 A2A：
-
-```bash
-vermay-agent serve --disable-a2a
-```
+`serve` 同时暴露 A2A 服务，以及 Web UI 使用的第一方管理和诊断 API。
 
 健康检查：
 

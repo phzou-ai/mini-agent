@@ -2,203 +2,92 @@
 
 ## Scope
 
-This review focuses on the active project path:
+This review describes the supported product path after the August 2026
+maintenance pass. It focuses on ownership boundaries rather than file size.
 
-- `vermay_agent/main.py`
-- `vermay_agent/app_factory.py`
-- `vermay_agent/langgraph_runtime/`
-- shared harness modules under `vermay_agent/`
-- active tests under `tests/`
-
-The archived hands-on runtime is outside the active maintenance path and should not drive new architecture decisions.
-
-## Current Assessment
-
-The project now has one active execution stack:
+## Active Execution Stack
 
 ```text
-A2A / management ingress
-  -> vermay_agent/main_agent/
-     -> vermay_agent/langgraph_runtime/
+A2A ingress / first-party Web APIs
+  -> MainAgentCore
+     -> direct Message response
+     -> delegated child agent
+     -> local Task process
+        -> LangGraphAgentRuntime
 ```
 
-`MainAgentCore` owns message routing and durable process lifecycle;
-`langgraph_runtime` uses standard LangChain / LangGraph data structures and
-`ToolNode` for local execution and checkpoint continuation. The earlier
-explicit harness runtime has been moved to:
+There is one public lifecycle owner and one local graph execution kernel:
 
-```text
-archive/hands_on_langgraph_runtime/
-```
+- `vermay_agent/main_agent/` owns Context, Message, A2A Task, local process,
+  continuation, cancellation, retry, persistence, and protocol projection.
+- `vermay_agent/langgraph_runtime/` owns graph state, model/tool iterations,
+  permission and approval nodes, checkpoints, and runtime results.
+- `vermay_agent/api/` binds these capabilities to FastAPI, JSON-RPC, SSE, and
+  first-party read models. It does not own an alternate lifecycle.
 
-This removes the main structural ambiguity in the project. Future work should extend the active runtime unless a task explicitly asks for historical comparison.
+The CLI may invoke the LangGraph runtime directly as a development harness. It
+does not create a second server-side Task lifecycle.
 
-## Active Module Boundaries
+## Composition Boundary
 
-### `main.py`
+`vermay_agent/app_factory.py` assembles model adapters, tools, permission
+checks, checkpoints, memory, skills, MCP context, tracing, and owned resource
+cleanup. `vermay_agent/system_prompt.py` owns the baseline system prompt shared
+by runtime assembly and direct Message response.
 
-Responsibilities:
+The former `context_builder.py` mixed that active prompt with an unused legacy
+project-message builder. It was replaced by the narrower `system_prompt.py`.
 
-- provide the `vermay-agent` console entry point and keep `mini-agent` as a compatibility alias
-- route prompt execution to `vermay_agent/cli/prompt.py`
-- route named subcommands to `vermay_agent/cli/subcommands.py`
-- keep compatibility re-exports while tests and downstream imports migrate
-
-Current status: thin dispatcher.
-
-### `vermay_agent/cli/`
-
-Responsibilities:
-
-- prompt-run argument parsing
-- model provider option parsing
-- trace path validation
-- interactive approval prompting
-- subcommand parsing for `serve`, memory, skills, eval replay, and MCP inspection
-
-Current status: active CLI implementation boundary.
-
-### `app_factory.py`
-
-Responsibilities:
-
-- build runtime dependencies
-- register tools
-- construct model adapters through `ModelProviderConfig`
-- wire permission, trace, progress, and checkpoint components
-- own factory-level paths such as `trace_path` and `checkpoint_path`
-
-Current status: active runtime assembly boundary.
-
-### `vermay_agent/langgraph_runtime/`
-
-Responsibilities:
-
-- graph state
-- graph topology
-- node implementations
-- routing
-- runtime wrapper
-- model adapter boundary
-
-Current status: active production-oriented path.
-
-Watch point:
-
-- `nodes.py` still combines graph node behavior, progress events, and trace events. This is acceptable for the current size, but it is the first file to split if memory, skills, model adapter orchestration, or MCP nodes are added.
-
-Potential future split:
-
-```text
-vermay_agent/langgraph_runtime/
-  nodes/
-    model.py
-    permission.py
-    approval.py
-    tools.py
-    loop.py
-  events.py
-```
-
-Do not split this until there is a concrete maintenance trigger.
-
-### `vermay_agent/api/`
-
-Responsibilities:
-
-- FastAPI application composition and lifespan ownership
-- A2A JSON-RPC/SSE binding and first-party management/read-model endpoints
-- no independent task lifecycle ownership
-
-Current status: active transport and composition boundary over `MainAgentCore`.
-The old service/session implementation and its dedicated tests have been
-removed; the API package has no alternate lifecycle owner.
-
-### Shared Harness Modules
-
-Current shared modules:
-
-- `context_builder.py`
-- `tooling.py`
-- `tool_registry.py`
-- `permission.py`
-- `progress.py`
-- `trace.py`
-- `result_summary.py`
-- `types.py`
-
-Current status: acceptable.
-
-Current classification:
-
-```text
-active:
-  tool_registry.py
-  tool_schema.py
-  tooling.py
-
-active bridge / compatibility:
-  context_builder.py
-  types.py
-
-compatibility / archived harness reference:
-  observation.py
-  tool_executor.py
-```
-
-`context_builder.py` remains active as the source of baseline context policy text, but its project-message builder is a legacy shape compared with the active LangGraph message state. `types.py` still provides active bridge types for model adapters and permission checks. `observation.py` and `tool_executor.py` are intentionally retained for explicit harness tests and archived-runtime reference; they are not part of the active `ToolNode` execution path.
-
-Tool schema policy:
+## Tool Boundary
 
 ```text
 Pydantic args_schema
   -> StructuredTool
   -> ToolRegistry.schemas()
-  -> model prompt schema
+  -> model-facing tool schema
   -> ToolNode validation and execution
 ```
 
-The active runtime should not reintroduce a second tool-parameter schema beside the Pydantic `args_schema`.
+`StructuredTool` is the active tool object. The removed legacy
+`tool_executor.py`, `observation.py`, `ToolResult`, and `Observation` types did
+not participate in this path.
 
-Do not move these into a separate package yet. A package-level refactor would create import churn without a clear immediate benefit.
+## Service Shape
 
-## Archived Runtime Policy
+`create_app()` always exposes the A2A boundary and the first-party management
+and diagnostic APIs required by the Web UI. The removed `enable_a2a` factory
+switch and `--disable-a2a` CLI option created an untested management-only
+application shape that did not match the product's A2A-native position.
 
-`archive/hands_on_langgraph_runtime/` exists for historical reference only.
+## Historical Runtime Decision
 
-Policy:
+The old `archive/hands_on_langgraph_runtime/` tree was not a self-contained
+reference: it imported removed product classes and could not be imported. It
+also forced active modules to retain dead compatibility types. The tree and
+those bridges were deleted. Historical architecture decisions remain in dated
+documentation and Git history instead of executable product source.
 
-- do not expose it through CLI
-- do not include it in default pytest collection
-- do not add new production features there
-- do not use it as the basis for future runtime expansion
+## Intentionally Retained Structure
 
-If the archived runtime is needed for explanation or comparison, read it as reference material rather than reactivating it.
+- Thin Next.js BFF route files remain because they are framework route
+  boundaries, not duplicate lifecycle implementations.
+- `MainAgentCore`, `MainAgentStore`, `langgraph_runtime/nodes.py`, and the page
+  controller remain relatively large. Their responsibilities are cohesive
+  enough for the current rapid-development stage; splitting them without a
+  concrete ownership boundary would add indirection.
+- Legacy project-name aliases and supported A2A compatibility bindings remain
+  decision-gated public contracts.
+- Provider-specific clients remain separate because router classification and
+  task model invocation have different payload and parsing contracts.
 
-## Test Organization
+## Next Refactor Trigger
 
-Active tests should cover the active runtime and shared modules.
+Do not add another runtime selection layer or repository hierarchy. Consider a
+new extraction only when one of these concrete triggers appears:
 
-Archived reference tests are stored under:
-
-```text
-archive/hands_on_langgraph_runtime/reference_tests/
-```
-
-They intentionally avoid the `test_` filename prefix so default pytest does not collect them.
-
-## Recommended Cleanup Order
-
-1. Keep a single active CLI runtime.
-2. Keep active docs aligned with `vermay_agent/langgraph_runtime/`.
-3. Keep prompt and subcommand CLI logic under `vermay_agent/cli/`.
-4. Keep archived runtime out of main test and CLI paths.
-5. Split `langgraph_runtime/nodes.py` only when new runtime capabilities make the file materially harder to maintain.
-6. Keep server/API work on explicit durable checkpoint injection rather than direct-constructor in-memory defaults.
-
-## Do Not Do Yet
-
-- Do not introduce another runtime selection layer.
-- Do not move all shared harness modules into a new package.
-- Do not expand memory, MCP, A2A, or model adapter orchestration during this cleanup pass.
-- Do not treat archive code as a supported runtime.
+1. a module gains a second lifecycle owner;
+2. the same state transition is implemented in more than one layer;
+3. a pure mapping or presentation concern obscures transaction or execution
+   logic; or
+4. focused tests cannot isolate a responsibility without constructing an
+   unrelated subsystem.

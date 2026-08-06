@@ -42,28 +42,13 @@ def run_serve_command(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(prog="vermay-agent serve")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument(
-        "--disable-a2a",
-        action="store_true",
-        help="Disable A2A protocol routes and expose only management APIs.",
-    )
     args = parser.parse_args(argv)
 
     import uvicorn
-
-    if not args.disable_a2a:
-        from ..api.app import create_app
-
-        uvicorn.run(
-            create_app(enable_a2a=True),
-            host=args.host,
-            port=args.port,
-        )
-        return
+    from ..api.app import create_app
 
     uvicorn.run(
-        "vermay_agent.api.app:create_app",
-        factory=True,
+        create_app(),
         host=args.host,
         port=args.port,
     )

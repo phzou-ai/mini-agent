@@ -32,7 +32,10 @@ The primary service path is the A2A main-agent boundary implemented by `vermay_a
 
 The LangGraph executor is implemented by `vermay_agent/langgraph_runtime/`. The CLI calls this layer directly as a development and operations harness; it does not represent the complete A2A main-agent lifecycle.
 
-The earlier hands-on runtime has been archived under `archive/hands_on_langgraph_runtime/`. It remains useful as historical reference material for explicit harness mechanics, but it is not an active runtime path.
+The repository contains one runtime implementation. Historical experimental
+runtime code that no longer imported cleanly or participated in product tests
+has been removed, so the active package does not carry compatibility bridges
+for an unsupported execution path.
 
 The architectural direction for separating A2A protocol resources, durable local process lifecycle, LangGraph continuation, and direct Message execution is documented in [agent-os-architecture.md](agent-os-architecture.md). The Agent OS model is a responsibility and lifecycle abstraction; it does not replace A2A or LangGraph and does not require an immediate code or database rename.
 

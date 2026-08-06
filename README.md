@@ -169,11 +169,8 @@ host: 127.0.0.1
 port: 8000
 ```
 
-`serve` exposes the A2A service by default. Disable A2A only when you want to run the local management APIs without the agent communication endpoint:
-
-```bash
-vermay-agent serve --disable-a2a
-```
+`serve` exposes the A2A service together with the first-party management and
+diagnostic APIs used by the Web UI.
 
 Health check:
 

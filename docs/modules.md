@@ -88,11 +88,11 @@ local graph execution and checkpoint continuation.
 
 This package is the only active runtime path. It is the production-oriented path and uses LangChain / LangGraph standard message and tool execution types.
 
-## Shared Harness Components
+## Shared Runtime Components
 
 `vermay_agent/`
 
-- `context_builder.py`: builds the default system prompt and legacy project-message context; active runtime construction still reuses it as the source for baseline context policy text.
+- `system_prompt.py`: owns the default agent system prompt used by runtime assembly and direct Message responses.
 - `checkpointing.py`: builds SQLite checkpointers for durable CLI approval resume.
 - `tooling.py`: helper for creating `StructuredTool` objects with Pydantic `args_schema` and project metadata.
 - `tool_schema.py`: converts active `StructuredTool` objects into model-facing schemas.
@@ -109,11 +109,9 @@ This package is the only active runtime path. It is the production-oriented path
 - `runtime_context.py`: injects selected MCP prompts, authored skills, memory, and selected MCP resources as initial system context.
 - `evaluation.py`: offline trace/scenario replay reporting without live model or live tool execution.
 - `mcp/`: MCP client integration package for config parsing, dataclasses, transport, tool wrapping, prompt/resource providers, and structured selection payloads.
-- `types.py`: shared dataclasses for project message, tool-call, result, observation, and model-response payloads. `Message`, `ToolCall`, and `ModelResponse` remain active bridge types for model adapters and permission checks; `ToolResult` and `Observation` are retained for compatibility and explicit harness tests.
+- `types.py`: active bridge dataclasses used by model clients, tool-call normalization, and permission checks.
 
 The active tool schema source is each tool's Pydantic `args_schema`. Model adapters and `ToolRegistry.schemas()` both derive schemas from the same `StructuredTool` objects that `ToolNode` executes.
-
-`tool_executor.py` and `observation.py` are retained for compatibility, archived harness reference, and explicit harness tests. They are not the active ToolNode execution path.
 
 ## Model Adapters
 
@@ -184,12 +182,3 @@ Explicitly selected MCP prompts and resources are read once at run start. `Runti
 - Builds strict SSH commands from environment configuration.
 - Enforces host key checking and known hosts usage.
 - Redacts identity file path in returned command traces.
-
-## Archive
-
-`archive/hands_on_langgraph_runtime/`
-
-- Contains the earlier explicit harness implementation.
-- Is not exposed through the CLI.
-- Is not part of the default pytest suite.
-- Should be treated as historical reference material, not a second runtime track.

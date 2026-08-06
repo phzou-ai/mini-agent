@@ -44,7 +44,6 @@ from .management_models import (
 
 def create_app(
     *,
-    enable_a2a: bool = False,
     main_agent_core: MainAgentCore | None = None,
 ) -> FastAPI:
     owned_store = None
@@ -80,15 +79,14 @@ def create_app(
             return JSONResponse(status_code=exc.status_code, content=exc.detail, headers=exc.headers)
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
 
-    if enable_a2a:
-        app.include_router(
-            create_a2a_router(
-                A2AAdapter(
-                    config=A2AAdapterConfig(agent_card=A2AAgentCardConfig(streaming=True)),
-                    main_agent_core=main_agent_core,
-                )
+    app.include_router(
+        create_a2a_router(
+            A2AAdapter(
+                config=A2AAdapterConfig(agent_card=A2AAgentCardConfig(streaming=True)),
+                main_agent_core=main_agent_core,
             )
         )
+    )
 
     @app.get("/health")
     def health() -> dict[str, str]:

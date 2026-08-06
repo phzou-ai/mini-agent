@@ -1,6 +1,6 @@
 # Cleanup And Refactor Plan
 
-**Status:** completed maintenance pass, 2026-08-05
+**Status:** completed second maintenance pass, 2026-08-06
 **Scope:** reduce accidental complexity without adding product capabilities or
 changing the current A2A, local-process, or LangGraph contracts.
 
@@ -49,7 +49,9 @@ colocated Next.js console, tests, scripts, and active documentation.
 | BFF routes | The Next route tree contains many thin filesystem-route wrappers over shared proxy helpers. | Keep. This repetition is framework structure, not harmful duplicated lifecycle logic. |
 | Legacy aliases | `mini-agent`, `mini_agent`, and `MINI_AGENT_*` are documented compatibility aliases. | Decision-gated; do not remove in this pass without an explicit compatibility retirement decision. |
 | A2A transport compatibility | Canonical `/rpc` and supported path-style bindings are tested and exercised by scripts. | Decision-gated; do not remove while they remain a documented/tested surface. |
-| Archived harness | `archive/` is explicitly outside the active product path. `observation.py` and `tool_executor.py` are retained compatibility/reference modules with focused tests. | Keep for now; classify clearly rather than deleting reference material. |
+| Historical runtime | The archived harness no longer imported because it depended on removed product classes. Those dependencies also kept dead bridge modules in the active package. | Remove the broken executable archive and its product compatibility bridges; keep history in Git and dated docs. |
+| Service composition | `create_app(enable_a2a=...)` and `--disable-a2a` supported a management-only process shape even though the product boundary is A2A-native. | Keep one application shape: A2A plus first-party Web management and diagnostics. |
+| Prompt ownership | `context_builder.py` combined the active system prompt with an unused legacy project-message builder. | Replace it with the narrowly named `system_prompt.py`. |
 | Documentation | Active runtime material is well covered, but the roadmap, dated review, current assessment, and prior organization review overlap in purpose. | Add this plan as the active cleanup authority; preserve dated records as evidence rather than rewriting history. |
 | Styling | `preflight.css` is a substantial compatibility/reset layer. | Investigate only after visual regression evidence; do not remove during the first batches. |
 
@@ -57,15 +59,13 @@ colocated Next.js console, tests, scripts, and active documentation.
 
 The following are not automatic slimming targets:
 
-1. `archive/hands_on_langgraph_runtime/` and its reference tests.
-2. `vermay_agent/observation.py` and `vermay_agent/tool_executor.py`.
-3. `mini_agent` package and `mini-agent` command alias.
-4. `MINI_AGENT_*` environment fallbacks.
-5. A2A path-style compatibility bindings and the `/rpc` contract.
-6. Next.js BFF filesystem routes.
-7. `prompt_json` model-tool compatibility mode.
-8. `langgraph_runtime/nodes.py` as a speculative folder split.
-9. `web/styles/preflight.css` without screenshot-based verification.
+1. `mini_agent` package and `mini-agent` command alias.
+2. `MINI_AGENT_*` environment fallbacks.
+3. A2A path-style compatibility bindings and the `/rpc` contract.
+4. Next.js BFF filesystem routes.
+5. `prompt_json` model-tool compatibility mode.
+6. `langgraph_runtime/nodes.py` as a speculative folder split.
+7. `web/styles/preflight.css` without screenshot-based verification.
 
 Removing any item above needs a separate product or compatibility decision,
 not a mechanical cleanup change.
@@ -223,10 +223,10 @@ variables, or persisted names as a cosmetic operation.
 
 **Priority:** last and decision-gated.
 
-**Status:** completed for this pass. The re-scan found no production module
-that can be deleted without either breaking a documented compatibility surface
-or discarding intentional reference material. Generated artifacts remain
-ignored and untouched; no deletion proposal is warranted.
+**Status:** superseded by the evidence-based second pass below. The first pass
+classified the archived harness as intentional reference material. A later
+import check established that it was neither self-contained nor executable,
+which changed the deletion decision.
 
 After C1-C5, re-scan imports, scripts, documentation, package contents, and
 real user workflows. Produce an explicit deletion proposal only for a candidate
@@ -262,8 +262,28 @@ unexecuted check as a pass.
 | C2 | Extracted SQLite row mappers and JSON serializers to `store_mappers.py`. | `tests/test_main_agent_store.py` and `tests/test_tool_invocation_ledger.py`: 21 passed. |
 | C3 | Extracted pure local task-result projection to `task_result_projection.py`. | `tests/test_main_agent_core.py`: 61 passed. |
 | C4 | Reviewed provider adapter overlap. | Deferred: router JSON and general model invocation have deliberately different contracts; no safe consolidation without a separate contract decision. |
-| C5/C6 | Updated the documentation index and re-scanned protected compatibility candidates. | No safe production deletion candidate found; aliases, A2A bindings, BFF wrappers, and archived reference material remain intentionally retained. |
+| C5/C6 | Initial pass updated the documentation index and classified compatibility candidates. | That pass retained aliases, A2A bindings, BFF wrappers, and archived material; the later C7 importability evidence superseded only the archive decision. |
 | C0 closeout | Ran the deterministic reliability and full-stack regression baselines after all extractions. | Python: 471/471; production Web build and typecheck passed; browser regression 9/9 passed. A separate full browser E2E pass also passed 29/29. |
+| C7 | Removed the non-importable historical runtime tree and its unused `observation.py`, `tool_executor.py`, `ToolResult`, and `Observation` compatibility path. | Import/reference scan; active runtime targeted suite passed. Git history remains the historical source. |
+| C8 | Made `create_app()` a single A2A-native application composition and removed `--disable-a2a`. | API, A2A compatibility, Main Agent API, and CLI configuration tests passed. |
+| C9 | Replaced mixed-purpose `context_builder.py` with `system_prompt.py`; removed unused DTOs, exception wrappers, and `ModelResponse.has_tool_call`. | Reference scan and active runtime targeted suite passed. |
+| Second-pass closeout | Ran the documented source-release boundary with the reviewed dirty tree allowed. | Python: 464/464; Web typecheck and production build passed; deterministic Playwright regression: 9/9; source-release boundary passed. |
+
+## Second-Pass Decision Record
+
+The second pass deliberately used runtime importability and active-reference
+evidence rather than age or line count:
+
+- The archived harness failed at import time because it referenced a removed
+  `MemoryStore`. It was therefore not a functioning reference test surface.
+- No active product code imported its runner, adapter, observation, or legacy
+  tool-execution types.
+- The current tool path is fully represented by `StructuredTool`,
+  `ToolRegistry`, permission/approval nodes, and LangGraph `ToolNode`.
+- A management-only FastAPI shape had no product requirement and contradicted
+  the documented A2A service boundary.
+- Large cohesive modules were retained. This pass did not create speculative
+  service, repository, node-folder, or browser-state abstractions.
 
 ## Completion Criteria
 
