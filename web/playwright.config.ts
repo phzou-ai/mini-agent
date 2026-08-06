@@ -6,20 +6,20 @@ const backendPort = Number(process.env.PLAYWRIGHT_BACKEND_PORT ?? 8000)
 const frontendBaseUrl =
   process.env.PLAYWRIGHT_BASE_URL ?? `http://localhost:${frontendPort}`
 const backendBaseUrl =
-  process.env.VERMAY_AGENT_API_BASE ?? `http://127.0.0.1:${backendPort}`
+  process.env.VERMAY_API_BASE ?? `http://127.0.0.1:${backendPort}`
 
 const backendCommand =
   process.env.PLAYWRIGHT_BACKEND_COMMAND ??
   [
     "cd .. &&",
-    ".venv/bin/python -m vermay_agent.main serve",
+    ".venv/bin/python -m vermay.main serve",
     "--host 127.0.0.1",
     `--port ${backendPort}`,
   ].join(" ")
 
 const frontendCommand =
   process.env.PLAYWRIGHT_FRONTEND_COMMAND ??
-  `VERMAY_AGENT_API_BASE=${backendBaseUrl} pnpm exec next dev --hostname 127.0.0.1 --port ${frontendPort}`
+  `VERMAY_API_BASE=${backendBaseUrl} pnpm exec next dev --hostname 127.0.0.1 --port ${frontendPort}`
 
 export default defineConfig({
   testDir: "./tests/e2e",

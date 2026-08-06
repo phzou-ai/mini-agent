@@ -1,17 +1,17 @@
 import pytest
 from pydantic import Field
 
-from vermay_agent.tool_registry import ToolRegistry
-from vermay_agent.tooling import ToolArgs, structured_tool
-from vermay_agent.tool_metadata import ApprovalPolicy, ExecutionScope, SideEffectLevel, ToolCategory
-from vermay_agent.tool_schema import DEFAULT_OUTPUT_MAX_CHARS
-from vermay_agent.tools.devops import register_devops_tools
-from vermay_agent.tools.devops.constants import (
+from vermay.tool_registry import ToolRegistry
+from vermay.tooling import ToolArgs, structured_tool
+from vermay.tool_metadata import ApprovalPolicy, ExecutionScope, SideEffectLevel, ToolCategory
+from vermay.tool_schema import DEFAULT_OUTPUT_MAX_CHARS
+from vermay.tools.devops import register_devops_tools
+from vermay.tools.devops.constants import (
     KUBECTL_DELETE_RESOURCES,
     KUBECTL_DESCRIBE_RESOURCES,
     KUBECTL_GET_RESOURCES,
 )
-from vermay_agent.tools.weather import register_weather_tools
+from vermay.tools.weather import register_weather_tools
 
 
 class SampleArgs(ToolArgs):

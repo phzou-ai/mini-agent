@@ -1,8 +1,8 @@
-# Vermay Agent
+# Vermay
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Vermay Agent 是一个基于 A2A 协议的本地主 Agent runtime。它提供一个主 agent，可以：
+Vermay 是一个基于 A2A 协议的本地主 Agent runtime。它提供一个主 agent，可以：
 
 - 以 message 方式直接回答轻量请求；
 - 运行由 LangGraph 支撑的本地 task，并支持 events、artifacts、审批中断、取消和恢复；
@@ -59,7 +59,7 @@ flowchart TB
 | `context_id` / `session_id` | 长生命周期的对话或工作上下文。 |
 | `message_id` | context 中的用户或 agent 消息标识。 |
 | `task_id` | A2A `Task.id`：一个工作单元及其生命周期的外部标识。A2A client 和 Web UI 使用它获取、取消、订阅或恢复该 task。 |
-| `thread_id` | LangGraph runtime 的 `thread_id`：该 task 图执行的 checkpoint key。Vermay Agent 在启动或恢复 LangGraph 时将 `task_id` 映射到它；它既不是 A2A task 标识，也不是对话或 session 标识。 |
+| `thread_id` | LangGraph runtime 的 `thread_id`：该 task 图执行的 checkpoint key。Vermay 在启动或恢复 LangGraph 时将 `task_id` 映射到它；它既不是 A2A task 标识，也不是对话或 session 标识。 |
 
 一个 session 可以包含多个 task，每个可恢复的 task 都有自己的 `thread_id`。为了诊断，runtime thread 可能出现在本地 CLI 或 inspector 输出中；但 A2A client 应始终使用 `task_id` 标识和恢复工作。发生 approval interrupt 时，`MainAgentCore` 先将 `task_id` 解析为 `thread_id`，再恢复 checkpointed LangGraph execution。
 
@@ -142,7 +142,7 @@ python -m pip install -e ".[dev]"
 ## CLI 快速开始
 
 ```bash
-vermay-agent "weather forecast for Beijing"
+vermay "weather forecast for Beijing"
 ```
 
 CLI 会把 progress 输出到 stderr，把最终回答输出到 stdout。
@@ -150,16 +150,14 @@ CLI 会把 progress 输出到 stderr，把最终回答输出到 stdout。
 关闭 progress 输出：
 
 ```bash
-vermay-agent "weather forecast for Beijing" --no-progress
+vermay "weather forecast for Beijing" --no-progress
 ```
-
-`mini-agent` 命令也会作为 alias 安装。
 
 ## 启动后端
 
 ```bash
 source .venv/bin/activate
-vermay-agent serve
+vermay serve
 ```
 
 默认配置：
@@ -194,14 +192,14 @@ Web app 默认运行在 `http://localhost:3000/agent`，并将后端请求代理
 需要时可以覆盖后端 URL：
 
 ```bash
-VERMAY_AGENT_API_BASE=http://127.0.0.1:8000 pnpm dev
+VERMAY_API_BASE=http://127.0.0.1:8000 pnpm dev
 ```
 
 ## 运行与发布边界
 
 `0.1.x` 当前支持的发布形式是源码 checkout 或源码归档。Python 后端和 private Next.js 前端分别构建、分别运行，后端不会托管前端 bundle。PyPI wheel、npm package、container image 和前后端合并 executable 暂时都不是维护中的发布物。
 
-生产式本地部署应让 `vermay-agent serve` 只监听 localhost，并通过 `pnpm build && pnpm start` 运行构建后的前端。后端没有内置认证，不能直接暴露到不可信网络。Secrets 应通过环境变量或未跟踪的 `.env` 注入；SQLite 数据库、checkpoints、traces 和生成的 proposals 属于运行时状态，不属于源码发布内容。
+生产式本地部署应让 `vermay serve` 只监听 localhost，并通过 `pnpm build && pnpm start` 运行构建后的前端。后端没有内置认证，不能直接暴露到不可信网络。Secrets 应通过环境变量或未跟踪的 `.env` 注入；SQLite 数据库、checkpoints、traces 和生成的 proposals 属于运行时状态，不属于源码发布内容。
 
 支持的运行命令、持久化要求、公共服务边界和发布检查清单见 [运行与发布边界](docs/runtime-and-release.md)。
 
@@ -357,12 +355,12 @@ fallback。
 - `local_task`；
 - `remote_agent`。
 
-如果省略 `router_model`，router 会使用 `primary_model`。`VERMAY_AGENT_ROUTER_MODEL` 可以在本地实验时临时覆盖配置中的 router model。
+如果省略 `router_model`，router 会使用 `primary_model`。`VERMAY_ROUTER_MODEL` 可以在本地实验时临时覆盖配置中的 router model。
 
 从 CLI 使用另一个已配置模型：
 
 ```bash
-vermay-agent "weather forecast for Beijing" --model local_ollama
+vermay "weather forecast for Beijing" --model local_ollama
 ```
 
 ## MCP Tools、Resources 和 Prompts
@@ -372,22 +370,22 @@ MCP server 配置位于 `config/mcp_servers.json`。
 列出已配置能力：
 
 ```bash
-vermay-agent mcp list-servers
-vermay-agent mcp list-tools
-vermay-agent mcp list-resources --server k8s
-vermay-agent mcp list-prompts --server k8s
+vermay mcp list-servers
+vermay mcp list-tools
+vermay mcp list-resources --server k8s
+vermay mcp list-prompts --server k8s
 ```
 
 在 agent run 期间，已配置 MCP servers 默认不启用。需要显式选择 server：
 
 ```bash
-vermay-agent "check k8s status" --mcp-server k8s
-vermay-agent "debug phzou-core service" --mcp-server k8s --mcp-prompt 'k8s-service-health-check?service=phzou-core&namespace=default'
+vermay "check k8s status" --mcp-server k8s
+vermay "debug phzou-core service" --mcp-server k8s --mcp-prompt 'k8s-service-health-check?service=phzou-core&namespace=default'
 ```
 
 选中的 MCP tools 会被包装成 LangChain `StructuredTool`，并使用类似 `mcp__k8s__kubectl_get` 的命名空间名称。除非 server 或 tool 被标记为 read-only，否则 MCP tools 默认需要 approval。
 
-本地 Kubernetes MCP 示例位于 `examples/mcp_servers/k8s/`。它使用 `VERMAY_AGENT_SSH_*` 环境配置。
+本地 Kubernetes MCP 示例位于 `examples/mcp_servers/k8s/`。它使用 `VERMAY_SSH_*` 环境配置。
 
 ## Human Input 和 Approval
 
@@ -400,13 +398,13 @@ A2A 调用方通过新的 `SendMessage` 请求提交补充信息，并携带已�
 在交互式 terminal 中，approval 会自动提示：
 
 ```bash
-vermay-agent "delete pod nginx-5869d7778c-687rb"
+vermay "delete pod nginx-5869d7778c-687rb"
 ```
 
 低层 checkpoint resume 仍可通过 CLI 使用：
 
 ```bash
-vermay-agent --thread-id <thread-id> --resume-approval true --approval-reason "approved by operator"
+vermay --thread-id <thread-id> --resume-approval true --approval-reason "approved by operator"
 ```
 
 这条 CLI 命令属于 runtime-level 操作：它通过 `thread_id` 直接恢复 LangGraph checkpoint。A2A 和 Web UI flows 工作在 protocol level，通过外部可见的 `task_id` 恢复。
@@ -418,9 +416,9 @@ LangGraph checkpoints 存储在 `data/checkpoints/`。
 Memory 是显式写入的，并存储在本地 SQLite。
 
 ```bash
-vermay-agent memory add "Prefer read-only Kubernetes inspection first." --tag k8s --tag preference
-vermay-agent memory list
-vermay-agent memory disable 1
+vermay memory add "Prefer read-only Kubernetes inspection first." --tag k8s --tag preference
+vermay memory list
+vermay memory disable 1
 ```
 
 Memory metadata 存储在 `data/agent.sqlite`。
@@ -443,14 +441,14 @@ Prefer read-only inspection before proposing a fix.
 常用命令：
 
 ```bash
-vermay-agent skills list
-vermay-agent skills show kubernetes-readonly-debug
-vermay-agent skills propose-from-trace --trace traces/latest.jsonl
-vermay-agent skills approve <proposal-id>
+vermay skills list
+vermay skills show kubernetes-readonly-debug
+vermay skills propose-from-trace --trace traces/latest.jsonl
+vermay skills approve <proposal-id>
 ```
 
 已批准的 skills 位于 `skills/`。生成的 proposals 位于 `data/skill_proposals/`。
 
 ## License
 
-Vermay Agent 基于 [MIT License](LICENSE) 发布。
+Vermay 基于 [MIT License](LICENSE) 发布。

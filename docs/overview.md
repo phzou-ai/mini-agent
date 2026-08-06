@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Vermay Agent is an A2A-native main-agent runtime and inspectable process host for direct answers, durable local execution, and delegation to external child agents. It also provides command-line and Web UI surfaces for validating agent-system behavior.
+Vermay is an A2A-native main-agent runtime and inspectable process host for direct answers, durable local execution, and delegation to external child agents. It also provides command-line and Web UI surfaces for validating agent-system behavior.
 
 The current implementation focuses on:
 
@@ -28,9 +28,9 @@ The current implementation focuses on:
 
 ## Current Runtime Position
 
-The primary service path is the A2A main-agent boundary implemented by `vermay_agent/api/a2a/` and `vermay_agent/main_agent/`. It classifies incoming Messages as direct replies, locally owned durable Tasks, or delegated child-agent work.
+The primary service path is the A2A main-agent boundary implemented by `vermay/api/a2a/` and `vermay/main_agent/`. It classifies incoming Messages as direct replies, locally owned durable Tasks, or delegated child-agent work.
 
-The LangGraph executor is implemented by `vermay_agent/langgraph_runtime/`. The CLI calls this layer directly as a development and operations harness; it does not represent the complete A2A main-agent lifecycle.
+The LangGraph executor is implemented by `vermay/langgraph_runtime/`. The CLI calls this layer directly as a development and operations harness; it does not represent the complete A2A main-agent lifecycle.
 
 The repository contains one runtime implementation. Historical experimental
 runtime code that no longer imported cleanly or participated in product tests

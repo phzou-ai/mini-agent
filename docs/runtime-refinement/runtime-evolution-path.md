@@ -28,7 +28,7 @@ A2A / Web ingress
 ```
 
 The phrase "reliable outer graph plus dynamic inner agent" does not require two
-LangGraph graphs. In Vermay Agent:
+LangGraph graphs. In Vermay:
 
 - `MainAgentCore` already implements the deterministic outer lifecycle through
   application code, transactions, durable commands, and recovery policy;
@@ -288,7 +288,7 @@ appropriate only for capabilities that share an execution namespace and
 resource limits. Other MCP or child-agent capabilities remain external
 services behind the same policy and invocation boundary.
 
-Broader R3 is activated when Vermay Agent executes arbitrary commands,
+Broader R3 is activated when Vermay executes arbitrary commands,
 modifies files, handles untrusted repositories, or requires rollback. Docker,
 a remote worker, or a microVM is an implementation choice made after that
 workload exists.

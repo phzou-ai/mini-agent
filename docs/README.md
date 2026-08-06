@@ -1,8 +1,8 @@
-# Vermay Agent Documentation
+# Vermay Documentation
 
 ## Scope
 
-This directory contains stable project-facing documentation for Vermay Agent.
+This directory contains stable project-facing documentation for Vermay.
 
 The project is positioned as an A2A-native main-agent runtime and inspectable process host, with a practical workbench for validating orchestration, tool execution, approvals, memory, skills, model adapters, MCP integration, delegation, and real-world tool patterns.
 
@@ -30,13 +30,11 @@ backlog, and it does not replace the active roadmap.
 
 Repository docs should describe the current project and its stable module boundaries.
 
-Historical planning notes, batch implementation records, and broader roadmap material are kept outside this repository in the companion `mini-agent-docs` workspace.
+Historical planning notes, batch implementation records, and broader roadmap material are kept outside this repository in a companion planning workspace.
 
 Unsupported historical runtime implementations are not retained in the product
 package. Dated design and implementation records remain documentation only.
 
 ## Naming Boundary
 
-The current project name is Vermay Agent. The active Python package is `vermay_agent`, and the preferred CLI command is `vermay-agent`.
-
-The legacy `mini-agent` command, `mini_agent` import namespace, and `MINI_AGENT_*` environment variable prefix remain compatibility aliases during the migration. New code and docs should prefer `vermay-agent`, `vermay_agent`, and `VERMAY_AGENT_*` configuration names. The external planning workspace is still named `mini-agent-docs` for now, so path references to that directory are intentional.
+The project name is Vermay. The Python package is `vermay`, the CLI command is `vermay`, and environment configuration uses the `VERMAY_*` prefix.

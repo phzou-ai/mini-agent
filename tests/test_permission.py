@@ -1,9 +1,9 @@
-from vermay_agent.permission import PermissionGate, PermissionPolicy
-from vermay_agent.tool_registry import ToolRegistry
-from vermay_agent.tooling import ToolArgs, structured_tool
-from vermay_agent.tool_metadata import ApprovalPolicy
-from vermay_agent.tools.devops import register_devops_tools
-from vermay_agent.types import ToolCall
+from vermay.permission import PermissionGate, PermissionPolicy
+from vermay.tool_registry import ToolRegistry
+from vermay.tooling import ToolArgs, structured_tool
+from vermay.tool_metadata import ApprovalPolicy
+from vermay.tools.devops import register_devops_tools
+from vermay.types import ToolCall
 
 
 class EmptyArgs(ToolArgs):

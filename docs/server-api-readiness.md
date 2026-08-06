@@ -12,7 +12,7 @@ execution boundary.
 Start the server:
 
 ```bash
-vermay-agent serve
+vermay serve
 ```
 
 `serve` always exposes the A2A service boundary. The same process also hosts
@@ -36,7 +36,7 @@ GET  /.well-known/agent-card.json
 POST /rpc
 ```
 
-Agent operations use A2A JSON-RPC methods through `/rpc`. Child-agent delegation in `vermay_agent/main_agent/remote_agent.py` uses the same boundary.
+Agent operations use A2A JSON-RPC methods through `/rpc`. Child-agent delegation in `vermay/main_agent/remote_agent.py` uses the same boundary.
 
 ## JSON-RPC Methods
 
@@ -233,7 +233,7 @@ The response also includes `error.data.errorInfo` as a bridge toward A2A / googl
       "localCode": "invalid_request",
       "errorInfo": {
         "reason": "invalid_request",
-        "domain": "vermay-agent",
+        "domain": "vermay",
         "metadata": {
           "localCode": "invalid_request"
         }

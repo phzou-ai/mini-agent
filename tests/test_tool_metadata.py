@@ -1,6 +1,6 @@
 import pytest
 
-from vermay_agent.tool_metadata import (
+from vermay.tool_metadata import (
     ApprovalPolicy,
     ExecutionScope,
     SideEffectLevel,

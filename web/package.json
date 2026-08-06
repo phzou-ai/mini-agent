@@ -1,5 +1,5 @@
 {
-  "name": "@vermay/agent-web",
+  "name": "@vermay/web",
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@10.28.2",

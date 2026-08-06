@@ -6,8 +6,8 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import Field
 
-from vermay_agent.langgraph_runtime import LangGraphAgentRuntime, ModelInvocation
-from vermay_agent.main_agent import (
+from vermay.langgraph_runtime import LangGraphAgentRuntime, ModelInvocation
+from vermay.main_agent import (
     DirectLangGraphLocalTaskRunner,
     MainAgentCore,
     MainAgentRequest,
@@ -17,12 +17,12 @@ from vermay_agent.main_agent import (
     ToolInvocationApprovalStatus,
     ToolInvocationStatus,
 )
-from vermay_agent.main_agent.invocation_ledger import MainAgentToolInvocationLedger
-from vermay_agent.permission import PermissionGate
-from vermay_agent.storage import AgentStore
-from vermay_agent.tool_metadata import ApprovalPolicy, ExecutionScope, SideEffectLevel, ToolCategory
-from vermay_agent.tool_registry import ToolRegistry
-from vermay_agent.tooling import ToolArgs, structured_tool
+from vermay.main_agent.invocation_ledger import MainAgentToolInvocationLedger
+from vermay.permission import PermissionGate
+from vermay.storage import AgentStore
+from vermay.tool_metadata import ApprovalPolicy, ExecutionScope, SideEffectLevel, ToolCategory
+from vermay.tool_registry import ToolRegistry
+from vermay.tooling import ToolArgs, structured_tool
 
 
 class WriteArgs(ToolArgs):

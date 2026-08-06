@@ -5,9 +5,9 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import SystemMessage
 
-from vermay_agent.mcp.client import MCPServerConfig, MCPToolLoader
-from vermay_agent.mcp.resources import MCPResourceProvider, resolve_mcp_resource_selections
-from vermay_agent.runtime_context import RuntimeContextProvider
+from vermay.mcp.client import MCPServerConfig, MCPToolLoader
+from vermay.mcp.resources import MCPResourceProvider, resolve_mcp_resource_selections
+from vermay.runtime_context import RuntimeContextProvider
 
 
 class FakeMCPClientManager:

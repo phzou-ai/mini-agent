@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from vermay_agent.runtime_context import RuntimeContextProvider
+from vermay.runtime_context import RuntimeContextProvider
 
 
 class StaticContextSource:

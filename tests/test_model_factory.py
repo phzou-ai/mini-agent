@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from vermay_agent.langgraph_runtime import (
+from vermay.langgraph_runtime import (
     ModelProviderConfig,
     OllamaModelAdapter,
     OpenAICompatibleModelAdapter,

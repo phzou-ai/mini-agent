@@ -191,7 +191,7 @@ export function AgentComposer({
         </div>
         {!embedded && (
           <p className="m-0 mt-2 text-center text-[12px] leading-5 text-[#54465C]">
-            Backed by Vermay Agent BFF SSE. Start Vermay Agent API before sending
+            Backed by Vermay BFF SSE. Start Vermay API before sending
             tasks.
           </p>
         )}

@@ -122,7 +122,7 @@ new attempt would be unsafe to create generically.
 The stabilization work also removed two proven-redundant pieces of historical
 overhead:
 
-- `vermay-agent serve` no longer accepts `--enable-a2a`: A2A routes are the
+- `vermay serve` no longer accepts `--enable-a2a`: A2A routes are the
   normal serve mode, so the flag could not change runtime behavior.
 - A newly created SQLite database now creates the final partial unique retry
   lineage index directly. Migration v3 still upgrades existing databases that

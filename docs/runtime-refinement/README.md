@@ -3,7 +3,7 @@
 ## Purpose
 
 This folder contains the implementation-facing roadmap and contracts for
-refining the current Vermay Agent runtime. It is not a proposal to introduce a
+refining the current Vermay runtime. It is not a proposal to introduce a
 new framework or a second runtime.
 
 The plan is intentionally incremental. The current project is still in rapid development, so the objective is to remove conflicting ownership and clarify contracts before adding broader infrastructure or new user-facing features.

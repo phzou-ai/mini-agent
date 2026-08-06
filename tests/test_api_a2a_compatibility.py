@@ -5,18 +5,18 @@ from concurrent.futures import Future
 import pytest
 from fastapi.testclient import TestClient
 
-from vermay_agent.api.a2a import A2AAdapter, A2ASendMessageRequest
-from vermay_agent.api.app import create_app
-from vermay_agent.errors import InvalidRequestError, TaskNotFoundError
-from vermay_agent.main_agent import (
+from vermay.api.a2a import A2AAdapter, A2ASendMessageRequest
+from vermay.api.app import create_app
+from vermay.errors import InvalidRequestError, TaskNotFoundError
+from vermay.main_agent import (
     LocalTaskRunResult,
     MainAgentCore,
     MainAgentRequest,
     MainAgentStore,
     MessageRole,
 )
-from vermay_agent.main_agent.models import TaskStatus
-from vermay_agent.storage import AgentStore
+from vermay.main_agent.models import TaskStatus
+from vermay.storage import AgentStore
 
 
 class FakeLocalMessageResponder:

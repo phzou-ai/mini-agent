@@ -1,6 +1,6 @@
 # Runtime and Release Boundary
 
-This document defines the supported runtime and release boundary for Vermay Agent `0.1.x`. It describes what the repository currently guarantees and avoids implying deployment formats that are not maintained yet.
+This document defines the supported runtime and release boundary for Vermay `0.1.x`. It describes what the repository currently guarantees and avoids implying deployment formats that are not maintained yet.
 
 ## Supported Distribution
 
@@ -8,10 +8,10 @@ The supported `0.1.x` distribution is a source checkout or source archive of thi
 
 | Component | Source | Runtime | Supported start command |
 | --- | --- | --- | --- |
-| Agent backend | `vermay_agent/` | Python 3.11+ | `vermay-agent serve` |
+| Agent backend | `vermay/` | Python 3.11+ | `vermay serve` |
 | Agent Console | `web/` | Node.js with pnpm | `pnpm build && pnpm start` |
 
-The Python editable install provides the `vermay-agent` command, but a standalone PyPI wheel is not currently a supported full-stack release artifact. The frontend remains a private application package and is not published to npm. The backend does not embed or serve the generated Next.js application.
+The Python editable install provides the `vermay` command, but a standalone PyPI wheel is not currently a supported full-stack release artifact. The frontend remains a private application package and is not published to npm. The backend does not embed or serve the generated Next.js application.
 
 Docker images, Kubernetes manifests, process supervision, TLS termination, and a single combined executable are outside the maintained `0.1.x` release boundary. They can be added when a concrete deployment target is selected.
 
@@ -29,7 +29,7 @@ python -m pip install -e ".[dev]"
 Start the backend:
 
 ```bash
-vermay-agent serve
+vermay serve
 ```
 
 Start the frontend in another terminal:
@@ -40,7 +40,7 @@ pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-The Next.js BFF reads `VERMAY_AGENT_API_BASE` on the server. This value is not exposed as a browser credential and defaults to `http://127.0.0.1:8000`.
+The Next.js BFF reads `VERMAY_API_BASE` on the server. This value is not exposed as a browser credential and defaults to `http://127.0.0.1:8000`.
 
 ## Production Runtime
 
@@ -49,7 +49,7 @@ Build and start the two applications separately:
 ```bash
 # Backend process
 source .venv/bin/activate
-vermay-agent serve --host 127.0.0.1 --port 8000
+vermay serve --host 127.0.0.1 --port 8000
 ```
 
 ```bash
@@ -57,7 +57,7 @@ vermay-agent serve --host 127.0.0.1 --port 8000
 cd web
 pnpm install --frozen-lockfile
 pnpm build
-VERMAY_AGENT_API_BASE=http://127.0.0.1:8000 pnpm start
+VERMAY_API_BASE=http://127.0.0.1:8000 pnpm start
 ```
 
 The backend has no built-in authentication and binds to localhost by default. Do not expose it directly to an untrusted network. A production deployment that leaves the host must provide authentication, authorization, TLS, request limits, and network policy in a trusted reverse proxy or gateway.

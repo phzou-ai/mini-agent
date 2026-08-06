@@ -2,11 +2,11 @@
 
 ## Status
 
-This document defines the architectural direction for evolving Vermay Agent into an Agent OS-style runtime. It is a vocabulary and target-architecture document, not the source of day-to-day milestone status.
+This document defines the architectural direction for evolving Vermay into an Agent OS-style runtime. It is a vocabulary and target-architecture document, not the source of day-to-day milestone status.
 
 Agent OS is an architectural lens for organizing agent workloads. It is not an operating system for managing hardware, and it does not replace A2A or LangGraph. It defines control-plane responsibilities around those technologies: process lifecycle, execution coordination, IPC, capabilities, persistence, and recovery. The analogy is useful only where it clarifies ownership; it is not a requirement to reproduce operating-system components one-for-one.
 
-The current `vermay_agent.main_agent.models.TaskRecord` is the backing record for what this document calls an `AgentProcessRecord`. This document does not require an immediate code or database rename. The API session projection also has a `TaskRecord`; it is a read model, not a second lifecycle owner.
+The current `vermay.main_agent.models.TaskRecord` is the backing record for what this document calls an `AgentProcessRecord`. This document does not require an immediate code or database rename. The API session projection also has a `TaskRecord`; it is a read model, not a second lifecycle owner.
 
 For an assessment of the currently implemented runtime, including its safety
 guarantees, liveness limitations, and staged evolution order, see
@@ -67,7 +67,7 @@ Program registries, advanced schedulers, resource quotas, distributed recovery, 
 ### Current Delivery Constraint
 
 The Agent OS vocabulary is a design map, not a feature backlog. During the
-current rapid-development phase, Vermay Agent remains a compact single-host
+current rapid-development phase, Vermay remains a compact single-host
 A2A main-agent runtime. An architecture term does not authorize a new service,
 table, scheduler, workspace, sandbox, or framework layer by itself.
 
@@ -86,15 +86,15 @@ The main complexity risk is literal implementation of the OS analogy. The curren
 
 The recommended product and architecture position is:
 
-> Vermay Agent is an A2A-native main-agent runtime and inspectable process host. It is not a multi-channel personal-assistant product or a general multi-agent hosting framework.
+> Vermay is an A2A-native main-agent runtime and inspectable process host. It is not a multi-channel personal-assistant product or a general multi-agent hosting framework.
 
 This position is sufficiently distinct to justify the current architecture. It becomes diluted if the project starts copying channel breadth, plugin marketplaces, autonomous skill mutation, or in-process agent profiles before its protocol, process, context, and recovery semantics are reliable.
 
 ## Strategic Positioning
 
-OpenClaw, Hermes, and Vermay Agent overlap at the model/tool loop, but optimize for different system boundaries.
+OpenClaw, Hermes, and Vermay overlap at the model/tool loop, but optimize for different system boundaries.
 
-| Dimension | OpenClaw | Hermes | Vermay Agent |
+| Dimension | OpenClaw | Hermes | Vermay |
 | --- | --- | --- | --- |
 | Primary product | Long-lived personal-assistant gateway across messaging channels and devices. | General agent core exposed through CLI, gateway, API, and editor-facing adapters. | A2A-native main-agent service with direct answers, durable local execution, and external child-agent delegation. |
 | Public interaction boundary | Typed private Gateway protocol over WebSocket, with channel adapters and control clients. | Product-specific CLI, gateway/API, and ACP surfaces around one agent core. | A2A JSON-RPC/SSE for agent interaction, plus a separate management/read-model surface where necessary. |
@@ -106,7 +106,7 @@ OpenClaw, Hermes, and Vermay Agent overlap at the model/tool loop, but optimize 
 | Current strength | Product breadth and a mature long-lived gateway/control plane. | Cohesive reusable agent core and broad local-agent capabilities. | Explicit protocol/process semantics, inspectable durable tasks, and standards-based external federation. |
 | Current cost | A large product-specific gateway and capability surface. | Product-specific session/delegation semantics rather than an A2A-first public lifecycle. | Less channel and assistant-product breadth, plus responsibility for correct A2A lifecycle, recovery, and delegation semantics. |
 
-Vermay Agent's differentiators should remain concrete:
+Vermay's differentiators should remain concrete:
 
 1. **A2A is the data-plane contract.** A2A Message, Task, status, artifact, continuation, cancellation, and subscription semantics are not wrapped behind a second proprietary agent protocol.
 2. **Interactive and durable work are distinct.** A direct answer is an Ephemeral Invocation; operational or interruptible work is an Agent Process exposed as an A2A Task.
@@ -132,7 +132,7 @@ active roadmap determines whether evidence makes any one of them current work.
 
 OpenClaw and Hermes are reference implementations, not compatibility targets.
 
-| Reference lesson | Vermay Agent decision |
+| Reference lesson | Vermay decision |
 | --- | --- |
 | OpenClaw uses one long-lived Gateway as the source of truth for channel routing and sessions. | Keep one long-lived Vermay service host, but retain A2A as its public protocol instead of creating a second private gateway protocol. |
 | OpenClaw treats normal interactive turns and detached background tasks differently; its task ledger is not its scheduler. | Keep direct Messages lightweight and keep Agent Process records separate from execution coordination. |
@@ -308,7 +308,7 @@ local_task    -> create a locally owned A2A Task / Agent Process
 remote_agent -> call a registered child A2A agent and proxy a returned Task when necessary
 ```
 
-This pre-execution decision is more important in Vermay Agent than in a single-loop personal assistant because it changes the public A2A response shape and lifecycle guarantees. Removing it would require either turning almost every request into a Task or inventing late promotion from Message to Task, both of which obscure the protocol contract.
+This pre-execution decision is more important in Vermay than in a single-loop personal assistant because it changes the public A2A response shape and lifecycle guarantees. Removing it would require either turning almost every request into a Task or inventing late promotion from Message to Task, both of which obscure the protocol contract.
 
 The router must remain narrow and governed:
 
@@ -427,7 +427,7 @@ Current implementation correspondence:
 | Agent OS concept | Current implementation |
 | --- | --- |
 | Process table | `main_agent_tasks` |
-| Process record | `vermay_agent.main_agent.models.TaskRecord` |
+| Process record | `vermay.main_agent.models.TaskRecord` |
 | Process events | `main_agent_task_events` |
 | Process outputs | `artifacts` associated with the task |
 | Process manager | `MainAgentCore` task lifecycle methods |
@@ -790,13 +790,13 @@ runtime integrity
   -> evidence-driven extensibility
 ```
 
-Channel adapters, automation, general workflow features, autonomous memory/skill mutation, and a plugin marketplace remain optional product directions. They should not enter the runtime roadmap unless Vermay Agent deliberately changes from an A2A service foundation into a personal-assistant product.
+Channel adapters, automation, general workflow features, autonomous memory/skill mutation, and a plugin marketplace remain optional product directions. They should not enter the runtime roadmap unless Vermay deliberately changes from an A2A service foundation into a personal-assistant product.
 
 ### Phase 0: Vocabulary And Contracts
 
 - Adopt this document and glossary.
 - Keep A2A protocol names unchanged.
-- Document `vermay_agent.main_agent.models.TaskRecord` as the current Agent Process backing record and the API `TaskRecord` as a read model.
+- Document `vermay.main_agent.models.TaskRecord` as the current Agent Process backing record and the API `TaskRecord` as a read model.
 - Stop introducing unqualified `status` fields across boundaries.
 
 ### Phase 1: State Governance

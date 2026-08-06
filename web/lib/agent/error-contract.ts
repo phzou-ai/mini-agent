@@ -55,7 +55,7 @@ export function normalizeAgentError(
 export function agentApiUnavailableError(): AgentErrorContract {
   return {
     code: "agent_api_unavailable",
-    message: "Vermay Agent API is unavailable.",
+    message: "Vermay API is unavailable.",
     retryable: true,
   }
 }
@@ -94,6 +94,6 @@ function defaultMessage(status: number) {
   if (status === 403) return "The operation is not permitted."
   if (status === 404) return "The requested resource was not found."
   if (status === 409) return "The operation conflicts with the current state."
-  if (status >= 500) return "Vermay Agent could not complete the request."
+  if (status >= 500) return "Vermay could not complete the request."
   return `Request failed (${status}).`
 }

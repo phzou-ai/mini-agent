@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import pytest
 from langchain_core.messages import AIMessage
 
-from vermay_agent.errors import (
+from vermay.errors import (
     ContextDeletionConflictError,
     InvalidSessionStateError,
     MessageIngressInProgressError,
@@ -16,7 +16,7 @@ from vermay_agent.errors import (
     RegisteredAgentDeletionConflictError,
     error_info_from_exception,
 )
-from vermay_agent.main_agent import (
+from vermay.main_agent import (
     DefaultMainAgentRouter,
     DirectModelRouterModelClient,
     LocalMessageResult,
@@ -38,8 +38,8 @@ from vermay_agent.main_agent import (
     RouterModelDecision,
     TaskStatus,
 )
-from vermay_agent.langgraph_runtime.model_adapters import ModelInvocation
-from vermay_agent.storage import AgentStore
+from vermay.langgraph_runtime.model_adapters import ModelInvocation
+from vermay.storage import AgentStore
 
 
 @dataclass

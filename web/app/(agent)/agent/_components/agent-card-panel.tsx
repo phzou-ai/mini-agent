@@ -83,7 +83,7 @@ export function MainAgentCardPanel({
           <div className="border-t border-[#E7E5E8] bg-white px-3 py-3">
             <div className="mb-3 min-w-0">
               <p className="m-0 truncate text-[12px] font-semibold leading-5 text-[#1F0013]">
-                {card?.name ?? "Vermay Agent"}
+                {card?.name ?? "Vermay"}
               </p>
               <p className="m-0 mt-0.5 line-clamp-2 text-[11px] leading-4 text-[#64748B]">
                 {card?.description ?? "Agent Card is not loaded yet."}

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from vermay_agent.model_selection import (
+from vermay.model_selection import (
     resolve_model_selection,
     resolve_named_model_selection,
     resolve_named_router_model_selection,

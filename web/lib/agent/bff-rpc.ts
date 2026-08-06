@@ -36,7 +36,7 @@ export function staleResumeRouteResponse() {
     {
       code: "a2a_resume_method_not_found",
       message:
-        "The running Vermay Agent API does not support task resume yet. Restart `vermay-agent serve` so the A2A ResumeTask route is loaded.",
+        "The running Vermay API does not support task resume yet. Restart `vermay serve` so the A2A ResumeTask route is loaded.",
       retryable: false,
     },
     { status: 502 }

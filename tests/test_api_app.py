@@ -4,9 +4,9 @@ from dataclasses import dataclass
 
 from fastapi.testclient import TestClient
 
-from vermay_agent.api.app import _router_model_name, create_app
-from vermay_agent.errors import ModelProviderError
-from vermay_agent.main_agent import (
+from vermay.api.app import _router_model_name, create_app
+from vermay.errors import ModelProviderError
+from vermay.main_agent import (
     LocalTaskRunResult,
     MainAgentCore,
     MainAgentRequest,
@@ -14,7 +14,7 @@ from vermay_agent.main_agent import (
     MessageRole,
     TaskStatus,
 )
-from vermay_agent.storage import AgentStore
+from vermay.storage import AgentStore
 
 
 class FakeResponder:
@@ -90,7 +90,7 @@ def test_api_model_config_returns_primary_and_router_models(tmp_path, monkeypatc
 """,
         encoding="utf-8",
     )
-    monkeypatch.setattr("vermay_agent.api.app.DEFAULT_MODEL_CONFIG_PATH", config_path)
+    monkeypatch.setattr("vermay.api.app.DEFAULT_MODEL_CONFIG_PATH", config_path)
     client, store = make_client(tmp_path)
 
     response = client.get("/api/model-config")
@@ -323,7 +323,7 @@ def test_api_context_messages_project_failed_direct_message_ingress(tmp_path):
 
 
 def test_router_model_name_loads_env_local(tmp_path, monkeypatch):
-    monkeypatch.setattr("vermay_agent.env_config.ROOT", tmp_path)
+    monkeypatch.setattr("vermay.env_config.ROOT", tmp_path)
     config_path = tmp_path / "models.json"
     config_path.write_text(
         """
@@ -349,16 +349,16 @@ def test_router_model_name_loads_env_local(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     (tmp_path / ".env.local").write_text(
-        "VERMAY_AGENT_ROUTER_MODEL=router-small\n",
+        "VERMAY_ROUTER_MODEL=router-small\n",
         encoding="utf-8",
     )
-    monkeypatch.delenv("VERMAY_AGENT_ROUTER_MODEL", raising=False)
+    monkeypatch.delenv("VERMAY_ROUTER_MODEL", raising=False)
 
     assert _router_model_name(config_path=config_path) == "router-small"
 
 
 def test_router_model_name_loads_config_fallback(tmp_path, monkeypatch):
-    monkeypatch.setattr("vermay_agent.env_config.ROOT", tmp_path)
+    monkeypatch.setattr("vermay.env_config.ROOT", tmp_path)
     config_path = tmp_path / "models.json"
     config_path.write_text(
         """
@@ -379,7 +379,7 @@ def test_router_model_name_loads_config_fallback(tmp_path, monkeypatch):
 """,
         encoding="utf-8",
     )
-    monkeypatch.delenv("VERMAY_AGENT_ROUTER_MODEL", raising=False)
+    monkeypatch.delenv("VERMAY_ROUTER_MODEL", raising=False)
 
     assert _router_model_name(config_path=config_path) == "router-config"
 
@@ -498,7 +498,7 @@ def test_default_app_composition_owns_only_resources_it_creates(monkeypatch):
     runner = CloseSpy()
     executor = ShutdownSpy()
     monkeypatch.setattr(
-        "vermay_agent.api.app._build_default_main_agent_core",
+        "vermay.api.app._build_default_main_agent_core",
         lambda: (core, store, runner, executor),
     )
 

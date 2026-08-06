@@ -1,8 +1,8 @@
 import pytest
 
-from vermay_agent.errors import ModelProtocolError
-from vermay_agent.model_clients.ollama import OllamaModelClient
-from vermay_agent.types import Message
+from vermay.errors import ModelProtocolError
+from vermay.model_clients.ollama import OllamaModelClient
+from vermay.types import Message
 
 
 def parse(content: str):

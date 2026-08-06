@@ -14,7 +14,7 @@ echo "[2/4] Frontend typecheck"
 pnpm --dir web run typecheck
 
 echo "[3/4] Frontend production build"
-VERMAY_AGENT_NEXT_DIST_DIR="$FRONTEND_BUILD_DIST_DIR" pnpm --dir web run build
+VERMAY_NEXT_DIST_DIR="$FRONTEND_BUILD_DIST_DIR" pnpm --dir web run build
 
 echo "[4/4] Deterministic migrated-frontend regression"
 pnpm --dir web run test:regression

@@ -5,8 +5,8 @@ from dataclasses import dataclass
 
 import pytest
 
-from vermay_agent.main_agent.models import MainAgentRequest, MessageRole, RegisteredAgentRecord
-from vermay_agent.main_agent.remote_agent import DirectA2ARemoteAgentClient, RemoteAgentProtocolError
+from vermay.main_agent.models import MainAgentRequest, MessageRole, RegisteredAgentRecord
+from vermay.main_agent.remote_agent import DirectA2ARemoteAgentClient, RemoteAgentProtocolError
 
 
 @dataclass
@@ -41,7 +41,7 @@ def test_direct_a2a_remote_agent_send_message_uses_rpc(monkeypatch):
             }
         )
 
-    monkeypatch.setattr("vermay_agent.main_agent.remote_agent.urlopen", fake_urlopen)
+    monkeypatch.setattr("vermay.main_agent.remote_agent.urlopen", fake_urlopen)
     client = DirectA2ARemoteAgentClient(timeout_seconds=3.0)
 
     result = client.send_message(
@@ -92,7 +92,7 @@ def test_direct_a2a_remote_agent_get_task_uses_rpc(monkeypatch):
             }
         )
 
-    monkeypatch.setattr("vermay_agent.main_agent.remote_agent.urlopen", fake_urlopen)
+    monkeypatch.setattr("vermay.main_agent.remote_agent.urlopen", fake_urlopen)
     client = DirectA2ARemoteAgentClient(timeout_seconds=3.0)
 
     snapshot = client.get_task(agent=_registered_agent(), task_id="remote-task-1")
@@ -130,7 +130,7 @@ def test_direct_a2a_remote_agent_cancel_task_uses_rpc(monkeypatch):
             }
         )
 
-    monkeypatch.setattr("vermay_agent.main_agent.remote_agent.urlopen", fake_urlopen)
+    monkeypatch.setattr("vermay.main_agent.remote_agent.urlopen", fake_urlopen)
     client = DirectA2ARemoteAgentClient(timeout_seconds=3.0)
 
     snapshot = client.cancel_task(
@@ -167,7 +167,7 @@ def test_direct_a2a_remote_agent_uses_jsonrpc_endpoint_declared_by_card(monkeypa
             }
         )
 
-    monkeypatch.setattr("vermay_agent.main_agent.remote_agent.urlopen", fake_urlopen)
+    monkeypatch.setattr("vermay.main_agent.remote_agent.urlopen", fake_urlopen)
     client = DirectA2ARemoteAgentClient()
     agent = _registered_agent(
         card_json={
@@ -199,7 +199,7 @@ def test_direct_a2a_remote_agent_uses_legacy_card_url_as_complete_endpoint(monke
             }
         )
 
-    monkeypatch.setattr("vermay_agent.main_agent.remote_agent.urlopen", fake_urlopen)
+    monkeypatch.setattr("vermay.main_agent.remote_agent.urlopen", fake_urlopen)
     client = DirectA2ARemoteAgentClient()
     agent = _registered_agent(
         card_json={
@@ -227,7 +227,7 @@ def test_direct_a2a_remote_agent_raises_jsonrpc_error(monkeypatch):
             }
         )
 
-    monkeypatch.setattr("vermay_agent.main_agent.remote_agent.urlopen", fake_urlopen)
+    monkeypatch.setattr("vermay.main_agent.remote_agent.urlopen", fake_urlopen)
     client = DirectA2ARemoteAgentClient()
 
     with pytest.raises(RemoteAgentProtocolError, match="Task not found") as raised:
@@ -247,7 +247,7 @@ def test_direct_a2a_remote_agent_raises_jsonrpc_error(monkeypatch):
 )
 def test_direct_a2a_remote_agent_rejects_invalid_jsonrpc_response(monkeypatch, payload, message):
     monkeypatch.setattr(
-        "vermay_agent.main_agent.remote_agent.urlopen",
+        "vermay.main_agent.remote_agent.urlopen",
         lambda request, timeout: FakeResponse(payload),
     )
     client = DirectA2ARemoteAgentClient()
@@ -258,7 +258,7 @@ def test_direct_a2a_remote_agent_rejects_invalid_jsonrpc_response(monkeypatch, p
 
 def test_direct_a2a_remote_agent_rejects_task_snapshot_without_an_id(monkeypatch):
     monkeypatch.setattr(
-        "vermay_agent.main_agent.remote_agent.urlopen",
+        "vermay.main_agent.remote_agent.urlopen",
         lambda request, timeout: FakeResponse(
             {
                 "jsonrpc": "2.0",
@@ -275,7 +275,7 @@ def test_direct_a2a_remote_agent_rejects_task_snapshot_without_an_id(monkeypatch
 
 def test_direct_a2a_remote_agent_rejects_send_task_without_an_id(monkeypatch):
     monkeypatch.setattr(
-        "vermay_agent.main_agent.remote_agent.urlopen",
+        "vermay.main_agent.remote_agent.urlopen",
         lambda request, timeout: FakeResponse(
             {
                 "jsonrpc": "2.0",

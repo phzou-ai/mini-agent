@@ -16,7 +16,7 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: `VERMAY_AGENT_NEXT_DIST_DIR=${frontendDistDir} pnpm exec next dev --webpack --hostname 127.0.0.1 --port ${frontendPort}`,
+    command: `VERMAY_NEXT_DIST_DIR=${frontendDistDir} pnpm exec next dev --webpack --hostname 127.0.0.1 --port ${frontendPort}`,
     reuseExistingServer: false,
     timeout: 60_000,
     url: frontendBaseUrl,

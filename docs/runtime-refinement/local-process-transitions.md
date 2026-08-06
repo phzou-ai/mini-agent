@@ -131,10 +131,10 @@ distributed worker leases or replay ambiguous execution; see
 
 ## Implementation
 
-- `vermay_agent/main_agent/lifecycle.py` owns the allowed local transition
+- `vermay/main_agent/lifecycle.py` owns the allowed local transition
   table and target-state-to-event mapping.
-- `vermay_agent/main_agent/store.py` provides the atomic local-process creation
+- `vermay/main_agent/store.py` provides the atomic local-process creation
   and transition operations.
-- `vermay_agent/main_agent/core.py` owns the local execution decisions and uses
+- `vermay/main_agent/core.py` owns the local execution decisions and uses
   those operations for queueing, execution, interruption, continuation,
   completion, failure, and cancellation.

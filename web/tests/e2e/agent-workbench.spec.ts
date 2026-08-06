@@ -56,7 +56,7 @@ async function mockAgentBootstrap(page: Page, contexts: unknown[] = []) {
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
-        name: "Vermay Agent",
+        name: "Vermay",
         description: "A2A-first main agent",
         url: "http://127.0.0.1:8000",
         version: "0.1.0",

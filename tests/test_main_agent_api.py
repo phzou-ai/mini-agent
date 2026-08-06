@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from vermay_agent.api.app import create_app
-from vermay_agent.main_agent import MainAgentCore, MainAgentStore, MessageRecord
-from vermay_agent.storage import AgentStore
+from vermay.api.app import create_app
+from vermay.main_agent import MainAgentCore, MainAgentStore, MessageRecord
+from vermay.storage import AgentStore
 
 
 class FakeLocalMessageResponder:
@@ -176,7 +176,7 @@ def test_main_agent_registered_agent_refresh_card(tmp_path, monkeypatch):
     )
 
     monkeypatch.setattr(
-        "vermay_agent.api.app.fetch_agent_card",
+        "vermay.api.app.fetch_agent_card",
         lambda card_url: {
             "name": "SQL Agent",
             "skills": [{"id": "sqlite-debug", "tags": ["sqlite", "database"]}],

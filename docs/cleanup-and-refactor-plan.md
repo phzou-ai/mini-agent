@@ -47,7 +47,7 @@ colocated Next.js console, tests, scripts, and active documentation.
 | Web console | `web/app/(agent)/agent/_components/agent-console.tsx` began at about 4,500 lines and mixed orchestration, projections, transcript rendering, sidebar, composer, and inspector views. It is now about 2,600 lines after the safe presentation extractions below. | Keep one page-level owner for request and stream state; extract only leaf presentation and pure projection boundaries. |
 | Provider support | Router JSON calls and model factories independently parse some provider options and format some HTTP failures. | Candidate for a small shared validation/HTTP utility after a focused contract baseline; do not merge routing with general model invocation. |
 | BFF routes | The Next route tree contains many thin filesystem-route wrappers over shared proxy helpers. | Keep. This repetition is framework structure, not harmful duplicated lifecycle logic. |
-| Legacy aliases | `mini-agent`, `mini_agent`, and `MINI_AGENT_*` are documented compatibility aliases. | Decision-gated; do not remove in this pass without an explicit compatibility retirement decision. |
+| Legacy aliases | Historical command, package, and environment aliases duplicated the Vermay naming surface. | Retired after the explicit decision to standardize on Vermay naming. |
 | A2A transport compatibility | Canonical `/rpc` and supported path-style bindings are tested and exercised by scripts. | Decision-gated; do not remove while they remain a documented/tested surface. |
 | Historical runtime | The archived harness no longer imported because it depended on removed product classes. Those dependencies also kept dead bridge modules in the active package. | Remove the broken executable archive and its product compatibility bridges; keep history in Git and dated docs. |
 | Service composition | `create_app(enable_a2a=...)` and `--disable-a2a` supported a management-only process shape even though the product boundary is A2A-native. | Keep one application shape: A2A plus first-party Web management and diagnostics. |
@@ -59,13 +59,11 @@ colocated Next.js console, tests, scripts, and active documentation.
 
 The following are not automatic slimming targets:
 
-1. `mini_agent` package and `mini-agent` command alias.
-2. `MINI_AGENT_*` environment fallbacks.
-3. A2A path-style compatibility bindings and the `/rpc` contract.
-4. Next.js BFF filesystem routes.
-5. `prompt_json` model-tool compatibility mode.
-6. `langgraph_runtime/nodes.py` as a speculative folder split.
-7. `web/styles/preflight.css` without screenshot-based verification.
+1. A2A path-style compatibility bindings and the `/rpc` contract.
+2. Next.js BFF filesystem routes.
+3. `prompt_json` model-tool compatibility mode.
+4. `langgraph_runtime/nodes.py` as a speculative folder split.
+5. `web/styles/preflight.css` without screenshot-based verification.
 
 Removing any item above needs a separate product or compatibility decision,
 not a mechanical cleanup change.
@@ -217,7 +215,8 @@ history.
   documented compatibility contract is affected.
 
 **Do not:** rename public package paths, commands, API paths, environment
-variables, or persisted names as a cosmetic operation.
+variables, or persisted names as a cosmetic operation. An explicit product
+decision may retire a compatibility alias in a separately verified batch.
 
 ### C6. Re-evaluate Protected Compatibility Candidates
 
@@ -262,13 +261,15 @@ unexecuted check as a pass.
 | C2 | Extracted SQLite row mappers and JSON serializers to `store_mappers.py`. | `tests/test_main_agent_store.py` and `tests/test_tool_invocation_ledger.py`: 21 passed. |
 | C3 | Extracted pure local task-result projection to `task_result_projection.py`. | `tests/test_main_agent_core.py`: 61 passed. |
 | C4 | Reviewed provider adapter overlap. | Deferred: router JSON and general model invocation have deliberately different contracts; no safe consolidation without a separate contract decision. |
-| C5/C6 | Initial pass updated the documentation index and classified compatibility candidates. | That pass retained aliases, A2A bindings, BFF wrappers, and archived material; the later C7 importability evidence superseded only the archive decision. |
+| C5/C6 | Initial pass updated the documentation index and classified compatibility candidates. | That pass retained aliases, A2A bindings, BFF wrappers, and archived material. C7 later superseded the archive decision; C11 separately superseded the project-name alias decision. |
 | C0 closeout | Ran the deterministic reliability and full-stack regression baselines after all extractions. | Python: 471/471; production Web build and typecheck passed; browser regression 9/9 passed. A separate full browser E2E pass also passed 29/29. |
 | C7 | Removed the non-importable historical runtime tree and its unused `observation.py`, `tool_executor.py`, `ToolResult`, and `Observation` compatibility path. | Import/reference scan; active runtime targeted suite passed. Git history remains the historical source. |
 | C8 | Made `create_app()` a single A2A-native application composition and removed `--disable-a2a`. | API, A2A compatibility, Main Agent API, and CLI configuration tests passed. |
 | C9 | Replaced mixed-purpose `context_builder.py` with `system_prompt.py`; removed unused DTOs, exception wrappers, and `ModelResponse.has_tool_call`. | Reference scan and active runtime targeted suite passed. |
 | Second-pass closeout | Ran the documented source-release boundary with the reviewed dirty tree allowed. | Python: 464/464; Web typecheck and production build passed; deterministic Playwright regression: 9/9; source-release boundary passed. |
 | C10 | Third-pass naming and dead-code review: distinguished provider `ModelClient` from `GraphModelClient`, renamed its factory to `build_graph_model_client`, and removed the superseded A2A `_extract_user_input` helper. | Repository-wide symbol/reference scan; Python 464/464; Web typecheck/build; Playwright 9/9; source-release boundary passed. |
+| C11 | Retired the historical command, Python namespace, environment-prefix, and Web API-base aliases after the explicit decision to standardize on Vermay naming. | Repository-wide naming scan; installed entrypoint/import checks; Python 497/497; Web typecheck/build; Playwright 9/9; source-release boundary passed. |
+| C12 | Shortened the formal product and technical naming surface to `Vermay`, `vermay`, and `VERMAY_*`; retained `Agent` only where it names an A2A or runtime domain concept. | Repository-wide naming scan; installed distribution/import/entrypoint checks; Python 497/497; Web typecheck/build; Playwright 9/9; source-release boundary passed. |
 
 ## Second-Pass Decision Record
 
@@ -291,6 +292,12 @@ frontend exports. No broader extraction was justified: provider adapters,
 router JSON calls, MCP prompt/resource selection, BFF routes, and page-level
 browser state each retain different contracts. The scan found no additional
 unreferenced public Python class, function, or constant in the active package.
+
+The naming closeout first removed the explicitly retired compatibility aliases,
+then shortened the formal product and technical surface. The supported name is
+now `Vermay`; its distribution, CLI, and Python package are `vermay`, while
+environment configuration uses `VERMAY_*`. The Web BFF reads
+`VERMAY_API_BASE` only.
 
 ## Completion Criteria
 

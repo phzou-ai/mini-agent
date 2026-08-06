@@ -4,7 +4,7 @@ import asyncio
 import importlib.util
 from pathlib import Path
 
-from vermay_agent.tools.devops import remote_kubernetes
+from vermay.tools.devops import remote_kubernetes
 
 
 def load_server_module():

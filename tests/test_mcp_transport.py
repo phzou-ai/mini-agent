@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from vermay_agent.mcp.models import MCPServerConfig
-from vermay_agent.mcp.transport import MCPTransportTimeout, _with_transport_handling
+from vermay.mcp.models import MCPServerConfig
+from vermay.mcp.transport import MCPTransportTimeout, _with_transport_handling
 
 
 async def _slow_operation() -> str:

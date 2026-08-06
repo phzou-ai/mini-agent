@@ -727,7 +727,7 @@ export function AgentConsole() {
           setError(
             getRequestErrorMessage(
               loadError,
-              "Cannot connect to the Vermay Agent API. Confirm that vermay-agent serve is running."
+              "Cannot connect to the Vermay API. Confirm that vermay serve is running."
             )
           )
         }
@@ -1995,7 +1995,7 @@ function WelcomePanel({
             <Sparkles className="h-7 w-7" />
           </div>
           <h1 className="m-0 text-[30px] font-semibold leading-10 text-[#1F0013]">
-            Vermay Agent
+            Vermay
           </h1>
           <p className="m-0 mx-auto mt-3 max-w-[680px] text-[15px] leading-7 text-[#54465C]">
             Start tasks from chat, then inspect task events, status, and final

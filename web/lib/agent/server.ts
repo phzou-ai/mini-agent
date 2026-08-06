@@ -5,18 +5,17 @@ import {
   normalizeAgentError,
 } from "@/lib/agent/error-contract"
 
-const DEFAULT_VERMAY_AGENT_API_BASE = "http://127.0.0.1:8000"
+const DEFAULT_VERMAY_API_BASE = "http://127.0.0.1:8000"
 
-function vermayAgentBaseUrl() {
+function vermayBaseUrl() {
   return (
-    process.env.VERMAY_AGENT_API_BASE?.replace(/\/$/, "") ||
-    process.env.MINI_AGENT_API_BASE?.replace(/\/$/, "") ||
-    DEFAULT_VERMAY_AGENT_API_BASE
+    process.env.VERMAY_API_BASE?.replace(/\/$/, "") ||
+    DEFAULT_VERMAY_API_BASE
   )
 }
 
-function buildVermayAgentUrl(path: string) {
-  return `${vermayAgentBaseUrl()}${path}`
+function buildVermayUrl(path: string) {
+  return `${vermayBaseUrl()}${path}`
 }
 
 export function buildAgentPath(path: string, searchParams?: URLSearchParams) {
@@ -31,7 +30,7 @@ export function buildAgentRootPath(path: string, searchParams?: URLSearchParams)
 
 export async function proxyAgentJson(path: string, init?: RequestInit) {
   try {
-    const response = await fetch(buildVermayAgentUrl(path), {
+    const response = await fetch(buildVermayUrl(path), {
       ...init,
       cache: "no-store",
       headers: {
@@ -72,7 +71,7 @@ export function proxyAgentRootJson(path: string, init?: RequestInit) {
 
 export async function proxyAgentStream(path: string, init?: RequestInit) {
   try {
-    const response = await fetch(buildVermayAgentUrl(path), {
+    const response = await fetch(buildVermayUrl(path), {
       ...init,
       cache: "no-store",
       headers: {
@@ -98,7 +97,7 @@ export async function proxyAgentStream(path: string, init?: RequestInit) {
       return NextResponse.json(
         {
           code: "invalid_a2a_stream",
-          message: "Vermay Agent returned an empty event stream.",
+          message: "Vermay returned an empty event stream.",
           retryable: false,
         },
         { status: 502 }

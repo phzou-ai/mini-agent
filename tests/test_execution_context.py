@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from vermay_agent.execution_context import ExecutionContextRegistry, current_execution_context
+from vermay.execution_context import ExecutionContextRegistry, current_execution_context
 
 
 def test_execution_context_registry_exposes_only_an_active_runtime_thread():

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from vermay_agent.result_summary import observation_summary, tool_command_summary, tool_exit_code
+from vermay.result_summary import observation_summary, tool_command_summary, tool_exit_code
 
 
 def test_tool_command_summary_extracts_kubectl_command():

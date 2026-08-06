@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from vermay_agent.app_factory import RuntimeFactoryConfig, build_runtime
-from vermay_agent.langgraph_runtime import LangGraphAgentRuntime, ModelProviderConfig, OllamaModelAdapter
+from vermay.app_factory import RuntimeFactoryConfig, build_runtime
+from vermay.langgraph_runtime import LangGraphAgentRuntime, ModelProviderConfig, OllamaModelAdapter
 
 
 def test_app_factory_builds_runtime_with_registered_tools(tmp_path):
@@ -91,7 +91,7 @@ def test_app_factory_passes_selected_mcp_servers_and_logs_zero_eligible_tools(tm
         captured_servers.extend(selected_servers)
         return type("Loader", (), {"load_tools": lambda self: []})()
 
-    monkeypatch.setattr("vermay_agent.app_factory.MCPClientManager", fake_loader)
+    monkeypatch.setattr("vermay.app_factory.MCPClientManager", fake_loader)
     trace_path = tmp_path / "trace.jsonl"
 
     runtime = build_runtime(

@@ -18,11 +18,11 @@ A2A ingress / first-party Web APIs
 
 There is one public lifecycle owner and one local graph execution kernel:
 
-- `vermay_agent/main_agent/` owns Context, Message, A2A Task, local process,
+- `vermay/main_agent/` owns Context, Message, A2A Task, local process,
   continuation, cancellation, retry, persistence, and protocol projection.
-- `vermay_agent/langgraph_runtime/` owns graph state, model/tool iterations,
+- `vermay/langgraph_runtime/` owns graph state, model/tool iterations,
   permission and approval nodes, checkpoints, and runtime results.
-- `vermay_agent/api/` binds these capabilities to FastAPI, JSON-RPC, SSE, and
+- `vermay/api/` binds these capabilities to FastAPI, JSON-RPC, SSE, and
   first-party read models. It does not own an alternate lifecycle.
 
 The CLI may invoke the LangGraph runtime directly as a development harness. It
@@ -30,9 +30,9 @@ does not create a second server-side Task lifecycle.
 
 ## Composition Boundary
 
-`vermay_agent/app_factory.py` assembles model adapters, tools, permission
+`vermay/app_factory.py` assembles model adapters, tools, permission
 checks, checkpoints, memory, skills, MCP context, tracing, and owned resource
-cleanup. `vermay_agent/system_prompt.py` owns the baseline system prompt shared
+cleanup. `vermay/system_prompt.py` owns the baseline system prompt shared
 by runtime assembly and direct Message response.
 
 The former `context_builder.py` mixed that active prompt with an unused legacy
@@ -70,6 +70,20 @@ and diagnostic APIs required by the Web UI. The removed `enable_a2a` factory
 switch and `--disable-a2a` CLI option created an untested management-only
 application shape that did not match the product's A2A-native position.
 
+## Naming Boundary
+
+The supported project naming surface is intentionally singular:
+
+- project: Vermay;
+- Python package: `vermay`;
+- CLI command: `vermay`;
+- environment prefix: `VERMAY_*`;
+- Web backend base URL: `VERMAY_API_BASE`.
+
+Historical project-name aliases have been removed from packaging, imports,
+configuration loading, and the Web server boundary. Protocol-level
+compatibility is evaluated separately and is not part of the naming surface.
+
 ## Historical Runtime Decision
 
 The old `archive/hands_on_langgraph_runtime/` tree was not a self-contained
@@ -86,8 +100,7 @@ documentation and Git history instead of executable product source.
   controller remain relatively large. Their responsibilities are cohesive
   enough for the current rapid-development stage; splitting them without a
   concrete ownership boundary would add indirection.
-- Legacy project-name aliases and supported A2A compatibility bindings remain
-  decision-gated public contracts.
+- Supported A2A compatibility bindings remain decision-gated public contracts.
 - Provider-specific clients remain separate because router classification and
   task model invocation have different payload and parsing contracts.
 - MCP prompt and resource providers retain separate selection and safety

@@ -7,39 +7,39 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from pydantic import Field
 
-from vermay_agent.checkpointing import build_sqlite_checkpointer
-from vermay_agent.execution_context import ExecutionContextRegistry, current_execution_context
-from vermay_agent.errors import ModelProtocolError, ModelProviderError
-from vermay_agent.model_clients import OllamaModelClient, OpenAICompatibleModelClient
-from vermay_agent.permission import PermissionGate
-from vermay_agent.progress import ProgressReporter
-from vermay_agent.langgraph_runtime import (
+from vermay.checkpointing import build_sqlite_checkpointer
+from vermay.execution_context import ExecutionContextRegistry, current_execution_context
+from vermay.errors import ModelProtocolError, ModelProviderError
+from vermay.model_clients import OllamaModelClient, OpenAICompatibleModelClient
+from vermay.permission import PermissionGate
+from vermay.progress import ProgressReporter
+from vermay.langgraph_runtime import (
     ExecutionPolicy,
     ModelInvocation,
     OllamaModelAdapter,
     OpenAICompatibleModelAdapter,
 )
-from vermay_agent.langgraph_runtime.graph import build_graph
-from vermay_agent.langgraph_runtime.model_factory import ModelProviderConfig, build_graph_model_client
-from vermay_agent.langgraph_runtime.nodes import GraphComponents
-from vermay_agent.langgraph_runtime.execution import model_call_limit, policy_from_state
-from vermay_agent.langgraph_runtime.observations import normalize_tool_observation
-from vermay_agent.langgraph_runtime.routing import (
+from vermay.langgraph_runtime.graph import build_graph
+from vermay.langgraph_runtime.model_factory import ModelProviderConfig, build_graph_model_client
+from vermay.langgraph_runtime.nodes import GraphComponents
+from vermay.langgraph_runtime.execution import model_call_limit, policy_from_state
+from vermay.langgraph_runtime.observations import normalize_tool_observation
+from vermay.langgraph_runtime.routing import (
     latest_ai_message,
     route_after_approval,
     route_after_model,
     route_after_permission,
     route_loop_limit,
 )
-from vermay_agent.langgraph_runtime.runner import LangGraphAgentRuntime
-from vermay_agent.langgraph_runtime.state import build_initial_state
-from vermay_agent.tooling import ToolArgs, structured_tool
-from vermay_agent.tool_schema import tool_schemas_from_tools
-from vermay_agent.tool_registry import ToolRegistry
-from vermay_agent.tools.user_input import register_user_input_tool
-from vermay_agent.trace import TraceLogger
-from vermay_agent.types import ModelResponse, ToolCall
-from vermay_agent.storage import SQLITE_BUSY_TIMEOUT_MS
+from vermay.langgraph_runtime.runner import LangGraphAgentRuntime
+from vermay.langgraph_runtime.state import build_initial_state
+from vermay.tooling import ToolArgs, structured_tool
+from vermay.tool_schema import tool_schemas_from_tools
+from vermay.tool_registry import ToolRegistry
+from vermay.tools.user_input import register_user_input_tool
+from vermay.trace import TraceLogger
+from vermay.types import ModelResponse, ToolCall
+from vermay.storage import SQLITE_BUSY_TIMEOUT_MS
 
 
 class EchoArgs(ToolArgs):
@@ -758,7 +758,7 @@ def test_execution_policy_preserves_a_pre_r2_checkpoint_loop_limit(monkeypatch):
     state.pop("execution_policy")
     state["execution_started_at"] = 0.0
     state["model_calls"] = 3
-    monkeypatch.setattr("vermay_agent.langgraph_runtime.execution.time.time", lambda: 10.0)
+    monkeypatch.setattr("vermay.langgraph_runtime.execution.time.time", lambda: 10.0)
 
     policy = policy_from_state(state)
     limit = model_call_limit(state)
@@ -781,7 +781,7 @@ def test_execution_policy_stops_when_elapsed_time_is_exhausted(monkeypatch):
         ),
     )
     state["execution_started_at"] = 10.0
-    monkeypatch.setattr("vermay_agent.langgraph_runtime.execution.time.time", lambda: 13.0)
+    monkeypatch.setattr("vermay.langgraph_runtime.execution.time.time", lambda: 13.0)
 
     limit = model_call_limit(state)
 

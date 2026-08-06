@@ -6,18 +6,18 @@ This document describes the current approval and model-requested-input interrupt
 
 The implementation is centered on:
 
-- `vermay_agent/langgraph_runtime/runner.py`
-- `vermay_agent/langgraph_runtime/nodes.py`
-- `vermay_agent/langgraph_runtime/graph.py`
+- `vermay/langgraph_runtime/runner.py`
+- `vermay/langgraph_runtime/nodes.py`
+- `vermay/langgraph_runtime/graph.py`
 
 ## Runtime Entry
 
-The console entry point in `vermay_agent/main.py` dispatches prompt execution to `vermay_agent/cli/prompt.py`. Prompt execution builds the LangGraph runtime through `build_runtime()` in `vermay_agent/app_factory.py`.
+The console entry point in `vermay/main.py` dispatches prompt execution to `vermay/cli/prompt.py`. Prompt execution builds the LangGraph runtime through `build_runtime()` in `vermay/app_factory.py`.
 
 Default execution path:
 
 ```text
-vermay-agent "<prompt>"
+vermay "<prompt>"
   -> main()
   -> run_prompt()
   -> build_runtime()
@@ -28,7 +28,7 @@ vermay-agent "<prompt>"
 Manual approval resume path:
 
 ```text
-vermay-agent --thread-id <id> --resume-approval true
+vermay --thread-id <id> --resume-approval true
   -> main()
   -> run_prompt()
   -> build_runtime()
@@ -183,13 +183,13 @@ The interactive approval wrapper uses the returned `RunResult` as control flow. 
 Manual resume uses:
 
 ```bash
-vermay-agent --thread-id <id> --resume-approval true
+vermay --thread-id <id> --resume-approval true
 ```
 
 or:
 
 ```bash
-vermay-agent --thread-id <id> --resume-approval false
+vermay --thread-id <id> --resume-approval false
 ```
 
 The runtime calls:

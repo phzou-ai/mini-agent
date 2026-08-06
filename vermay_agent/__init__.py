@@ -1,1 +1,0 @@
-"""Vermay Agent."""

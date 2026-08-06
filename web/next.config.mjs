@@ -1,5 +1,5 @@
 const nextConfig = {
-  distDir: process.env.VERMAY_AGENT_NEXT_DIST_DIR ?? ".next",
+  distDir: process.env.VERMAY_NEXT_DIST_DIR ?? ".next",
   output: "standalone",
   reactStrictMode: true,
   turbopack: {

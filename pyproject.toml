@@ -3,7 +3,7 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "vermay-agent"
+name = "vermay"
 version = "0.1.0"
 description = "An A2A-first main-agent runtime with a colocated web console."
 readme = "README.md"
@@ -30,8 +30,7 @@ Repository = "https://github.com/phzou-ai/vermay-agent"
 Issues = "https://github.com/phzou-ai/vermay-agent/issues"
 
 [project.scripts]
-vermay-agent = "vermay_agent.main:main"
-mini-agent = "vermay_agent.main:main"
+vermay = "vermay.main:main"
 
 [tool.setuptools.packages.find]
-include = ["vermay_agent*", "mini_agent"]
+include = ["vermay*"]

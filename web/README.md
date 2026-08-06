@@ -1,6 +1,6 @@
-# Vermay Agent Web
+# Vermay Web
 
-This directory contains the standalone Next.js frontend for Vermay Agent. It is
+This directory contains the standalone Next.js frontend for Vermay. It is
 kept in the same repository as the backend so the A2A routes, session/task
 contracts, inspector UI, and approval workflow can evolve together.
 
@@ -9,7 +9,7 @@ contracts, inspector UI, and approval workflow can evolve together.
 Start the backend from the repository root:
 
 ```bash
-vermay-agent serve
+vermay serve
 ```
 
 Start the web UI from this directory:
@@ -23,7 +23,7 @@ The frontend proxies to `http://127.0.0.1:8000` by default. Override the backend
 base URL with:
 
 ```bash
-VERMAY_AGENT_API_BASE=http://127.0.0.1:8000 pnpm dev
+VERMAY_API_BASE=http://127.0.0.1:8000 pnpm dev
 ```
 
 ## Production Build
@@ -34,10 +34,10 @@ frontend with:
 ```bash
 pnpm install --frozen-lockfile
 pnpm build
-VERMAY_AGENT_API_BASE=http://127.0.0.1:8000 pnpm start
+VERMAY_API_BASE=http://127.0.0.1:8000 pnpm start
 ```
 
-`VERMAY_AGENT_API_BASE` is read by the server-side BFF. The frontend is a private
+`VERMAY_API_BASE` is read by the server-side BFF. The frontend is a private
 application package and is not published to npm. The backend does not serve the
 generated Next.js bundle.
 

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from vermay_agent.evaluation import OfflineReplayService
-from vermay_agent.storage import AgentStore
+from vermay.evaluation import OfflineReplayService
+from vermay.storage import AgentStore
 
 
 def test_eval_trace_replay_uses_recorded_tool_sequence(tmp_path):

@@ -1,6 +1,6 @@
 # Full-Stack Regression Baseline
 
-The repository owns both the Vermay Agent backend and the Agent Console frontend. The default regression gate verifies both sides without requiring a live model or MCP server.
+The repository owns both the Vermay backend and the Agent Console frontend. The default regression gate verifies both sides without requiring a live model or MCP server.
 
 ## Default Gate
 

@@ -7,11 +7,11 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from vermay_agent.api.a2a import A2AAdapter, create_a2a_router
-from vermay_agent.api.a2a import routes as a2a_routes
-from vermay_agent.api.app import create_app
-from vermay_agent.errors import ModelProviderError
-from vermay_agent.main_agent import (
+from vermay.api.a2a import A2AAdapter, create_a2a_router
+from vermay.api.a2a import routes as a2a_routes
+from vermay.api.app import create_app
+from vermay.errors import ModelProviderError
+from vermay.main_agent import (
     LocalTaskRunResult,
     MainAgentCore,
     MainAgentStore,
@@ -20,9 +20,9 @@ from vermay_agent.main_agent import (
     RemoteAgentTaskSnapshot,
     RouteDecisionKind,
 )
-from vermay_agent.main_agent.executor import InProcessTaskExecutor
-from vermay_agent.main_agent.models import TaskStatus as MainAgentTaskStatus
-from vermay_agent.storage import AgentStore
+from vermay.main_agent.executor import InProcessTaskExecutor
+from vermay.main_agent.models import TaskStatus as MainAgentTaskStatus
+from vermay.storage import AgentStore
 
 
 class FakeLocalMessageResponder:
@@ -176,7 +176,7 @@ def jsonrpc_error_data(local_code: str) -> dict:
         "retryable": False,
         "errorInfo": {
             "reason": local_code,
-            "domain": "vermay-agent",
+            "domain": "vermay",
             "metadata": {"localCode": local_code},
         },
     }
@@ -187,7 +187,7 @@ def test_a2a_agent_card_declares_local_skeleton_capabilities(tmp_path):
 
     card = adapter.get_agent_card()
 
-    assert card["name"] == "Vermay Agent"
+    assert card["name"] == "Vermay"
     assert card["url"] == "http://127.0.0.1:8000/rpc"
     assert card["preferredTransport"] == "JSONRPC"
     assert card["capabilities"] == {
@@ -1340,7 +1340,7 @@ def test_a2a_rpc_masks_model_provider_details_and_preserves_retryability(tmp_pat
             "retryable": True,
             "errorInfo": {
                 "reason": "model_error",
-                "domain": "vermay-agent",
+                "domain": "vermay",
                 "metadata": {"localCode": "model_error"},
             },
         },
@@ -2079,7 +2079,7 @@ def test_a2a_rpc_validation_errors(request_json, code, message, local_code, tmp_
     assert response.json()["error"]["data"]["localCode"] == local_code
     assert response.json()["error"]["data"]["errorInfo"] == {
         "reason": local_code,
-        "domain": "vermay-agent",
+        "domain": "vermay",
         "metadata": {"localCode": local_code},
     }
     agent_store.close()

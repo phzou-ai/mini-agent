@@ -101,7 +101,7 @@ export function contextToSession(context: AgentContextRecord): AgentSession {
   return {
     session_id: context.context_id,
     context_id: context.context_id,
-    title: context.title || "Vermay Agent",
+    title: context.title || "Vermay",
     status: "active",
     metadata: context.metadata,
     created_at: context.created_at,

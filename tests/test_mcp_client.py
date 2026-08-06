@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from vermay_agent.mcp.client import (
+from vermay.mcp.client import (
     MCPPromptDefinition,
     MCPResourceDefinition,
     MCPToolDefinition,

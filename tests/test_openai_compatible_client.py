@@ -6,9 +6,9 @@ from urllib.error import HTTPError, URLError
 
 import pytest
 
-from vermay_agent.errors import ModelProtocolError, ModelProviderError
-from vermay_agent.model_clients.openai_compatible import OpenAICompatibleModelClient
-from vermay_agent.types import Message
+from vermay.errors import ModelProtocolError, ModelProviderError
+from vermay.model_clients.openai_compatible import OpenAICompatibleModelClient
+from vermay.types import Message
 
 
 class FakeResponse:

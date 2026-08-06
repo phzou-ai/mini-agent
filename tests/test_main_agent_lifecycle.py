@@ -1,12 +1,12 @@
 import pytest
 
-from vermay_agent.main_agent.lifecycle import (
+from vermay.main_agent.lifecycle import (
     InvalidLocalTaskTransitionError,
     accepts_remote_proxy_snapshot,
     lifecycle_event_type_for_status,
     validate_local_task_transition,
 )
-from vermay_agent.main_agent.models import TaskStatus
+from vermay.main_agent.models import TaskStatus
 
 
 @pytest.mark.parametrize(

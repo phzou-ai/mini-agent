@@ -2,7 +2,7 @@
 
 This example exposes read-only Kubernetes inspection over MCP stdio.
 
-It reuses the same SSH and microk8s/kubectl backend as the built-in Vermay Agent Kubernetes tools. SSH credentials remain inside the MCP server boundary and are read from the preferred `VERMAY_AGENT_SSH_*` environment configuration. The deprecated `MINI_AGENT_SSH_*` prefix is still accepted as a compatibility fallback during migration.
+It reuses the same SSH and microk8s/kubectl backend as the built-in Vermay Kubernetes tools. SSH credentials remain inside the MCP server boundary and are read from `VERMAY_SSH_*` environment configuration.
 
 ## Capabilities
 
@@ -28,13 +28,13 @@ Prompts:
 The tracked `config/mcp_servers.json` includes this server as `k8s`.
 
 ```bash
-vermay-agent mcp list-tools --server k8s
-vermay-agent mcp list-resources --server k8s
-vermay-agent mcp list-prompts --server k8s
+vermay mcp list-tools --server k8s
+vermay mcp list-resources --server k8s
+vermay mcp list-prompts --server k8s
 ```
 
 Use it in a run by explicitly selecting the server:
 
 ```bash
-vermay-agent "check k8s status" --mcp-server k8s --mcp-prompt k8s-readonly-debug
+vermay "check k8s status" --mcp-server k8s --mcp-prompt k8s-readonly-debug
 ```

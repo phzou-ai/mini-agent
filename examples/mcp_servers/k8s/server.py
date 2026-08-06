@@ -11,8 +11,8 @@ ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from vermay_agent.infra.ssh import SshClient  # noqa: E402
-from vermay_agent.tools.devops.remote_kubernetes import (  # noqa: E402
+from vermay.infra.ssh import SshClient  # noqa: E402
+from vermay.tools.devops.remote_kubernetes import (  # noqa: E402
     remote_kubectl_command,
     ssh_kubectl_describe,
     ssh_kubectl_get,
@@ -20,7 +20,7 @@ from vermay_agent.tools.devops.remote_kubernetes import (  # noqa: E402
 
 
 mcp = FastMCP(
-    "vermay-agent-k8s",
+    "vermay-k8s",
     instructions=(
         "Read-only Kubernetes inspection server. Use these capabilities for cluster status, "
         "service health, pod state, node state, and event inspection. No mutating operation is exposed."

@@ -15,17 +15,17 @@ python -m pip install -e .
 ## Run
 
 ```bash
-vermay-agent "weather forecast for Beijing"
+vermay "weather forecast for Beijing"
 ```
 
-The CLI uses `vermay_agent/langgraph_runtime/`. No alternate runtime is exposed through the active CLI.
+The CLI uses `vermay/langgraph_runtime/`. No alternate runtime is exposed through the active CLI.
 
 ## API Server
 
 Start the local FastAPI server:
 
 ```bash
-vermay-agent serve
+vermay serve
 ```
 
 Default bind address:
@@ -37,14 +37,14 @@ Default bind address:
 Use a different port:
 
 ```bash
-vermay-agent serve --host 127.0.0.1 --port 9000
+vermay serve --host 127.0.0.1 --port 9000
 ```
 
 The local server exposes the A2A main-agent service surface together with the
 first-party management and diagnostic APIs used by the Web UI:
 
 ```bash
-vermay-agent serve
+vermay serve
 ```
 
 Current public A2A service boundary:
@@ -183,24 +183,24 @@ The runtime selects configured models from `config/models.json` by default. The 
 
 Ollama model settings live in `config/models.json` under the selected model's `options`.
 
-`primary_model` is used for normal local message and task execution. `router_model` is used by the main-agent auto router. If `router_model` is omitted, the router falls back to `primary_model`. `VERMAY_AGENT_ROUTER_MODEL` can temporarily override `router_model` without changing the file.
+`primary_model` is used for normal local message and task execution. `router_model` is used by the main-agent auto router. If `router_model` is omitted, the router falls back to `primary_model`. `VERMAY_ROUTER_MODEL` can temporarily override `router_model` without changing the file.
 
 Use the primary model:
 
 ```bash
-vermay-agent "weather forecast for Beijing"
+vermay "weather forecast for Beijing"
 ```
 
 Use another configured model:
 
 ```bash
-vermay-agent "weather forecast for Beijing" --model local_ollama
+vermay "weather forecast for Beijing" --model local_ollama
 ```
 
 Provider-specific CLI override example:
 
 ```bash
-vermay-agent "weather forecast for Beijing" \
+vermay "weather forecast for Beijing" \
   --model-provider ollama \
   --ollama-model qwen3.6:27b \
   --ollama-base-url http://127.0.0.1:11434 \
@@ -210,7 +210,7 @@ vermay-agent "weather forecast for Beijing" \
 Advanced model provider options can be passed as repeated flat `key=value` pairs:
 
 ```bash
-vermay-agent "weather forecast for Beijing" \
+vermay "weather forecast for Beijing" \
   --model-provider ollama \
   --model-option model=deepseek-v4-flash:cloud \
   --model-option tool_calling=native \
@@ -223,12 +223,12 @@ vermay-agent "weather forecast for Beijing" \
 
 `timeout_seconds` must be a positive integer.
 
-The CLI maps configured model selections or provider override flags into `ModelProviderConfig(provider, options)`. Runtime assembly lives in `vermay_agent/app_factory.py`; provider-specific model construction lives in `vermay_agent/langgraph_runtime/model_factory.py`.
+The CLI maps configured model selections or provider override flags into `ModelProviderConfig(provider, options)`. Runtime assembly lives in `vermay/app_factory.py`; provider-specific model construction lives in `vermay/langgraph_runtime/model_factory.py`.
 
 OpenAI-compatible endpoint example:
 
 ```bash
-vermay-agent "weather forecast for Beijing" \
+vermay "weather forecast for Beijing" \
   --model-provider openai_compatible \
   --model-option model=qwen \
   --model-option base_url=http://localhost:8000/v1
@@ -248,9 +248,9 @@ supported matrix and safety behavior.
 Memory writes are explicit:
 
 ```bash
-vermay-agent memory add "Prefer read-only Kubernetes inspection first." --tag k8s --tag preference
-vermay-agent memory list
-vermay-agent memory disable 1
+vermay memory add "Prefer read-only Kubernetes inspection first." --tag k8s --tag preference
+vermay memory list
+vermay memory disable 1
 ```
 
 Enabled memory is selected by deterministic keyword, tag, and latest-item matching and injected as system context before the user message.
@@ -260,10 +260,10 @@ Enabled memory is selected by deterministic keyword, tag, and latest-item matchi
 Authored skills are markdown files under `skills/` with front matter fields `name`, `description`, `triggers`, and `version`.
 
 ```bash
-vermay-agent skills list
-vermay-agent skills show kubernetes-readonly-debug
-vermay-agent skills propose-from-trace --trace traces/latest.jsonl
-vermay-agent skills approve <proposal-id>
+vermay skills list
+vermay skills show kubernetes-readonly-debug
+vermay skills propose-from-trace --trace traces/latest.jsonl
+vermay skills approve <proposal-id>
 ```
 
 Generated skills remain proposals under `data/skill_proposals/` until approved.
@@ -273,9 +273,9 @@ Generated skills remain proposals under `data/skill_proposals/` until approved.
 Replay uses recorded trace or scenario data only. It does not execute a live model, live SSH, MCP, or dangerous tools.
 
 ```bash
-vermay-agent eval replay --trace traces/latest.jsonl
-vermay-agent eval replay --scenario evals/scenarios/weather.json
-vermay-agent eval list-runs
+vermay eval replay --trace traces/latest.jsonl
+vermay eval replay --scenario evals/scenarios/weather.json
+vermay eval list-runs
 ```
 
 Eval metadata is stored in `data/agent.sqlite`; full reports are written under `data/eval_runs/`.
@@ -285,11 +285,11 @@ Eval metadata is stored in `data/agent.sqlite`; full reports are written under `
 MCP client configuration lives in `config/mcp_servers.json`.
 
 ```bash
-vermay-agent mcp list-servers
-vermay-agent mcp list-tools
-vermay-agent mcp list-tools --server k8s
-vermay-agent mcp list-resources --server k8s
-vermay-agent mcp list-prompts --server k8s
+vermay mcp list-servers
+vermay mcp list-tools
+vermay mcp list-tools --server k8s
+vermay mcp list-resources --server k8s
+vermay mcp list-prompts --server k8s
 ```
 
 Configured MCP servers are inactive during normal agent runs until selected with `--mcp-server`. MCP tools are approval-required by default. A server or individual tool must be explicitly marked read-only in config to bypass approval.
@@ -297,21 +297,21 @@ Configured MCP servers are inactive during normal agent runs until selected with
 Selected MCP prompts and resources can be injected as bounded context:
 
 ```bash
-vermay-agent "debug service health" --mcp-server k8s --mcp-prompt k8s-service-health-check
-vermay-agent "debug phzou-core service" --mcp-server k8s --mcp-prompt 'k8s-service-health-check?service=phzou-core&namespace=default'
-vermay-agent "check service status" --mcp-server k8s --mcp-resource k8s://cluster/services
+vermay "debug service health" --mcp-server k8s --mcp-prompt k8s-service-health-check
+vermay "debug phzou-core service" --mcp-server k8s --mcp-prompt 'k8s-service-health-check?service=phzou-core&namespace=default'
+vermay "check service status" --mcp-server k8s --mcp-resource k8s://cluster/services
 ```
 
 Prompts and resources are read once at run start. Prompts are injected as external workflow guidance before local skills, memory, and resources. Resources are injected as external data after local memory. Prompt arguments use query-string syntax after the prompt name. When multiple MCP servers are selected, use qualified forms such as `--mcp-prompt 'k8s:k8s-service-health-check?service=phzou-core'` and `--mcp-resource k8s:k8s://cluster/services`.
 
-A local `k8s` MCP test example lives under `examples/mcp_servers/k8s/` and exposes read-only Kubernetes tools, resources, and prompts. It uses the existing SSH/microk8s backend, so live tool/resource reads require the preferred `VERMAY_AGENT_SSH_*` environment configuration. The deprecated `MINI_AGENT_SSH_*` prefix is still accepted as a compatibility fallback during migration. The config starts it with `.venv/bin/python` and applies `timeout_seconds` to MCP discovery, tool calls, resources, and prompts. Update `config/mcp_servers.json` if the project is run from another Python environment.
+A local `k8s` MCP test example lives under `examples/mcp_servers/k8s/` and exposes read-only Kubernetes tools, resources, and prompts. It uses the existing SSH/microk8s backend, so live tool/resource reads require `VERMAY_SSH_*` environment configuration. The config starts it with `.venv/bin/python` and applies `timeout_seconds` to MCP discovery, tool calls, resources, and prompts. Update `config/mcp_servers.json` if the project is run from another Python environment.
 
 ## Trace Path
 
 `--trace` accepts a filename or relative subpath under `traces/`:
 
 ```bash
-vermay-agent "weather forecast for Beijing" --trace runs/latest.jsonl
+vermay "weather forecast for Beijing" --trace runs/latest.jsonl
 ```
 
 Absolute paths are allowed for debugging and tests. Relative paths cannot escape `traces/`.
@@ -323,7 +323,7 @@ Dangerous tools require approval and pause the graph through LangGraph interrupt
 In an interactive terminal, the default command prompts for approval and resumes automatically:
 
 ```bash
-vermay-agent "run a dangerous operation"
+vermay "run a dangerous operation"
 ```
 
 The CLI runtime stores LangGraph checkpoints in:
@@ -335,8 +335,8 @@ data/checkpoints/langgraph.sqlite
 This makes manual resume durable across CLI processes:
 
 ```bash
-vermay-agent "run a dangerous operation" --thread-id approval-session
-vermay-agent --thread-id approval-session --resume-approval true --approval-reason "approved by operator"
+vermay "run a dangerous operation" --thread-id approval-session
+vermay --thread-id approval-session --resume-approval true --approval-reason "approved by operator"
 ```
 
 Interactive approval asks at most once per run by default. If the model requests another dangerous tool after approval, the run stops instead of repeatedly prompting.
@@ -359,7 +359,7 @@ The terminal transcript is for scanability. It is not the durable audit log and 
 Disable progress output:
 
 ```bash
-vermay-agent "weather forecast for Beijing" --no-progress
+vermay "weather forecast for Beijing" --no-progress
 ```
 
 ## JSONL Traces

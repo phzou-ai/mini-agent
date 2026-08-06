@@ -1,6 +1,6 @@
 import pytest
 
-from vermay_agent.model_clients.json_decision import parse_json_decision
+from vermay.model_clients.json_decision import parse_json_decision
 
 
 @pytest.mark.parametrize(

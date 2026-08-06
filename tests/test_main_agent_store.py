@@ -4,7 +4,7 @@ import threading
 
 import pytest
 
-from vermay_agent.main_agent import (
+from vermay.main_agent import (
     InvalidLocalTaskTransitionError,
     LocalMessageResult,
     LocalTaskResult,
@@ -18,9 +18,9 @@ from vermay_agent.main_agent import (
     RouteDecisionKind,
     TaskStatus,
 )
-from vermay_agent.main_agent.projection import A2ATaskState, task_status_to_a2a_state
-from vermay_agent.main_agent.context import recent_messages
-from vermay_agent.storage import AgentStore
+from vermay.main_agent.projection import A2ATaskState, task_status_to_a2a_state
+from vermay.main_agent.context import recent_messages
+from vermay.storage import AgentStore
 
 
 def test_main_agent_store_persists_context_message_route_task_event_artifact(tmp_path):

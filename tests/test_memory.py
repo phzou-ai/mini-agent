@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from langchain_core.messages import SystemMessage
 
-from vermay_agent.memory import SQLiteMemoryStore
-from vermay_agent.runtime_context import RuntimeContextProvider
-from vermay_agent.storage import AgentStore
+from vermay.memory import SQLiteMemoryStore
+from vermay.runtime_context import RuntimeContextProvider
+from vermay.storage import AgentStore
 
 
 def test_memory_add_list_disable_and_retrieve(tmp_path):

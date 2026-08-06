@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from vermay_agent.cli import subcommands as cli
+from vermay.cli import subcommands as cli
 
 
 def test_memory_cli_add_list_disable(tmp_path, monkeypatch, capsys):

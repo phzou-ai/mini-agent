@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from vermay_agent.cli.prompt import _model_provider_config_from_args, _parse_model_options, _trace_path
-from vermay_agent.cli.subcommands import run_serve_command
+from vermay.cli.prompt import _model_provider_config_from_args, _parse_model_options, _trace_path
+from vermay.cli.subcommands import run_serve_command
 
 
 def make_args(**overrides):
@@ -196,7 +196,7 @@ def test_serve_command_runs_uvicorn_with_local_defaults(monkeypatch):
         return "app"
 
     monkeypatch.setattr("uvicorn.run", fake_run)
-    monkeypatch.setattr("vermay_agent.api.app.create_app", fake_create_app)
+    monkeypatch.setattr("vermay.api.app.create_app", fake_create_app)
 
     run_serve_command([])
 
@@ -214,7 +214,7 @@ def test_serve_command_accepts_host_and_port(monkeypatch):
         return "app"
 
     monkeypatch.setattr("uvicorn.run", fake_run)
-    monkeypatch.setattr("vermay_agent.api.app.create_app", fake_create_app)
+    monkeypatch.setattr("vermay.api.app.create_app", fake_create_app)
 
     run_serve_command(["--host", "0.0.0.0", "--port", "9000"])
 

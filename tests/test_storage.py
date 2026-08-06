@@ -4,8 +4,8 @@ import sqlite3
 
 import pytest
 
-from vermay_agent import storage
-from vermay_agent.storage import AgentStore, SchemaMigration
+from vermay import storage
+from vermay.storage import AgentStore, SchemaMigration
 
 
 def _table_names(store: AgentStore) -> set[str]:

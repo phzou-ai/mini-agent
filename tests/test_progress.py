@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from vermay_agent.progress import ProgressReporter
+from vermay.progress import ProgressReporter
 
 
 def test_input_summary_collapses_multiline_input():

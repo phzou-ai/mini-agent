@@ -5,7 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
-from vermay_agent.main_agent.task_runner import DirectLangGraphLocalTaskRunner
+from vermay.main_agent.task_runner import DirectLangGraphLocalTaskRunner
 
 
 class ConcurrentRuntime:

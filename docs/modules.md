@@ -2,13 +2,12 @@
 
 ## Entry Point
 
-`vermay_agent/main.py`
+`vermay/main.py`
 
-- Defines the `vermay-agent` console entry point and keeps `mini-agent` as a compatibility alias.
+- Defines the `vermay` console entry point.
 - Dispatches prompt execution or named subcommands.
-- Re-exports a small set of CLI helpers for compatibility with existing tests.
 
-`vermay_agent/cli/prompt.py`
+`vermay/cli/prompt.py`
 
 - Parses prompt-run CLI arguments.
 - Maps provider-specific flags and `--model-option key=value` into model provider options.
@@ -16,7 +15,7 @@
 - Handles approval resume CLI options.
 - Owns terminal-only interactive approval prompting.
 
-`vermay_agent/cli/subcommands.py`
+`vermay/cli/subcommands.py`
 
 - Dispatches subcommands for `serve`, memory, skills, eval replay, and MCP inspection.
 - Owns subcommand-specific argument parsing.
@@ -24,7 +23,7 @@
 
 ## API
 
-`vermay_agent/api/`
+`vermay/api/`
 
 - `app.py`: FastAPI app factory and HTTP route definitions.
 - `a2a/`: A2A JSON-RPC/SSE binding and projection package over `MainAgentCore`.
@@ -34,7 +33,7 @@
 business lifecycle decisions itself: FastAPI only starts reconciliation, exposes
 the bindings/read models, and closes the resources it created during shutdown.
 A2A remains an API-edge binding and must not introduce A2A concepts into
-`vermay_agent/langgraph_runtime/`.
+`vermay/langgraph_runtime/`.
 
 The API package contains no alternate service/session lifecycle. All supported
 agent operations enter through the A2A adapter and delegate to
@@ -42,7 +41,7 @@ agent operations enter through the A2A adapter and delegate to
 
 ## Main Agent
 
-`vermay_agent/main_agent/`
+`vermay/main_agent/`
 
 - `core.py`: the application lifecycle owner for direct Messages, local Tasks,
   continuations, cancellation, remote child-task proxies, and durable ingress.
@@ -64,7 +63,7 @@ local graph execution and checkpoint continuation.
 
 ## Runtime Factory
 
-`vermay_agent/app_factory.py`
+`vermay/app_factory.py`
 
 - Defines `RuntimeFactoryConfig`.
 - Builds the active LangGraph runtime through `build_runtime()`.
@@ -75,7 +74,7 @@ local graph execution and checkpoint continuation.
 
 ## LangGraph Runtime
 
-`vermay_agent/langgraph_runtime/`
+`vermay/langgraph_runtime/`
 
 - `state.py`: standard LangGraph state using `messages: Annotated[list[BaseMessage], add_messages]`.
 - `nodes.py`: model, permission, approval, tool-message recording, and loop-control nodes.
@@ -92,7 +91,7 @@ This package is the only active runtime path. It is the production-oriented path
 
 ## Shared Runtime Components
 
-`vermay_agent/`
+`vermay/`
 
 - `system_prompt.py`: owns the default agent system prompt used by runtime assembly and direct Message responses.
 - `checkpointing.py`: builds SQLite checkpointers for durable CLI approval resume.
@@ -117,7 +116,7 @@ The active tool schema source is each tool's Pydantic `args_schema`. Model adapt
 
 ## Model Adapters
 
-`vermay_agent/model_clients/ollama.py`
+`vermay/model_clients/ollama.py`
 
 - Calls Ollama `/api/chat`.
 - Supports explicit `native`, `prompt_json`, and `none` tool-calling modes.
@@ -125,7 +124,7 @@ The active tool schema source is each tool's Pydantic `args_schema`. Model adapt
   JSON action format is an explicit compatibility mode only.
 - Reads model configuration from `config/models.json` or explicit runtime overrides.
 
-`vermay_agent/model_clients/openai_compatible.py`
+`vermay/model_clients/openai_compatible.py`
 
 - Calls OpenAI-style `{base_url}/chat/completions` endpoints.
 - Sends Bearer authentication when `api_key` or `api_key_env` is configured.
@@ -134,7 +133,7 @@ The active tool schema source is each tool's Pydantic `args_schema`. Model adapt
 - Supports `native` and `none` tool-calling modes; it does not interpret the
   project JSON action compatibility format.
 
-`vermay_agent/langgraph_runtime/model_factory.py`
+`vermay/langgraph_runtime/model_factory.py`
 
 - Builds provider-specific model adapters for the active runtime.
 - Accepts `ModelProviderConfig(provider, options)`.
@@ -145,14 +144,14 @@ The active tool schema source is each tool's Pydantic `args_schema`. Model adapt
 
 ## Tool Domains
 
-`vermay_agent/tools/devops/`
+`vermay/tools/devops/`
 
 - Local file and log inspection tools.
 - Local sample Kubernetes data tools.
 - SSH-backed read-only Kubernetes tools.
 - Dangerous tool placeholders that require approval.
 
-`vermay_agent/tools/weather/`
+`vermay/tools/weather/`
 
 - `weather_forecast` read-only external data tool backed by `wttr.in`.
 
@@ -160,7 +159,7 @@ Configured MCP servers are inactive by default. Runtime construction loads MCP t
 
 Explicitly selected MCP prompts and resources are read once at run start. `RuntimeContextProvider` injects them in this order: MCP prompts, local authored skills, explicit memory, MCP resources. Prompts are treated as external workflow guidance; resources are treated as untrusted external data. Prompt selections can carry explicit string arguments, which are passed to the MCP server when retrieving the prompt.
 
-`vermay_agent/mcp/`
+`vermay/mcp/`
 
 - `client.py`: high-level MCP client manager and compatibility aliases.
 - `config.py`: MCP server config parsing and exposure policy constants.
@@ -179,7 +178,7 @@ Explicitly selected MCP prompts and resources are read once at run start. `Runti
 
 ## Infrastructure
 
-`vermay_agent/infra/ssh.py`
+`vermay/infra/ssh.py`
 
 - Builds strict SSH commands from environment configuration.
 - Enforces host key checking and known hosts usage.
