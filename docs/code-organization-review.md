@@ -107,6 +107,19 @@ documentation and Git history instead of executable product source.
   semantics. Their small truncation/deduplication helpers do not justify a
   shared abstraction yet.
 
+## Web Rendering Boundary
+
+Assistant Markdown rendering remains a presentation concern owned by
+`AgentTranscript`. GFM parsing, math delimiter normalization, and KaTeX output
+do not participate in A2A projection, runtime state, or persisted message
+contracts.
+
+The Web dependency graph intentionally resolves one KaTeX version for both the
+renderer and stylesheet. The focused migration regression protects headings,
+lists, code spans and blocks, tables, inline and display formulas, narrow-screen
+overflow, and wide-screen transcript/composer alignment. These concerns do not
+justify extracting another shared rendering or page-controller layer yet.
+
 ## Next Refactor Trigger
 
 Do not add another runtime selection layer or repository hierarchy. Consider a

@@ -57,3 +57,7 @@ backend dependencies.
 
 The web app is intentionally agent-specific. Reusable UI primitives should only
 be extracted later if another non-agent product actually needs them.
+
+Assistant output supports GitHub Flavored Markdown and KaTeX math using `$...$`,
+`$$...$$`, `\\(...\\)`, and `\\[...\\]` delimiters. The migration regression
+suite owns structured-content rendering and horizontal-overflow behavior.

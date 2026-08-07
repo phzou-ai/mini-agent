@@ -151,12 +151,14 @@ scheduler needs concrete deployment pressure, not just architectural analogy.
   identity.
 - Dynamic runtime context is bounded both per section and in total.
 
-## Next Decision And Priority
+## Follow-Up Status
 
-The next runtime correctness task is **direct-message ingress recovery**. A
-crash during direct-message execution correctly leaves its `messageId` in an
-inspectable `in_progress` state rather than replaying a possibly side-effecting
-request. The next design must define a safe stale-ingress outcome without ever
-allowing the same `messageId` to route, create a Task, or run a tool twice.
+The direct-message ingress recovery item identified by this review was
+subsequently completed. Stale `in_progress` ingress is now reconciled to an
+explicit terminal failure without replaying routing, Task creation, or tool
+execution for the same `messageId`.
 
-The next runtime correctness task remains **direct-message ingress recovery**.
+See [message-ingress.md](message-ingress.md) and
+[direct-message-failures.md](direct-message-failures.md) for the implemented
+contract. Current priorities are maintained only in
+[roadmap.md](roadmap.md#current-phase-gate); this dated review is historical.

@@ -116,7 +116,7 @@ not yet add:
 - serialization of an entire Context's route-selection work;
 
 Those concerns remain separate refinements. Local-process transition governance,
-startup reconciliation, direct-message failure presentation, executor
-ownership, and remote-proxy synchronization are complete. The next correctness
-priority is a direct-message ingress recovery policy described in
-[roadmap.md](roadmap.md).
+startup reconciliation, direct-message failure presentation and ingress
+recovery, executor ownership, and remote-proxy synchronization are complete.
+Current phase gates and priorities are maintained in
+[roadmap.md](roadmap.md#current-phase-gate).

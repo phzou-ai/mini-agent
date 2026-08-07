@@ -629,15 +629,21 @@ function MarkdownText({ content }: { content: string }) {
 }
 
 function normalizeMathDelimiters(content: string): string {
-  let fence: "```" | "~~~" | null = null
+  let fence: { marker: "`" | "~"; length: number } | null = null
+  let inlineCodeTicks = 0
 
   return content
     .split("\n")
     .map((line) => {
-      const fenceMatch = line.match(/^\s*(```|~~~)/)
+      const fenceMatch = line.match(/^\s*(`{3,}|~{3,})/)
       if (fenceMatch) {
-        const marker = fenceMatch[1] as "```" | "~~~"
-        fence = fence === marker ? null : fence ?? marker
+        const run = fenceMatch[1]
+        const marker = run[0] as "`" | "~"
+        if (!fence) {
+          fence = { marker, length: run.length }
+        } else if (fence.marker === marker && run.length >= fence.length) {
+          fence = null
+        }
         return line
       }
 
@@ -645,17 +651,55 @@ function normalizeMathDelimiters(content: string): string {
         return line
       }
 
-      return line
-        .replace(
-          /\\\[(.*?)\\\]/g,
-          (_match, expression: string) => `$$\n${expression}\n$$`
-        )
-        .replace(/\\\[/g, () => "$$")
-        .replace(/\\\]/g, () => "$$")
-        .replace(/\\\(/g, "$")
-        .replace(/\\\)/g, "$")
+      let normalized = ""
+      let plainTextStart = 0
+
+      for (let index = 0; index < line.length; ) {
+        if (line[index] !== "`") {
+          index += 1
+          continue
+        }
+
+        let runEnd = index + 1
+        while (runEnd < line.length && line[runEnd] === "`") {
+          runEnd += 1
+        }
+        const runLength = runEnd - index
+
+        if (inlineCodeTicks === 0) {
+          normalized += normalizeMathInPlainText(
+            line.slice(plainTextStart, index)
+          )
+          normalized += line.slice(index, runEnd)
+          inlineCodeTicks = runLength
+          plainTextStart = runEnd
+        } else if (inlineCodeTicks === runLength) {
+          normalized += line.slice(plainTextStart, runEnd)
+          inlineCodeTicks = 0
+          plainTextStart = runEnd
+        }
+        index = runEnd
+      }
+
+      const remainder = line.slice(plainTextStart)
+      normalized += inlineCodeTicks
+        ? remainder
+        : normalizeMathInPlainText(remainder)
+      return normalized
     })
     .join("\n")
+}
+
+function normalizeMathInPlainText(content: string): string {
+  return content
+    .replace(
+      /\\\[(.*?)\\\]/g,
+      (_match, expression: string) => `$$\n${expression}\n$$`
+    )
+    .replace(/\\\[/g, () => "$$")
+    .replace(/\\\]/g, () => "$$")
+    .replace(/\\\(/g, () => "$")
+    .replace(/\\\)/g, () => "$")
 }
 
 function TypingIndicator() {

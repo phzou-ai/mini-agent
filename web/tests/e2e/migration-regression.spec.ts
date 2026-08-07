@@ -29,7 +29,7 @@ test.describe("Migrated frontend regression baseline", () => {
     const answer = [
       "# Learning plan",
       "",
-      "A concise introduction with **important context** and `inline code`. This deliberately long paragraph verifies that intrinsic content width cannot expand a message beyond the center workspace when both the session sidebar and inspector are visible.",
+      "A concise introduction with **important context** and inline code that preserves literal math delimiters: `\\(alpha\\)`. This deliberately long paragraph verifies that intrinsic content width cannot expand a message beyond the center workspace when both the session sidebar and inspector are visible.",
       "",
       "## Foundations",
       "",
@@ -137,6 +137,9 @@ test.describe("Migrated frontend regression baseline", () => {
       "Build one concept at a time."
     )
     await expect(markdown.locator("pre code")).toContainText('print("hello")')
+    await expect(markdown.locator("code").first()).toHaveText(
+      String.raw`\(alpha\)`
+    )
     await expect(markdown.locator("table")).toBeVisible()
     await expect(markdown.locator(".katex")).toHaveCount(3)
     await expect(markdown.locator(".katex-display")).toHaveCount(2)
@@ -200,6 +203,17 @@ test.describe("Migrated frontend regression baseline", () => {
             data: { localCode: "model_error", retryable: true },
           },
         })}\n\n`,
+      })
+    )
+    await page.route("**/api/bff/agent/message-ingress/**", (route) =>
+      route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({
+          code: "message_ingress_not_found",
+          message: "Message ingress was not persisted.",
+          retryable: false,
+        }),
       })
     )
 
