@@ -4,6 +4,24 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-$ROOT_DIR/.venv/bin/python}"
 FRONTEND_BUILD_DIST_DIR="${FRONTEND_BUILD_DIST_DIR:-.next-full-stack-build}"
+NEXT_ENV_FILE="$ROOT_DIR/web/next-env.d.ts"
+NEXT_ENV_BACKUP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/vermay-next-env.XXXXXX")"
+NEXT_ENV_BACKUP="$NEXT_ENV_BACKUP_DIR/next-env.d.ts"
+
+if [[ -f "$NEXT_ENV_FILE" ]]; then
+  cp "$NEXT_ENV_FILE" "$NEXT_ENV_BACKUP"
+fi
+
+restore_next_env() {
+  if [[ -f "$NEXT_ENV_BACKUP" ]]; then
+    cp "$NEXT_ENV_BACKUP" "$NEXT_ENV_FILE"
+  else
+    rm -f "$NEXT_ENV_FILE"
+  fi
+  rm -rf "$NEXT_ENV_BACKUP_DIR"
+}
+
+trap restore_next_env EXIT
 
 cd "$ROOT_DIR"
 
@@ -16,7 +34,7 @@ pnpm --dir web run typecheck
 echo "[3/4] Frontend production build"
 VERMAY_NEXT_DIST_DIR="$FRONTEND_BUILD_DIST_DIR" pnpm --dir web run build
 
-echo "[4/4] Deterministic migrated-frontend regression"
+echo "[4/4] Deterministic frontend regression"
 pnpm --dir web run test:regression
 
 if [[ "${RUN_LIVE_E2E:-0}" == "1" ]]; then

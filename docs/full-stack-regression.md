@@ -15,7 +15,7 @@ The gate runs:
 1. the complete backend unit and integration suite;
 2. frontend TypeScript validation;
 3. the frontend production build; and
-4. a deterministic Playwright regression for the migrated Agent Console.
+4. a deterministic Playwright regression for the Agent Console.
 
 The Playwright regression mocks the browser-facing BFF responses. Backend A2A, persistence, routing, task lifecycle, and error projection remain covered by Python integration tests. This split keeps the default gate independent of Ollama, external model providers, and MCP availability.
 
@@ -23,6 +23,11 @@ The gate uses dedicated Next output directories for its production build and
 deterministic Playwright server. It therefore does not reuse or overwrite the
 normal `web/.next` directory used by a local `pnpm dev` session. This allows the
 regression command to run without stopping the developer's frontend server.
+Next.js may still rewrite the tracked `web/next-env.d.ts` routes import when it
+generates types for a custom dist directory. The gate snapshots that file and
+restores it on exit, including failure, so a clean worktree remains clean after
+the default regression gate. The gate does not require a clean worktree at
+startup; `scripts/check_source_release.sh` enforces that pre-release condition.
 
 ### Browser fixture isolation
 

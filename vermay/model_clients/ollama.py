@@ -331,11 +331,6 @@ class OllamaModelClient:
 
         return self._parse_decision(decision)
 
-    def _to_ollama_messages(self, messages: list[Message], tools: list[dict]) -> list[dict[str, str]]:
-        """Compatibility alias for tests and explicit ``prompt_json`` mode."""
-
-        return self._to_prompt_json_ollama_messages(messages, tools)
-
     def _to_prompt_json_ollama_messages(self, messages: list[Message], tools: list[dict]) -> list[dict[str, str]]:
         protocol = {
             "role": "system",

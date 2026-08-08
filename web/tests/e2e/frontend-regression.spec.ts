@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test"
 
 import { mockAgentRegressionBootstrap } from "./agent-regression-fixtures"
 
-test.describe("Migrated frontend regression baseline", () => {
+test.describe("Frontend regression baseline", () => {
   test.beforeEach(async ({ page }) => {
     await mockAgentRegressionBootstrap(page)
   })

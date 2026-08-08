@@ -212,7 +212,7 @@ scripts/check_source_release.sh
 
 ## Full-Stack Regression
 
-Run the deterministic backend and migrated-frontend regression gate:
+Run the deterministic backend and frontend regression gate:
 
 ```bash
 scripts/check_full_stack_regression.sh

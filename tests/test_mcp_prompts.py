@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import SystemMessage
 
-from vermay.mcp.client import MCPServerConfig, MCPToolLoader
+from vermay.mcp.client import MCPClientManager, MCPServerConfig
 from vermay.mcp.prompts import MCPPromptProvider, resolve_mcp_prompt_selections
 from vermay.runtime_context import RuntimeContextProvider
 
@@ -212,7 +212,7 @@ def test_mcp_client_get_prompt_uses_prompt_getter(tmp_path):
         assert arguments is None
         return "Debug guidance"
 
-    text = MCPToolLoader(config, prompt_getter=get_prompt).get_prompt("docs", "debug")
+    text = MCPClientManager(config, prompt_getter=get_prompt).get_prompt("docs", "debug")
 
     assert text == "Debug guidance"
 
@@ -227,6 +227,6 @@ def test_mcp_client_get_prompt_passes_arguments(tmp_path):
         assert arguments == {"topic": "routing"}
         return "Debug guidance"
 
-    text = MCPToolLoader(config, prompt_getter=get_prompt).get_prompt("docs", "debug", {"topic": "routing"})
+    text = MCPClientManager(config, prompt_getter=get_prompt).get_prompt("docs", "debug", {"topic": "routing"})
 
     assert text == "Debug guidance"

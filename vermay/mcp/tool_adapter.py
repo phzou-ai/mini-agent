@@ -10,7 +10,7 @@ from ..tool_metadata import (
     ExecutionScope,
     ToolCategory,
     ToolSource,
-    metadata_from_legacy,
+    normalize_tool_metadata,
 )
 from .models import MCPServerConfig, MCPToolDefinition, MCPToolReport
 
@@ -42,7 +42,7 @@ def tool_definition_to_structured_tool(definition: MCPToolDefinition, caller: MC
         ApprovalPolicy.AUTO if read_only else ApprovalPolicy.APPROVAL_REQUIRED,
     )
 
-    metadata = metadata_from_legacy(metadata_values).to_metadata()
+    metadata = normalize_tool_metadata(metadata_values).to_metadata()
     metadata.update(
         {
             "mcp_server": definition.server.name,

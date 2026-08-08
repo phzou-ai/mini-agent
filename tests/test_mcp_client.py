@@ -8,7 +8,7 @@ from vermay.mcp.client import (
     MCPPromptDefinition,
     MCPResourceDefinition,
     MCPToolDefinition,
-    MCPToolLoader,
+    MCPClientManager,
     load_mcp_server_configs,
 )
 
@@ -99,7 +99,7 @@ def test_mcp_tools_are_approval_required_by_default(tmp_path):
             )
         ]
 
-    tools = MCPToolLoader(config, discovery=discover, caller=lambda server, name, args: {"ok": True}).load_tools()
+    tools = MCPClientManager(config, discovery=discover, caller=lambda server, name, args: {"ok": True}).load_tools()
 
     assert tools[0].name == "mcp__docs__search"
     assert tools[0].metadata["dangerous"] is True
@@ -137,7 +137,7 @@ def test_mcp_read_only_config_bypasses_approval(tmp_path):
             )
         ]
 
-    tools = MCPToolLoader(config, discovery=discover, caller=lambda server, name, args: "ok").load_tools()
+    tools = MCPClientManager(config, discovery=discover, caller=lambda server, name, args: "ok").load_tools()
 
     assert tools[0].metadata["dangerous"] is False
     assert tools[0].metadata["read_only"] is True
@@ -177,7 +177,7 @@ def test_mcp_tool_inherits_server_metadata_defaults(tmp_path):
             )
         ]
 
-    tools = MCPToolLoader(config, discovery=discover, caller=lambda server, name, args: "ok").load_tools()
+    tools = MCPClientManager(config, discovery=discover, caller=lambda server, name, args: "ok").load_tools()
 
     assert tools[0].metadata["category"] == "kubernetes"
     assert tools[0].metadata["execution_scope"] == "remote"
@@ -226,7 +226,7 @@ def test_mcp_tool_override_metadata_takes_precedence(tmp_path):
             )
         ]
 
-    tools = MCPToolLoader(config, discovery=discover, caller=lambda server, name, args: "ok").load_tools()
+    tools = MCPClientManager(config, discovery=discover, caller=lambda server, name, args: "ok").load_tools()
 
     assert tools[0].metadata["category"] == "filesystem"
     assert tools[0].metadata["execution_scope"] == "local"
@@ -251,7 +251,7 @@ def test_mcp_runtime_selection_can_load_no_servers(tmp_path):
         encoding="utf-8",
     )
 
-    tools = MCPToolLoader(config, selected_servers=[], discovery=lambda server: []).load_tools()
+    tools = MCPClientManager(config, selected_servers=[], discovery=lambda server: []).load_tools()
 
     assert tools == []
 
@@ -261,7 +261,7 @@ def test_mcp_runtime_selection_rejects_unknown_server(tmp_path):
     config.write_text(json.dumps({"servers": {"docs": {"transport": "stdio", "command": "server"}}}), encoding="utf-8")
 
     with pytest.raises(ValueError, match="unknown selected MCP server"):
-        MCPToolLoader(config, selected_servers=["missing"], discovery=lambda server: []).load_tools()
+        MCPClientManager(config, selected_servers=["missing"], discovery=lambda server: []).load_tools()
 
 
 def test_mcp_default_read_only_exposure_skips_dangerous_tools(tmp_path):
@@ -278,7 +278,7 @@ def test_mcp_default_read_only_exposure_skips_dangerous_tools(tmp_path):
             )
         ]
 
-    tools = MCPToolLoader(config, selected_servers=["docs"], discovery=discover).load_tools()
+    tools = MCPClientManager(config, selected_servers=["docs"], discovery=discover).load_tools()
 
     assert tools == []
 
@@ -317,7 +317,7 @@ def test_mcp_allowlist_uses_original_tool_names(tmp_path):
             ),
         ]
 
-    tools = MCPToolLoader(config, selected_servers=["docs"], discovery=discover).load_tools()
+    tools = MCPClientManager(config, selected_servers=["docs"], discovery=discover).load_tools()
 
     assert [tool.name for tool in tools] == ["mcp__docs__search_docs"]
     assert tools[0].metadata["dangerous"] is False
@@ -357,7 +357,7 @@ def test_mcp_tool_name_collision_after_canonicalization_fails(tmp_path):
         ]
 
     with pytest.raises(ValueError, match="collision"):
-        MCPToolLoader(config, selected_servers=["docs"], discovery=discover).load_tools()
+        MCPClientManager(config, selected_servers=["docs"], discovery=discover).load_tools()
 
 
 def test_mcp_tool_reports_include_policy_fields(tmp_path):
@@ -393,7 +393,7 @@ def test_mcp_tool_reports_include_policy_fields(tmp_path):
             ),
         ]
 
-    reports = MCPToolLoader(config, discovery=discover).list_tool_reports(server_name="Docs Server")
+    reports = MCPClientManager(config, discovery=discover).list_tool_reports(server_name="Docs Server")
 
     assert reports[0].original_name == "search"
     assert reports[0].model_facing_name == "mcp__docs_server__search"
@@ -422,7 +422,7 @@ def test_mcp_list_resources_uses_discovery_without_registering_tools(tmp_path):
             )
         ]
 
-    resources = MCPToolLoader(config, resource_discovery=discover_resources).list_resources(server_name="docs")
+    resources = MCPClientManager(config, resource_discovery=discover_resources).list_resources(server_name="docs")
 
     assert resources[0].server.name == "docs"
     assert resources[0].uri == "docs://guide"
@@ -445,7 +445,7 @@ def test_mcp_list_prompts_uses_discovery_without_registering_tools(tmp_path):
             )
         ]
 
-    prompts = MCPToolLoader(config, prompt_discovery=discover_prompts).list_prompts(server_name="docs")
+    prompts = MCPClientManager(config, prompt_discovery=discover_prompts).list_prompts(server_name="docs")
 
     assert prompts[0].server.name == "docs"
     assert prompts[0].name == "debug"

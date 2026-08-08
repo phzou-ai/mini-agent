@@ -1,4 +1,4 @@
-from .client import MCPClientManager, MCPToolLoader
+from .client import MCPClientManager
 from .config import load_mcp_server_configs
 from .models import MCPPromptDefinition, MCPResourceDefinition, MCPServerConfig, MCPToolDefinition, MCPToolReport
 from .selection import MCPPromptSelectionConfig, MCPResourceSelectionConfig, MCPSelectionConfig
@@ -13,7 +13,6 @@ __all__ = [
     "MCPSelectionConfig",
     "MCPServerConfig",
     "MCPToolDefinition",
-    "MCPToolLoader",
     "MCPToolReport",
     "MCPTransportError",
     "MCPTransportTimeout",

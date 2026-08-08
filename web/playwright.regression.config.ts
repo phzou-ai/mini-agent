@@ -8,7 +8,7 @@ const frontendDistDir =
 
 export default defineConfig({
   testDir: "./tests/e2e",
-  testMatch: /(?:migration-regression|runtime-reliability)\.spec\.ts/,
+  testMatch: /(?:frontend-regression|runtime-reliability)\.spec\.ts/,
   timeout: 30_000,
   expect: { timeout: 10_000 },
   use: {

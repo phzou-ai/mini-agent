@@ -108,7 +108,7 @@ class ToolMetadata:
         }
 
 
-def metadata_from_legacy(metadata: dict[str, Any] | None = None, **overrides: Any) -> ToolMetadata:
+def normalize_tool_metadata(metadata: dict[str, Any] | None = None, **overrides: Any) -> ToolMetadata:
     values: dict[str, Any] = dict(metadata or {})
     values.update({key: value for key, value in overrides.items() if value is not None})
 

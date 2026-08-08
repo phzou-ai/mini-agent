@@ -12,7 +12,7 @@ from vermay.langgraph_runtime.invocations import (
     ToolInvocationRecorder,
     ToolInvocationReference,
 )
-from vermay.tool_metadata import ToolMetadata, metadata_from_legacy
+from vermay.tool_metadata import ToolMetadata, normalize_tool_metadata
 
 from .models import ToolInvocationStatus
 from .store import MainAgentStore
@@ -60,7 +60,7 @@ class MainAgentToolInvocationLedger(ToolInvocationRecorder):
         if task is None or task.assigned_agent_id is not None:
             return None
 
-        metadata = metadata_from_legacy(tool_metadata)
+        metadata = normalize_tool_metadata(tool_metadata)
         if metadata.read_only:
             return None
 

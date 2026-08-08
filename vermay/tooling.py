@@ -12,7 +12,7 @@ from .tool_metadata import (
     SideEffectLevel,
     ToolCategory,
     ToolSource,
-    metadata_from_legacy,
+    normalize_tool_metadata,
 )
 from .tool_schema import (
     DEFAULT_OUTPUT_MAX_CHARS,
@@ -48,7 +48,7 @@ def structured_tool(
     produces_artifacts: bool = False,
     artifact_kinds: list[str] | tuple[str, ...] = (),
 ) -> StructuredTool:
-    metadata = metadata_from_legacy(
+    metadata = normalize_tool_metadata(
         dangerous=dangerous,
         source=source,
         category=category,

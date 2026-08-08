@@ -161,7 +161,7 @@ Explicitly selected MCP prompts and resources are read once at run start. `Runti
 
 `vermay/mcp/`
 
-- `client.py`: high-level MCP client manager and compatibility aliases.
+- `client.py`: high-level MCP client manager.
 - `config.py`: MCP server config parsing and exposure policy constants.
 - `models.py`: MCP server, tool, resource, prompt, and report dataclasses.
 - `tool_adapter.py`: MCP tool exposure policy, namespacing, reports, and `StructuredTool` conversion.

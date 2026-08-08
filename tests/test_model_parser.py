@@ -139,7 +139,7 @@ def test_parse_first_tool_call_when_model_returns_multiple_json_actions():
 
 def test_ollama_protocol_prompt_uses_standard_tool_message_error_language():
     messages = [Message(role="user", content="hello")]
-    ollama_messages = OllamaModelClient()._to_ollama_messages(messages, tools=[])
+    ollama_messages = OllamaModelClient()._to_prompt_json_ollama_messages(messages, tools=[])
     protocol = ollama_messages[0]["content"]
 
     assert "TOOL_ERROR" not in protocol

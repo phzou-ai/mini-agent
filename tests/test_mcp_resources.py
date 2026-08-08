@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import SystemMessage
 
-from vermay.mcp.client import MCPServerConfig, MCPToolLoader
+from vermay.mcp.client import MCPClientManager, MCPServerConfig
 from vermay.mcp.resources import MCPResourceProvider, resolve_mcp_resource_selections
 from vermay.runtime_context import RuntimeContextProvider
 
@@ -99,6 +99,6 @@ def test_mcp_client_read_resource_uses_resource_reader(tmp_path):
         assert uri == "docs://guide"
         return "Guide content"
 
-    text = MCPToolLoader(config, resource_reader=read).read_resource("docs", "docs://guide")
+    text = MCPClientManager(config, resource_reader=read).read_resource("docs", "docs://guide")
 
     assert text == "Guide content"

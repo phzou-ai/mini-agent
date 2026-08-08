@@ -270,6 +270,7 @@ unexecuted check as a pass.
 | C10 | Third-pass naming and dead-code review: distinguished provider `ModelClient` from `GraphModelClient`, renamed its factory to `build_graph_model_client`, and removed the superseded A2A `_extract_user_input` helper. | Repository-wide symbol/reference scan; Python 464/464; Web typecheck/build; Playwright 9/9; source-release boundary passed. |
 | C11 | Retired the historical command, Python namespace, environment-prefix, and Web API-base aliases after the explicit decision to standardize on Vermay naming. | Repository-wide naming scan; installed entrypoint/import checks; Python 497/497; Web typecheck/build; Playwright 9/9; source-release boundary passed. |
 | C12 | Shortened the formal product and technical naming surface to `Vermay`, `vermay`, and `VERMAY_*`; retained `Agent` only where it names an A2A or runtime domain concept. | Repository-wide naming scan; installed distribution/import/entrypoint checks; Python 497/497; Web typecheck/build; Playwright 9/9; source-release boundary passed. |
+| C13 | Removed private Ollama and MCP import aliases whose only remaining consumers were tests; renamed current tool-metadata normalization and frontend regression surfaces to describe their active responsibilities rather than completed migrations. | Repository-wide reference scan; focused Python 66/66; full Python 497/497; Web typecheck/build; Playwright 10/10. |
 
 ## Second-Pass Decision Record
 

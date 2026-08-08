@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from langchain_core.tools import BaseTool
 
-from .tool_metadata import ApprovalPolicy, ToolMetadata, metadata_from_legacy
+from .tool_metadata import ApprovalPolicy, ToolMetadata, normalize_tool_metadata
 from .tool_schema import (
     DANGEROUS_METADATA_KEY,
     tool_schemas_from_tools,
@@ -48,7 +48,7 @@ class ToolRegistry:
         return dict(self.get(name).metadata or {})
 
     def tool_metadata(self, name: str) -> ToolMetadata:
-        return metadata_from_legacy(self.metadata(name))
+        return normalize_tool_metadata(self.metadata(name))
 
     def output_policy(self, name: str) -> dict:
         metadata = self.tool_metadata(name)

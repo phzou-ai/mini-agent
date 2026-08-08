@@ -151,8 +151,3 @@ def _dedupe(values: Iterable[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
-
-
-# Compatibility aliases for older imports.
-MCPToolLoader = MCPClientManager
-_model_facing_tool_name = model_facing_tool_name

@@ -29,7 +29,7 @@ scripts/check_full_stack_regression.sh
 | Scenario | Required outcome | Primary deterministic evidence |
 | --- | --- | --- |
 | Duplicate top-level delivery | The same `messageId` does not route, create another Task, invoke a model, or execute a tool twice. | `tests/test_main_agent_core.py` ingress replay coverage. |
-| Direct-message provider failure | The durable ingress is failed once and the browser receives only `{ code, message, retryable }`, never provider diagnostics. | `tests/test_main_agent_core.py`, `web/tests/e2e/migration-regression.spec.ts`. |
+| Direct-message provider failure | The durable ingress is failed once and the browser receives only `{ code, message, retryable }`, never provider diagnostics. | `tests/test_main_agent_core.py`, `web/tests/e2e/frontend-regression.spec.ts`. |
 | Local Task acceptance and completion | A Task acceptance, lifecycle events, final artifact, and completed A2A Task projection agree. | `tests/test_api_a2a_adapter.py`, `tests/test_main_agent_core.py`. |
 | Late stream failure after durable success | A transport error after a terminal Task event cannot overwrite the durable completed result or render a false failure card. | `tests/test_api_a2a_adapter.py`, `web/tests/e2e/runtime-reliability.spec.ts`. |
 | Terminal Task event replay | A finite replay stream for an already-terminal Task is hydrated at most once; its normal EventSource close cannot repeatedly reload the Context or resubscribe through `/rpc`. | `web/tests/e2e/runtime-reliability.spec.ts`. |

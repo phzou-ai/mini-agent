@@ -111,6 +111,6 @@ Before creating a source release:
 4. run any environment-dependent smoke tests required for the target deployment; and
 5. create the release only from a reviewed, clean commit.
 
-The source-release check enforces the repository boundary and runs the default full-stack regression gate. During local development, `ALLOW_DIRTY=1 scripts/check_source_release.sh` can validate an intentionally dirty worktree, but this override must not be used to create a release.
+The source-release check enforces the repository boundary and runs the default full-stack regression gate. During local development, `ALLOW_DIRTY=1 scripts/check_source_release.sh` can validate an intentionally dirty worktree, but this override must not be used to create a release. The default regression gate is non-mutating with respect to tracked source files: it restores the generated `web/next-env.d.ts` routes import before exiting, including when a build or test fails. A clean worktree must therefore remain clean after the gate completes.
 
 The default regression gate verifies backend behavior, frontend type safety, the production Next.js build, and deterministic browser behavior. Live model, MCP, child-agent, and SSH checks remain deployment-specific because they depend on external services and credentials.
