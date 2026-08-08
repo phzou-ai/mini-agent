@@ -1,11 +1,20 @@
 {
-  "primary_model": "local_ollama",
+  "primary_model": "ollama_deepseek-v4-flash-0731",
   "router_model": "ollama_gemma4_31b",
   "models": {
     "local_ollama": {
       "provider": "ollama",
       "options": {
         "model": "deepseek-v4-flash:cloud",
+        "base_url": "http://127.0.0.1:11434",
+        "timeout_seconds": 120,
+        "tool_calling": "native"
+      }
+    },
+    "ollama_deepseek-v4-flash-0731": {
+      "provider": "ollama",
+      "options": {
+        "model": "deepseek-v4-flash:0731-cloud",
         "base_url": "http://127.0.0.1:11434",
         "timeout_seconds": 120,
         "tool_calling": "native"
