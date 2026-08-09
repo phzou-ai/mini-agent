@@ -43,7 +43,7 @@ a previous-process `in_progress` record into retryable
 model, tools, or child agent again. SQLite ownership is the complete
 idempotency authority; the active runtime has no process-local message lock.
 The detailed record and recovery contract is in
-[message-ingress.md](../dev/runtime/message-ingress.md).
+[Durable Message Ingress](../components/backend/runtime/message-ingress.md).
 
 ## Status Ownership
 
@@ -101,7 +101,7 @@ separates “safe to submit” from “possibly executing” without introducing
 third public status model. It is also the evidence used by startup
 reconciliation: a remaining valid command may be resubmitted, while a claimed
 `running` slice is treated as ambiguous after restart. The detailed contract is
-in [startup-reconciliation.md](../dev/runtime/startup-reconciliation.md).
+in [Startup Reconciliation](../components/backend/runtime/startup-reconciliation.md).
 
 ### Tool Invocation Ledger
 
@@ -133,7 +133,8 @@ An approval continuation carries the exact `invocationId`, tool name, and
 arguments digest. `MainAgentCore` validates that binding before it queues the
 resume. A matching previous `running`, `succeeded`, or `uncertain` effect in
 the same Task is blocked from automatic replay. See
-[tool-invocation-ledger.md](../dev/runtime/tool-invocation-ledger.md) for the full contract.
+[Tool Invocation Ledger](../components/backend/runtime/tool-invocation-ledger.md)
+for the full contract.
 
 ### Ephemeral Execution Context
 

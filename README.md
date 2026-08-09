@@ -2,6 +2,12 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+Contributor and AI tooling guidance starts with the
+[documentation index](docs/README.md) and the concise
+[AI collaboration summary](docs/AI-collaboration-summary.md). The
+[full collaboration guide](docs/AI-collaboration-guide.md) defines the reusable
+documentation and handoff convention.
+
 Vermay is a local main-agent runtime built around the A2A protocol. It exposes a main agent that can:
 
 - answer lightweight requests directly as messages;

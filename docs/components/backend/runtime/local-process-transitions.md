@@ -1,6 +1,7 @@
 # Local Process Transition Governance
 
-**Status:** Implemented, 2026-08-01.
+> Status: Stable
+> Implemented: 2026-08-01
 
 ## Purpose
 
@@ -32,7 +33,7 @@ snapshot may arrive later or out of order.
 Context deletion is now a separate core-owned control operation: it rejects
 live work rather than forcing a lifecycle transition or deleting durable
 records under an active process. See
-[Lifecycle And State Ownership](../../architecture/lifecycle-and-state.md#destructive-management).
+[Lifecycle And State Ownership](../../../architecture/lifecycle-and-state.md#destructive-management).
 
 ## State Machine
 
@@ -127,7 +128,7 @@ distributed worker leases or replay ambiguous execution; see
   as misleading A2A status updates.
 - Deliberate boundary. Remote proxy synchronization retains its explicit,
   separate path and now applies the monotonic policy documented in
-  [runtime-composition-and-remote-proxy.md](runtime-composition-and-remote-proxy.md).
+  [Runtime Composition And Remote Proxy](../../../dev/runtime/runtime-composition-and-remote-proxy.md).
 
 ## Implementation
 

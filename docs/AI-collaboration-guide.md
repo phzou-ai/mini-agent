@@ -1,5 +1,8 @@
 # AI Collaboration Guide
 
+> Convention version: 1.1
+> Role: Complete collaboration and documentation reference
+
 ## Purpose
 
 This guide defines a reusable collaboration model for software projects where
@@ -68,11 +71,13 @@ The terms in this guide have these meanings:
 The required baseline is intentionally small:
 
 1. one discoverable project documentation entry;
-2. one canonical collaboration guide;
-3. explicit source-of-truth and authority rules;
-4. preservation of unrelated work and sensitive information;
-5. validation proportional to the change;
-6. a durable handoff for substantial unfinished or completed work.
+2. one concise day-to-day collaboration summary;
+3. one canonical collaboration guide when the project needs the full reusable
+   reference;
+4. explicit source-of-truth and authority rules;
+5. preservation of unrelated work and sensitive information;
+6. validation proportional to the change;
+7. a durable handoff for substantial unfinished or completed work.
 
 Domain directories, status headers, active roadmaps, archives, and
 tool-specific discovery files are recommended or optional depending on project
@@ -105,7 +110,8 @@ Do not rely on chat history as the only source of:
 - deferred work;
 - compatibility commitments;
 - validation results;
-- the next recommended task.
+- the next authorized task, or the decision that no implementation task is
+  currently authorized.
 
 If information will materially affect future work, write it into the
 repository at the appropriate documentation layer.
@@ -423,6 +429,11 @@ instead of copying the full explanation.
 
 Important documents should have an explicit role.
 
+### Draft
+
+Use for incomplete documents that are not yet authoritative. A Draft must name
+the evidence or decision required before it can become Active or Stable.
+
 ### Stable
 
 Use for settled reference and supported boundaries.
@@ -621,7 +632,7 @@ Update:
 - decisions changed during implementation;
 - completed and deferred items;
 - validation evidence at the appropriate level;
-- the next recommended step.
+- the next evidence-backed step, or an explicit no-active-task state.
 
 ### 7. Handoff
 
@@ -698,7 +709,8 @@ At the end of a meaningful iteration:
 1. update Current State;
 2. mark completed items accurately;
 3. keep deferred items and their rationale;
-4. update Next Step;
+4. update Next Step, or explicitly record that no implementation task is
+   currently authorized;
 5. verify the domain `README.md` still points to the authoritative plan;
 6. promote settled conclusions when appropriate;
 7. downgrade or retire superseded documents;
@@ -718,8 +730,16 @@ A handoff should contain:
 - verification performed;
 - known failures or unverified assumptions;
 - remaining work;
-- exact next recommended task;
-- worktree or branch state when relevant.
+- an evidence-backed next recommended task, or an explicit statement that no
+  implementation task is currently authorized;
+- an optional stable repository checkpoint when it provides durable context.
+
+Do not persist volatile Git state as project truth. Branch ahead/behind counts,
+staged files, and “not yet committed” notes become false after the next commit,
+push, rebase, or checkout. Report that live state in the session's final
+response, and require the next contributor to inspect the current worktree.
+When useful, a durable handoff may cite an already-created commit, release, or
+dated verified baseline.
 
 Recommended format:
 
@@ -743,10 +763,16 @@ Remaining:
 
 Next:
 - ...
+
+Repository checkpoint, when useful:
+- ...
 ```
 
-Prefer updating the active plan with this information. A chat-only handoff is
-not durable.
+Prefer updating the authoritative active plan with this information. Create a
+separate handoff document only when no active plan can own it or when the work
+crosses domains and needs an independent entry point. Do not create a series of
+dated handoff files that duplicates roadmap state. A chat-only handoff is not
+durable.
 
 ## Session Restart Templates
 
@@ -882,7 +908,7 @@ as a reusable template or AI skill that:
 - creates the documentation root and standard layers;
 - installs this canonical guide;
 - generates task-oriented reading paths;
-- provides project-profile and handoff templates;
+- provides documentation-index, domain, topic, and handoff templates;
 - validates relative links and required indexes.
 
 The reusable tool should scaffold the collaboration system. It should not

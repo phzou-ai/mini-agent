@@ -1,6 +1,7 @@
 # Startup Reconciliation
 
-**Status:** Implemented and extended for direct-message ingress, 2026-08-02.
+> Status: Stable
+> Implemented and extended for direct-message ingress: 2026-08-02
 
 ## Purpose
 

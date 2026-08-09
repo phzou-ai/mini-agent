@@ -1,5 +1,8 @@
 # Task Failure Projection and Safe Retry
 
+> Status: Stable
+> Implemented: 2026-08-04
+
 ## Purpose
 
 This document closes two current single-host reliability gaps without adding a

@@ -16,6 +16,10 @@ The Runtime roadmap owns the current engineering priority. Maintenance has no
 active refactor milestone; its completed records are evidence and guardrails,
 not authorization for further cleanup.
 
+The current bounded work item is S2, the release baseline refresh. Its scope,
+acceptance criteria, and latest durable handoff are maintained in the
+[Runtime roadmap](runtime/roadmap.md#active-work-item-s2-release-baseline-refresh).
+
 ## Rules
 
 1. Keep the current status and next priority accurate.

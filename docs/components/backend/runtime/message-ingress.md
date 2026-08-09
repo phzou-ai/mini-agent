@@ -1,8 +1,7 @@
 # Durable Message Ingress
 
-## Status
-
-**Implemented and hardened, 2026-08-02.**
+> Status: Stable
+> Implemented and hardened: 2026-08-02
 
 This document defines the durable ownership boundary for a top-level A2A
 `message/send` or `message/stream` request handled by `MainAgentCore`.
@@ -96,11 +95,12 @@ stored failure and cannot route or execute again; a caller must send a new
 
 - The active clean-slate SQLite baseline always includes ingress records.
   Historical local data is intentionally discarded rather than backfilled or
-  replayed; see [clean-slate-storage.md](clean-slate-storage.md).
+  replayed; see
+  [Clean-Slate Storage](../../../dev/runtime/clean-slate-storage.md).
 - This milestone does not persist a direct-message failure as a conversational
   agent Message. It persists the ingress failure needed for idempotency. The
   separate first-party read-model presentation is implemented in
-  [direct-message-failures.md](direct-message-failures.md).
+  [Direct Message Failures](../../../dev/runtime/direct-message-failures.md).
 - This milestone does not add final-answer token streaming for LangGraph Tasks,
   worker leases, or automatic replay of uncertain direct-message work.
 

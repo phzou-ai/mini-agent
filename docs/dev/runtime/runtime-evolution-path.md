@@ -193,7 +193,7 @@ stranded states explicitly rather than leaving them active.
 ## R1: Establish The Side-Effect Execution Boundary
 
 **Status: Complete, 2026-08-02.** The implemented contract is recorded in
-[tool-invocation-ledger.md](tool-invocation-ledger.md).
+[Tool Invocation Ledger](../../components/backend/runtime/tool-invocation-ledger.md).
 
 R1 introduced a minimal Tool Invocation Ledger rather than a planner.
 Checkpointing graph state does not prove whether an external side effect

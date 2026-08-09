@@ -158,7 +158,7 @@ subsequently completed. Stale `in_progress` ingress is now reconciled to an
 explicit terminal failure without replaying routing, Task creation, or tool
 execution for the same `messageId`.
 
-See [message-ingress.md](message-ingress.md) and
+See [Durable Message Ingress](../../components/backend/runtime/message-ingress.md) and
 [direct-message-failures.md](direct-message-failures.md) for the implemented
 contract. Current priorities are maintained only in
 [roadmap.md](roadmap.md#current-phase-gate); this dated review is historical.

@@ -5,8 +5,10 @@ stable project truth from active implementation work so that contributors and
 AI tools can identify the current authority without reconstructing it from
 chat history.
 
-Before using an AI coding tool in this repository, read
-[AI-collaboration-guide.md](AI-collaboration-guide.md).
+Before substantial work, read the concise
+[AI Collaboration Summary](AI-collaboration-summary.md). Use the complete
+[AI Collaboration Guide](AI-collaboration-guide.md) when organizing
+documentation, resolving authority conflicts, or preparing a durable handoff.
 
 ## Project Quick Profile
 
@@ -104,7 +106,7 @@ change frequently and must not override stable architecture silently.
 
 ### Continue Runtime Development
 
-1. [AI-collaboration-guide.md](AI-collaboration-guide.md)
+1. [AI-collaboration-summary.md](AI-collaboration-summary.md)
 2. [architecture/lifecycle-and-state.md](architecture/lifecycle-and-state.md)
 3. [dev/runtime/README.md](dev/runtime/README.md)
 4. [dev/runtime/roadmap.md](dev/runtime/roadmap.md)

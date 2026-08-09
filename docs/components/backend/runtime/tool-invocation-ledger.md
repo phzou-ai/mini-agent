@@ -1,6 +1,7 @@
 # Tool Invocation Ledger
 
-**Status:** implemented for local non-read-only ToolNode calls, 2026-08-02.
+> Status: Stable
+> Implemented for local non-read-only ToolNode calls: 2026-08-02
 
 ## Purpose
 

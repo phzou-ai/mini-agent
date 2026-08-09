@@ -29,23 +29,20 @@ The target is an A2A-native main-agent runtime and inspectable process host. Lan
 | Document | Role |
 | --- | --- |
 | [roadmap.md](roadmap.md) | Authoritative active priority, milestone scope, and acceptance criteria. |
+| [roadmap-history-through-r3.md](roadmap-history-through-r3.md) | Historical detailed M0-R3 milestone rationale and evidence; not an active queue. |
 | [runtime-evolution-path.md](runtime-evolution-path.md) | Feasibility, stage gates, and strategic sequence from runtime integrity through governed execution, optional planning, and optional distribution. |
 | [Lifecycle And State Ownership](../../architecture/lifecycle-and-state.md) | Normative ownership of identifiers, states, interruptions, and projections. |
-| [message-ingress.md](message-ingress.md) | Implemented `messageId` idempotency and durable outcome contract. |
+| [Backend Runtime Contracts](../../components/backend/runtime/README.md) | Stable implemented contracts for message ingress, local process transitions, startup reconciliation, Task failure/retry, and non-read-only tool effects. |
 | [direct-message-failures.md](direct-message-failures.md) | Implemented direct-Message failure persistence and browser presentation contract. |
 | [context-input-cut.md](context-input-cut.md) | Implemented Context ordering and local-Task initial-input contract. |
-| [local-process-transitions.md](local-process-transitions.md) | Implemented local Agent Process state-machine contract. |
-| [startup-reconciliation.md](startup-reconciliation.md) | Implemented conservative recovery contract for the current in-process worker. |
 | [runtime-composition-and-remote-proxy.md](runtime-composition-and-remote-proxy.md) | Implemented executor-composition and monotonic remote-proxy contract. |
 | [refactor-wave-2026-08-02.md](refactor-wave-2026-08-02.md) | Implemented cleanup decisions: product-path ownership, bounded context, tool registry, and remote identity validation. |
 | [governed-execution-kernel.md](governed-execution-kernel.md) | Implemented R2 policy limits, stop-reason projection, normalized tool observations, and evidence/risk summaries. |
 | [model-tool-calling.md](model-tool-calling.md) | Implemented model-provider tool-calling strategy, canonical tool-call normalization, and fail-closed compatibility boundary. |
-| [tool-invocation-ledger.md](tool-invocation-ledger.md) | Implemented durable effect-attempt, approval binding, completion, and replay-safety contract for non-read-only local tools. |
 | [workspace-and-isolation-boundary.md](workspace-and-isolation-boundary.md) | Implemented R3.1 SSH/Kubernetes execution-control boundary and the explicit non-goals before a real workspace or sandbox is needed. |
 | [clean-slate-storage.md](clean-slate-storage.md) | Intentional retirement of the old service/session stack and the active SQLite baseline. |
 | [current-architecture-assessment.md](current-architecture-assessment.md) | Current strengths, tradeoffs, deployment limits, and rationale for the active order. |
 | [single-host-reliability-matrix.md](single-host-reliability-matrix.md) | Active P0 deterministic verification matrix for ingress, Tasks, continuation, cancellation, restart, and browser recovery. |
-| [task-failure-retry.md](task-failure-retry.md) | Durable failed-Task error projection, canonical browser final-answer reconciliation, and safe manual retry lineage. |
 | [review-2026-08-01.md](review-2026-08-01.md) | Dated review evidence and historical findings; not a second roadmap. |
 
 When these documents differ in emphasis, use the roadmap for current priority,
@@ -58,18 +55,18 @@ recorded at that time.
 | Area | Status | Primary reference |
 | --- | --- | --- |
 | A2A lifecycle ownership | Implemented for the current single-host path; the default core receives an application-owned executor. | [runtime-composition-and-remote-proxy.md](runtime-composition-and-remote-proxy.md) |
-| Durable message ingress | Implemented. Repeated top-level `messageId` values do not route or execute twice. | [message-ingress.md](message-ingress.md) |
+| Durable message ingress | Implemented. Repeated top-level `messageId` values do not route or execute twice. | [Durable Message Ingress](../../components/backend/runtime/message-ingress.md) |
 | Direct-message failure presentation | Implemented. Failed ingress records project to distinct UI activities, not assistant answers. | [direct-message-failures.md](direct-message-failures.md) |
-| Task failure projection and retry | Implemented. Task failures persist safe `code`, `message`, and retryability; eligible manual retry creates one new lineage-linked Task attempt, never a replay. | [task-failure-retry.md](task-failure-retry.md) |
+| Task failure projection and retry | Implemented. Task failures persist safe `code`, `message`, and retryability; eligible manual retry creates one new lineage-linked Task attempt, never a replay. | [Task Failure Projection And Safe Retry](../../components/backend/runtime/task-failure-retry.md) |
 | Continuation handoff | Implemented for local approval and user-input continuations. | [Lifecycle And State Ownership](../../architecture/lifecycle-and-state.md#pending-continuation) |
-| Local process transitions | Implemented. Owned-process transitions and lifecycle events are atomic and validated. | [local-process-transitions.md](local-process-transitions.md) |
+| Local process transitions | Implemented. Owned-process transitions and lifecycle events are atomic and validated. | [Local Process Transition Governance](../../components/backend/runtime/local-process-transitions.md) |
 | Causal task input and prompt bounds | Implemented for current character-bounded history and injected runtime context. | [context-input-cut.md](context-input-cut.md) |
-| Startup reconciliation | Implemented for locally owned queued worker commands; ambiguous claimed work fails explicitly. | [startup-reconciliation.md](startup-reconciliation.md) |
-| Side-effect execution boundary | Implemented for local non-read-only ToolNode calls. Each attempt has a durable invocation record, exact approval binding, conservative replay blocking, and result artifact reference. | [tool-invocation-ledger.md](tool-invocation-ledger.md) |
+| Startup reconciliation | Implemented for locally owned queued worker commands; ambiguous claimed work fails explicitly. | [Startup Reconciliation](../../components/backend/runtime/startup-reconciliation.md) |
+| Side-effect execution boundary | Implemented for local non-read-only ToolNode calls. Each attempt has a durable invocation record, exact approval binding, conservative replay blocking, and result artifact reference. | [Tool Invocation Ledger](../../components/backend/runtime/tool-invocation-ledger.md) |
 | Remote proxy synchronization | Implemented; refresh, cancellation, accepted snapshots, artifact materialization, and monotonic status projection are core-owned. | [runtime-composition-and-remote-proxy.md](runtime-composition-and-remote-proxy.md) |
 | Storage baseline | Implemented. Retired service/session data is discarded; new stores use `main_agent_clean_slate_v1`. | [clean-slate-storage.md](clean-slate-storage.md) |
 | R0 runtime integrity closure | Complete, 2026-08-02. Destructive cleanup is core-owned, asynchronous Task acceptance is atomic, direct ingress recovery is explicit, and SQLite uses one single-host connection contract. | [runtime-evolution-path.md](runtime-evolution-path.md#r0-close-current-runtime-integrity-gaps) |
-| R1 side-effect execution boundary | Complete, 2026-08-02. The Tool Invocation Ledger makes non-read-only local effects durable and conservative across approval, completion, cancellation, and restart recovery. | [tool-invocation-ledger.md](tool-invocation-ledger.md) |
+| R1 side-effect execution boundary | Complete, 2026-08-02. The Tool Invocation Ledger makes non-read-only local effects durable and conservative across approval, completion, cancellation, and restart recovery. | [Tool Invocation Ledger](../../components/backend/runtime/tool-invocation-ledger.md) |
 | R2 governed execution kernel | Complete, 2026-08-02. Local LangGraph Tasks have immutable per-process limits, typed stop reasons, normalized tool observations, and deterministic execution evidence. | [governed-execution-kernel.md](governed-execution-kernel.md) |
 | R3.1 SSH execution control | Complete, 2026-08-02. Active SSH/Kubernetes capability calls receive a bounded ephemeral execution context, local subprocess cancellation, timeout metadata, and conservative write uncertainty. | [workspace-and-isolation-boundary.md](workspace-and-isolation-boundary.md) |
 | R3.2 model execution control | Complete, 2026-08-02. Active model calls honor configured provider and optional Task-budget limits, while cancellation is projected at the next safe boundary. | [governed-execution-kernel.md](governed-execution-kernel.md) |
@@ -81,6 +78,11 @@ recorded at that time.
 
 R0 through R3.2 close the currently demonstrated correctness and
 execution-control gaps. There is no active expansion milestone after R3.2.
+The current bounded verification task is
+[S2, Release Baseline Refresh](roadmap.md#active-work-item-s2-release-baseline-refresh).
+The roadmap also owns the
+[latest durable handoff](roadmap.md#current-handoff); this index intentionally
+does not duplicate its status or validation record.
 The default work for this phase is deliberately conservative:
 
 - validate direct Messages, local Tasks, continuation, cancellation, and the
