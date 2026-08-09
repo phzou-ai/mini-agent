@@ -1,4 +1,4 @@
-# Operations
+# Local Development
 
 The supported process topology, secret handling, persistence boundary, and release checklist are defined in [Runtime and Release Boundary](runtime-and-release.md).
 
@@ -47,15 +47,13 @@ first-party management and diagnostic APIs used by the Web UI:
 vermay serve
 ```
 
-Current public A2A service boundary:
-
-```text
-GET  /health
-GET  /.well-known/agent-card.json
-POST /rpc
-```
-
-Agent-to-agent operations use A2A JSON-RPC methods through `/rpc`. The `/api` prefix is reserved for first-party Web UI management and diagnostics and is not the external A2A integration contract.
+Agent-to-agent operations use A2A JSON-RPC methods through `/rpc`. The server
+also retains tested path-style A2A bindings over the same lifecycle owner. The
+authoritative route and method inventory is maintained in
+[API Boundary](../components/backend/api-boundary.md); do not duplicate that
+catalog in operational guides. The `/api` prefix is reserved for first-party
+Web UI management and diagnostics and is not the external A2A integration
+contract.
 
 Run the default smoke against one local main-agent server:
 
@@ -131,22 +129,9 @@ curl -N -X POST http://127.0.0.1:8000/rpc \
   -d '{"jsonrpc":"2.0","id":"ops-subscribe-1","method":"SubscribeToTask","params":{"id":"<task-id>","afterEventId":0}}'
 ```
 
-The `/api` prefix is reserved for Web UI management and diagnostics:
-
-```text
-GET    /api/contexts
-GET    /api/contexts/{context_id}
-GET    /api/contexts/{context_id}/messages
-GET    /api/contexts/{context_id}/tasks
-GET    /api/contexts/{context_id}/route-decisions
-GET    /api/contexts/{context_id}/delegations
-DELETE /api/contexts/{context_id}?force=true
-GET    /api/registered-agents
-POST   /api/registered-agents
-GET    /api/registered-agents/{agent_id}
-POST   /api/registered-agents/{agent_id}/refresh-card
-DELETE /api/registered-agents/{agent_id}
-```
+The `/api` prefix is reserved for Web UI management and diagnostics. Its
+authoritative endpoint inventory is maintained in
+[API Boundary](../components/backend/api-boundary.md).
 
 Context deletion is a core-owned lifecycle operation. A Context containing a
 live local or remote Task returns a conflict; `force=true` is accepted for API

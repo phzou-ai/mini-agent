@@ -1,13 +1,9 @@
-# Server/API Readiness
+# API Boundary
 
 ## Current Position
 
-The server is now A2A-first for external service access.
-
-The old local lifecycle REST surface under `/api/sessions` and the former
-`/api/tasks/{task_id}` execution routes has been removed. The remaining `/api`
-routes are main-agent management and Web UI diagnostics, not the public task
-execution boundary.
+The server exposes an A2A service boundary for agent operations and a separate
+first-party `/api` boundary for Web UI management and diagnostics.
 
 Start the server:
 
@@ -28,7 +24,7 @@ The server is local-only by default and does not add authentication. Do not expo
 
 ## Public Service Boundary
 
-Current A2A-first public routes:
+Canonical A2A integration routes:
 
 ```text
 GET  /health
@@ -37,6 +33,22 @@ POST /rpc
 ```
 
 Agent operations use A2A JSON-RPC methods through `/rpc`. Child-agent delegation in `vermay/main_agent/remote_agent.py` uses the same boundary.
+
+The server also exposes supported path-style A2A bindings. They are thin
+transport adapters over the same `MainAgentCore` lifecycle owner; they do not
+define a second execution path:
+
+```text
+POST /message:send
+POST /message:stream
+GET  /tasks/{task_id}
+POST /tasks/{task_id}:cancel
+POST /tasks/{task_id}:resume
+POST /tasks/{task_id}:subscribe
+```
+
+Use `/rpc` for new integrations. The path-style bindings remain part of the
+tested service surface until a separate compatibility decision removes them.
 
 ## JSON-RPC Methods
 
@@ -194,11 +206,15 @@ The `/api` prefix is reserved for Web UI management and diagnostics:
 
 ```text
 GET    /api/contexts
+GET    /api/model-config
 GET    /api/contexts/{context_id}
+PATCH  /api/contexts/{context_id}
 GET    /api/contexts/{context_id}/messages
 GET    /api/contexts/{context_id}/tasks
 GET    /api/contexts/{context_id}/route-decisions
 GET    /api/contexts/{context_id}/delegations
+GET    /api/message-ingress/{message_id}
+POST   /api/management/tasks/{task_id}/retry
 GET    /api/tasks/{task_id}/tool-invocations
 GET    /api/tasks/{task_id}/observations
 DELETE /api/contexts/{context_id}?force=true

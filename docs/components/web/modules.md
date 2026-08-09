@@ -2,8 +2,8 @@
 
 ## Agent Surface
 
-`web/app/(agent)/agent/` owns the Agent Console page and surface-local
-components:
+`web/app/(agent)/agent/` owns the Agent Console page. Its surface-local
+components live in `web/app/(agent)/agent/_components/`:
 
 - `agent-console.tsx`: page-level orchestration and state owner;
 - `agent-sidebar.tsx`: contexts, session controls, and model presentation;
@@ -17,4 +17,3 @@ components:
 `web/lib/agent/` owns A2A and BFF contracts, streaming, errors, conversation
 projection, and task presentation. UI components should consume these helpers
 instead of reparsing protocol payloads independently.
-

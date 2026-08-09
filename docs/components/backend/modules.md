@@ -149,7 +149,8 @@ The active tool schema source is each tool's Pydantic `args_schema`. Model adapt
 - Local file and log inspection tools.
 - Local sample Kubernetes data tools.
 - SSH-backed read-only Kubernetes tools.
-- Dangerous tool placeholders that require approval.
+- A real SSH-backed Kubernetes delete capability gated by explicit operator
+  approval.
 
 `vermay/tools/weather/`
 

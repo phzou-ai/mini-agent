@@ -47,10 +47,11 @@ priority. Detailed milestone rationale and acceptance criteria remain below.
 | R3.2, model execution control | Complete, 2026-08-02 | When an optional local Task elapsed-time budget is configured, its remaining time caps each provider HTTP model call; cancellation prevents later model/tool work at the next safe boundary and is projected honestly in the Web console. |
 | S0, single-host reliability matrix | Implemented, 2026-08-02 | A deterministic focused command verifies ingress, public errors, Task lifecycle and terminal projection, continuation, cancellation, restart, side-effect evidence, and browser recovery after a late stream error. |
 | S1, Inspector state presentation | Implemented, 2026-08-02 | The web Inspector presents public A2A state, local durable process state, and the LangGraph checkpoint thread separately. Artifact events explicitly indicate that they do not change Task state; raw records are collapsed diagnostics. |
+| S2, release baseline refresh | Active | Re-run the deterministic single-host and full-stack gates, preserve a clean worktree, and record any dependency-backed live-check failure as an explicit defect or external blocker. |
 
 ## Current Phase Gate
 
-**Current priority: stabilize and verify the R0-R3.2 single-host baseline.**
+**Current priority: complete S2, the single-host release baseline refresh.**
 
 R3.1 and R3.2 close the narrow execution-control gaps in the current
 single-host path: durable cancellation reaches active SSH/Kubernetes adapters
@@ -76,6 +77,27 @@ missing boundary it exposes, and the smallest contract that closes it. A
 general workspace, sandbox, planner, scheduler, or distributed runtime is not
 the default response to a hypothetical future need.
 
+### Active Work Item: S2 Release Baseline Refresh
+
+**Scope:** verification and defect closure only. Do not add a product feature
+or a new runtime owner.
+
+**Work:**
+
+1. Run `scripts/check_single_host_reliability.sh`.
+2. Run `scripts/check_full_stack_regression.sh` and verify that it does not
+   modify tracked files.
+3. When operator-configured model, MCP, SSH/Kubernetes, or child-agent
+   dependencies are available, exercise one representative direct Message and
+   one local Task workflow.
+4. Record every reproducible failure as a bounded defect at its current owner;
+   record unavailable external dependencies as blockers rather than weakening
+   the deterministic gate.
+
+**Acceptance:** both deterministic gates pass, the tracked worktree remains
+unchanged by the gates, and each attempted live workflow either passes or has
+one explicit defect/blocker record with reproduction evidence.
+
 The retired service/session stack and its historical SQLite support have been
 removed by an explicit clean-slate decision. See
 [clean-slate-storage.md](clean-slate-storage.md).
@@ -99,6 +121,11 @@ does not justify Temporal, Redis, a persistent plan DAG, or a new scheduler.
 The sections below retain the problem statements, scope, and acceptance
 criteria for each milestone. The table above is the source of truth for current
 execution status.
+
+> Status: Historical implementation evidence unless the status table above
+> explicitly marks a milestone Active. The `Work` and `Acceptance` sections
+> below explain how completed boundaries were established; they are not an
+> implementation queue.
 
 ### M0. Freeze the Runtime Boundary
 
