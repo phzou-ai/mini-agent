@@ -37,7 +37,14 @@ runtime code that no longer imported cleanly or participated in product tests
 has been removed, so the active package does not carry compatibility bridges
 for an unsupported execution path.
 
-The architectural direction for separating A2A protocol resources, durable local process lifecycle, LangGraph continuation, and direct Message execution is documented in [agent-os-architecture.md](agent-os-architecture.md). The Agent OS model is a responsibility and lifecycle abstraction; it does not replace A2A or LangGraph and does not require an immediate code or database rename.
+The implemented full-stack architecture, package boundaries, state ownership,
+and request flows are documented in
+[current-system.md](../architecture/current-system.md). The longer-term direction
+for separating A2A protocol resources, durable local process lifecycle,
+LangGraph continuation, and direct Message execution is documented in
+[agent-os-evolution.md](../architecture/agent-os-evolution.md). The Agent OS model is a
+responsibility and lifecycle abstraction; it does not replace A2A or LangGraph
+and does not require an immediate code or database rename.
 
 ## Primary Service Flow
 

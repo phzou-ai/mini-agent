@@ -59,7 +59,7 @@ It runs the relevant deterministic Python contracts plus the migrated browser
 regression and runtime-reliability Playwright specs. It is intentionally
 independent of live model, MCP, SSH, and Kubernetes dependencies. The covered
 scenarios and acceptance rules are documented in
-[runtime-refinement/single-host-reliability-matrix.md](runtime-refinement/single-host-reliability-matrix.md).
+[Single-host Reliability Matrix](../dev/runtime/single-host-reliability-matrix.md).
 
 Set `RUN_LIVE_E2E=1` to append the existing live Playwright suite:
 

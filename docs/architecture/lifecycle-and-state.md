@@ -43,7 +43,7 @@ a previous-process `in_progress` record into retryable
 model, tools, or child agent again. SQLite ownership is the complete
 idempotency authority; the active runtime has no process-local message lock.
 The detailed record and recovery contract is in
-[message-ingress.md](message-ingress.md).
+[message-ingress.md](../dev/runtime/message-ingress.md).
 
 ## Status Ownership
 
@@ -101,7 +101,7 @@ separates “safe to submit” from “possibly executing” without introducing
 third public status model. It is also the evidence used by startup
 reconciliation: a remaining valid command may be resubmitted, while a claimed
 `running` slice is treated as ambiguous after restart. The detailed contract is
-in [startup-reconciliation.md](startup-reconciliation.md).
+in [startup-reconciliation.md](../dev/runtime/startup-reconciliation.md).
 
 ### Tool Invocation Ledger
 
@@ -133,7 +133,7 @@ An approval continuation carries the exact `invocationId`, tool name, and
 arguments digest. `MainAgentCore` validates that binding before it queues the
 resume. A matching previous `running`, `succeeded`, or `uncertain` effect in
 the same Task is blocked from automatic replay. See
-[tool-invocation-ledger.md](tool-invocation-ledger.md) for the full contract.
+[tool-invocation-ledger.md](../dev/runtime/tool-invocation-ledger.md) for the full contract.
 
 ### Ephemeral Execution Context
 
@@ -160,7 +160,7 @@ connection is terminated. A started non-read-only invocation therefore remains
 `uncertain`, never implicitly successful or automatically replayable. The
 current SSH/Kubernetes adapters do not have a shared workspace and leave
 `workspaceId` unset. See
-[workspace-and-isolation-boundary.md](workspace-and-isolation-boundary.md).
+[workspace-and-isolation-boundary.md](../dev/runtime/workspace-and-isolation-boundary.md).
 
 ### A2A Task State
 
@@ -232,7 +232,7 @@ form a third process-state model. The runner returns them to `MainAgentCore`,
 which persists an inspectable summary on Task events and artifacts while it
 alone performs the local-process transition.
 
-See [governed-execution-kernel.md](governed-execution-kernel.md) for policy
+See [governed-execution-kernel.md](../dev/runtime/governed-execution-kernel.md) for policy
 limits, stop-reason mapping, and observation persistence.
 
 ## Message and Task Relationship
@@ -252,7 +252,7 @@ A direct Message does not require a durable Task. A Task begins only when the re
 For a local Task, `inputContextSequence` is copied from `inputMessageId` when
 the Task is created. Its first worker slice loads only Messages at or before
 that cut. Later top-level Messages do not change the Task's initial prompt;
-the detailed contract is in [context-input-cut.md](context-input-cut.md).
+the detailed contract is in [context-input-cut.md](../dev/runtime/context-input-cut.md).
 
 When a Task is waiting for input, the next user Message must carry the same `taskId`. It continues the existing process and `runtimeThreadId`; it must not create a new route decision or a new task.
 
@@ -271,7 +271,7 @@ When a Task is retried, a new `taskId` is created with lineage to the previous t
 
 - The retired service/session lifecycle and its second `TaskStatus` vocabulary
   have been removed. Historical SQLite records are intentionally outside the
-  active runtime boundary; see [clean-slate-storage.md](clean-slate-storage.md).
+  active runtime boundary; see [clean-slate-storage.md](../dev/runtime/clean-slate-storage.md).
 - Worker execution and active-task ownership are process-local. M4 now
   conservatively reconciles queued commands after restart, while ambiguous
   claimed work becomes a retryable failure rather than being replayed.

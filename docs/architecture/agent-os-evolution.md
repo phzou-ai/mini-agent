@@ -10,13 +10,13 @@ The current `vermay.main_agent.models.TaskRecord` is the backing record for what
 
 For an assessment of the currently implemented runtime, including its safety
 guarantees, liveness limitations, and staged evolution order, see
-[current runtime assessment](runtime-refinement/current-architecture-assessment.md).
+[current runtime assessment](../dev/runtime/current-architecture-assessment.md).
 For active milestone status and acceptance criteria, see the
-[runtime-refinement roadmap](runtime-refinement/roadmap.md). When this document
+[runtime-refinement roadmap](../dev/runtime/roadmap.md). When this document
 describes a future direction, the focused runtime contract and roadmap take
 precedence for current behavior.
 For feasibility, stage gates, and the sequence beyond current correctness work,
-see the [runtime evolution path](runtime-refinement/runtime-evolution-path.md).
+see the [runtime evolution path](../dev/runtime/runtime-evolution-path.md).
 
 ## Goals
 
@@ -871,7 +871,7 @@ Task acceptance is atomic, stale direct ingress has an explicit retryable
 failure, local non-read-only effects have a durable invocation boundary, and
 the SSH/Kubernetes path has bounded child-process control. The phase list
 remains a capability map, not an automatic implementation sequence. The
-[runtime evolution path](runtime-refinement/runtime-evolution-path.md) owns
+[runtime evolution path](../dev/runtime/runtime-evolution-path.md) owns
 the activation criteria for broader execution, workspaces, persistent
 planning, and distributed scheduling. Phase 8 remains optional.
 

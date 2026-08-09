@@ -32,7 +32,7 @@ snapshot may arrive later or out of order.
 Context deletion is now a separate core-owned control operation: it rejects
 live work rather than forcing a lifecycle transition or deleting durable
 records under an active process. See
-[state-ownership.md](state-ownership.md#destructive-management).
+[Lifecycle And State Ownership](../../architecture/lifecycle-and-state.md#destructive-management).
 
 ## State Machine
 

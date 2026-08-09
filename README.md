@@ -202,7 +202,7 @@ The supported `0.1.x` release is a source checkout or source archive. The Python
 
 For a production-style local deployment, run `vermay serve` on localhost and run the built frontend with `pnpm build && pnpm start`. The backend has no built-in authentication and must not be exposed directly to an untrusted network. Secrets belong in environment variables or an untracked `.env`, while SQLite databases, checkpoints, traces, and generated proposals are runtime state rather than source-release content.
 
-See [Runtime and Release Boundary](docs/runtime-and-release.md) for supported commands, persistence requirements, public service boundaries, and the release checklist.
+See [Runtime and Release Boundary](docs/operations/runtime-and-release.md) for supported commands, persistence requirements, public service boundaries, and the release checklist.
 
 Validate a clean source release with:
 
@@ -218,7 +218,7 @@ Run the deterministic backend and frontend regression gate:
 scripts/check_full_stack_regression.sh
 ```
 
-It does not require a live model or MCP server. See [Full-Stack Regression Baseline](docs/full-stack-regression.md) for the optional live E2E gate and the public error contract.
+It does not require a live model or MCP server. See [Full-Stack Regression Baseline](docs/operations/regression-gate.md) for the optional live E2E gate and the public error contract.
 
 ## Backend Smoke Checks
 
@@ -450,6 +450,16 @@ vermay skills approve <proposal-id>
 ```
 
 Approved skills live in `skills/`. Generated proposals live in `data/skill_proposals/`.
+
+## Documentation
+
+Start with the [documentation index](docs/README.md) for the project quick
+profile, architecture, component boundaries, operations, and active
+development plans.
+
+Developers and AI coding tools should also read the
+[AI Collaboration Guide](docs/AI-collaboration-guide.md) before substantial
+work.
 
 ## License
 

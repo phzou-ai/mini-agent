@@ -7,9 +7,9 @@ runtime sequence. It explains why each stage exists, what must already be true
 before that stage begins, and what remains deliberately deferred.
 
 It is not a second active backlog. Use [roadmap.md](roadmap.md) for current
-milestone status and priority, [state-ownership.md](state-ownership.md) for
+milestone status and priority, [Lifecycle And State Ownership](../../architecture/lifecycle-and-state.md) for
 normative runtime behavior, and
-[agent-os-architecture.md](../agent-os-architecture.md) for the strategic
+[Agent OS Architecture](../../architecture/agent-os-evolution.md) for the strategic
 vocabulary and target boundary.
 
 ## Reassessment Decision

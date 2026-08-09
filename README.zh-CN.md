@@ -201,7 +201,7 @@ VERMAY_API_BASE=http://127.0.0.1:8000 pnpm dev
 
 生产式本地部署应让 `vermay serve` 只监听 localhost，并通过 `pnpm build && pnpm start` 运行构建后的前端。后端没有内置认证，不能直接暴露到不可信网络。Secrets 应通过环境变量或未跟踪的 `.env` 注入；SQLite 数据库、checkpoints、traces 和生成的 proposals 属于运行时状态，不属于源码发布内容。
 
-支持的运行命令、持久化要求、公共服务边界和发布检查清单见 [运行与发布边界](docs/runtime-and-release.md)。
+支持的运行命令、持久化要求、公共服务边界和发布检查清单见 [运行与发布边界](docs/operations/runtime-and-release.md)。
 
 在 clean working tree 中验证源码发布：
 
@@ -217,7 +217,7 @@ scripts/check_source_release.sh
 scripts/check_full_stack_regression.sh
 ```
 
-默认 gate 不依赖真实模型或 MCP server。可选的 live E2E gate 和公共错误契约说明见 [全栈回归基线](docs/full-stack-regression.md)。
+默认 gate 不依赖真实模型或 MCP server。可选的 live E2E gate 和公共错误契约说明见 [全栈回归基线](docs/operations/regression-gate.md)。
 
 ## 后端 Smoke Checks
 
@@ -448,6 +448,13 @@ vermay skills approve <proposal-id>
 ```
 
 已批准的 skills 位于 `skills/`。生成的 proposals 位于 `data/skill_proposals/`。
+
+## 文档
+
+请从[文档总索引](docs/README.md)开始阅读，其中包含项目快速画像、架构、组件边界、运行说明和当前开发计划。
+
+开发人员和 AI 编程工具在开展较大改动前，还应阅读
+[AI 协作指南](docs/AI-collaboration-guide.md)。
 
 ## License
 

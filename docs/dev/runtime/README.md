@@ -30,8 +30,9 @@ The target is an A2A-native main-agent runtime and inspectable process host. Lan
 | --- | --- |
 | [roadmap.md](roadmap.md) | Authoritative active priority, milestone scope, and acceptance criteria. |
 | [runtime-evolution-path.md](runtime-evolution-path.md) | Feasibility, stage gates, and strategic sequence from runtime integrity through governed execution, optional planning, and optional distribution. |
-| [state-ownership.md](state-ownership.md) | Normative ownership of identifiers, states, interruptions, and projections. |
+| [Lifecycle And State Ownership](../../architecture/lifecycle-and-state.md) | Normative ownership of identifiers, states, interruptions, and projections. |
 | [message-ingress.md](message-ingress.md) | Implemented `messageId` idempotency and durable outcome contract. |
+| [direct-message-failures.md](direct-message-failures.md) | Implemented direct-Message failure persistence and browser presentation contract. |
 | [context-input-cut.md](context-input-cut.md) | Implemented Context ordering and local-Task initial-input contract. |
 | [local-process-transitions.md](local-process-transitions.md) | Implemented local Agent Process state-machine contract. |
 | [startup-reconciliation.md](startup-reconciliation.md) | Implemented conservative recovery contract for the current in-process worker. |
@@ -39,6 +40,7 @@ The target is an A2A-native main-agent runtime and inspectable process host. Lan
 | [refactor-wave-2026-08-02.md](refactor-wave-2026-08-02.md) | Implemented cleanup decisions: product-path ownership, bounded context, tool registry, and remote identity validation. |
 | [governed-execution-kernel.md](governed-execution-kernel.md) | Implemented R2 policy limits, stop-reason projection, normalized tool observations, and evidence/risk summaries. |
 | [model-tool-calling.md](model-tool-calling.md) | Implemented model-provider tool-calling strategy, canonical tool-call normalization, and fail-closed compatibility boundary. |
+| [tool-invocation-ledger.md](tool-invocation-ledger.md) | Implemented durable effect-attempt, approval binding, completion, and replay-safety contract for non-read-only local tools. |
 | [workspace-and-isolation-boundary.md](workspace-and-isolation-boundary.md) | Implemented R3.1 SSH/Kubernetes execution-control boundary and the explicit non-goals before a real workspace or sandbox is needed. |
 | [clean-slate-storage.md](clean-slate-storage.md) | Intentional retirement of the old service/session stack and the active SQLite baseline. |
 | [current-architecture-assessment.md](current-architecture-assessment.md) | Current strengths, tradeoffs, deployment limits, and rationale for the active order. |
@@ -59,7 +61,7 @@ recorded at that time.
 | Durable message ingress | Implemented. Repeated top-level `messageId` values do not route or execute twice. | [message-ingress.md](message-ingress.md) |
 | Direct-message failure presentation | Implemented. Failed ingress records project to distinct UI activities, not assistant answers. | [direct-message-failures.md](direct-message-failures.md) |
 | Task failure projection and retry | Implemented. Task failures persist safe `code`, `message`, and retryability; eligible manual retry creates one new lineage-linked Task attempt, never a replay. | [task-failure-retry.md](task-failure-retry.md) |
-| Continuation handoff | Implemented for local approval and user-input continuations. | [state-ownership.md](state-ownership.md#pending-continuation) |
+| Continuation handoff | Implemented for local approval and user-input continuations. | [Lifecycle And State Ownership](../../architecture/lifecycle-and-state.md#pending-continuation) |
 | Local process transitions | Implemented. Owned-process transitions and lifecycle events are atomic and validated. | [local-process-transitions.md](local-process-transitions.md) |
 | Causal task input and prompt bounds | Implemented for current character-bounded history and injected runtime context. | [context-input-cut.md](context-input-cut.md) |
 | Startup reconciliation | Implemented for locally owned queued worker commands; ambiguous claimed work fails explicitly. | [startup-reconciliation.md](startup-reconciliation.md) |
@@ -73,7 +75,7 @@ recorded at that time.
 | R3.2 model execution control | Complete, 2026-08-02. Active model calls honor configured provider and optional Task-budget limits, while cancellation is projected at the next safe boundary. | [governed-execution-kernel.md](governed-execution-kernel.md) |
 | Model tool-calling boundary | Implemented. The active Ollama primary model uses native function calls for Tasks; provider-specific responses normalize into project-owned tool calls before the existing permission and ToolNode path. | [model-tool-calling.md](model-tool-calling.md) |
 | Single-host reliability matrix | Implemented. Deterministic backend and browser checks exercise the P0 failure, continuation, cancellation, restart, and terminal-projection contract. | [single-host-reliability-matrix.md](single-host-reliability-matrix.md) |
-| Inspector state presentation | Implemented. The web Inspector separately presents public A2A Task state, durable local process state, and LangGraph checkpoint thread; raw event diagnostics are collapsed by default. | [state-ownership.md](state-ownership.md#inspector-presentation) |
+| Inspector state presentation | Implemented. The web Inspector separately presents public A2A Task state, durable local process state, and LangGraph checkpoint thread; raw event diagnostics are collapsed by default. | [Lifecycle And State Ownership](../../architecture/lifecycle-and-state.md#inspector-presentation) |
 
 ## Current Phase: Stabilize The Single-Host Runtime
 

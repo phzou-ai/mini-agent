@@ -240,7 +240,7 @@ The OpenAI-compatible adapter uses Chat Completions request semantics: `{base_ur
 `native`, `prompt_json`, and `none`; the checked-in primary model uses
 `native`. OpenAI-compatible endpoints support `native` and `none`. The runtime
 does not silently retry a request with another strategy. See
-[model-tool-calling.md](runtime-refinement/model-tool-calling.md) for the
+[Model Tool Calling](../dev/runtime/model-tool-calling.md) for the
 supported matrix and safety behavior.
 
 ## Memory
@@ -341,7 +341,7 @@ vermay --thread-id approval-session --resume-approval true --approval-reason "ap
 
 Interactive approval asks at most once per run by default. If the model requests another dangerous tool after approval, the run stops instead of repeatedly prompting.
 
-Detailed interrupt, checkpoint, and resume mechanics are documented in [langgraph-interrupt-resume.md](langgraph-interrupt-resume.md).
+Detailed interrupt, checkpoint, and resume mechanics are documented in [LangGraph Interrupt And Resume](../components/backend/langgraph-interrupt-resume.md).
 
 ## Terminal Progress
 
