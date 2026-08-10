@@ -118,6 +118,40 @@ each attempted workflow, record either a pass, one bounded defect at its current
 owner, or an explicit external blocker. Do not weaken the deterministic gates
 to accommodate unavailable external services.
 
+### Known Improvement Points
+
+The following issues were confirmed by the 2026-08-10 implementation review.
+They are recorded here so that rapid development does not lose the findings,
+but they are not all authorized work during S2:
+
+1. The in-process Task executor limits active workers but does not bound its
+   pending submission queue. Add admission control only when a current workload
+   demonstrates queue pressure or unpredictable latency.
+2. Context, Message, Task, route-decision, and delegation read models are not
+   consistently paginated. Introduce bounded defaults before retained local
+   data makes these endpoints or the Web UI materially slow.
+3. The Next.js BFF does not yet define explicit deadlines for ordinary upstream
+   requests or stream establishment, and malformed SSE payloads are currently
+   ignored. Treat a reproduced stuck request or protocol-drift failure as the
+   activation signal for this work.
+4. `MainAgentCore`, `MainAgentStore`, and the Web console remain concentrated
+   implementation units. Prefer small responsibility extractions when touching
+   an existing workflow; do not start a broad rewrite solely to reduce file
+   length.
+5. Python release dependencies use broad version ranges, and static linting plus
+   focused frontend projection tests remain possible release-quality
+   improvements after the current behavior is stable.
+
+Authentication, network policy, multi-process event notification, distributed
+scheduling, and generalized resource governance remain deployment-stage or
+workload-driven concerns. They are deliberately not prioritized for the current
+local, rapid-development phase.
+
+The first bounded frontend extraction moved the stateless welcome experience
+out of `agent-console.tsx`. Task streams, lifecycle actions, and session state
+remain in the existing controller until a concrete change demonstrates a
+smaller ownership boundary.
+
 ## Guardrails
 
 - Preserve A2A JSON-RPC and SSE as the public agent boundary.
