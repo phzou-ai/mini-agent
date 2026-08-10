@@ -22,22 +22,6 @@ def run_prompt(argv: list[str]) -> None:
     )
     parser.add_argument("--model-config", default=str(DEFAULT_MODEL_CONFIG_PATH), help="Model selection config path")
     parser.add_argument("--model", default=None, help="Configured model name to use")
-    parser.add_argument("--model-provider", default=None, help="Legacy model provider adapter override")
-    parser.add_argument("--ollama-model", default=None, help="Override the configured Ollama model for this run")
-    parser.add_argument("--ollama-base-url", default=None, help="Override the configured Ollama base URL for this run")
-    parser.add_argument(
-        "--ollama-timeout-seconds",
-        type=int,
-        default=None,
-        help="Override the configured Ollama timeout for this run",
-    )
-    parser.add_argument(
-        "--model-option",
-        action="append",
-        default=[],
-        metavar="KEY=VALUE",
-        help="Advanced model provider option. Can be repeated. Overrides provider-specific flags.",
-    )
     parser.add_argument("--max-steps", type=int, default=5, help="Maximum model calls per run")
     parser.add_argument("--no-progress", action="store_true", help="Disable progress logs on stderr")
     parser.add_argument(
@@ -158,52 +142,13 @@ def _prompt_for_approval(message: str, thread_id: str) -> tuple[bool, str | None
 
 
 def _model_provider_config_from_args(args: argparse.Namespace) -> ModelProviderConfig | None:
-    has_model_selection = getattr(args, "model", None) is not None
-    options: dict[str, object] = {}
-    has_ollama_flags = any(
-        value is not None
-        for value in (
-            args.ollama_model,
-            args.ollama_base_url,
-            args.ollama_timeout_seconds,
-        )
-    )
-    has_legacy_provider_config = args.model_provider is not None or has_ollama_flags or bool(args.model_option)
-    if has_model_selection and has_legacy_provider_config:
-        raise ValueError("--model cannot be combined with legacy model provider options")
-    if has_model_selection:
-        return resolve_model_selection(
-            config_path=Path(args.model_config),
-            model_name=args.model,
-        )
-    if not has_legacy_provider_config:
+    model_name = getattr(args, "model", None)
+    if model_name is None:
         return None
-
-    provider = args.model_provider or "ollama"
-    if provider != "ollama" and has_ollama_flags:
-        raise ValueError("ollama-specific CLI flags require --model-provider ollama")
-    if provider == "ollama":
-        if args.ollama_model is not None:
-            options["model"] = args.ollama_model
-        if args.ollama_base_url is not None:
-            options["base_url"] = args.ollama_base_url
-        if args.ollama_timeout_seconds is not None:
-            options["timeout_seconds"] = args.ollama_timeout_seconds
-    options.update(_parse_model_options(args.model_option))
-    return ModelProviderConfig(provider=provider, options=options)
-
-
-def _parse_model_options(values: list[str]) -> dict[str, str]:
-    options: dict[str, str] = {}
-    for value in values:
-        if "=" not in value:
-            raise ValueError(f"invalid --model-option '{value}'; expected KEY=VALUE")
-        key, option_value = value.split("=", 1)
-        key = key.strip()
-        if not key:
-            raise ValueError(f"invalid --model-option '{value}'; key cannot be empty")
-        options[key] = option_value
-    return options
+    return resolve_model_selection(
+        config_path=Path(args.model_config),
+        model_name=model_name,
+    )
 
 
 def _trace_path(value: str) -> Path:

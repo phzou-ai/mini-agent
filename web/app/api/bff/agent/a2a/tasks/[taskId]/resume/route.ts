@@ -2,10 +2,8 @@ import { NextResponse, type NextRequest } from "next/server"
 
 import { buildA2ARpcTaskResumeEnvelope } from "@/lib/agent/a2a"
 import {
-  isJsonRpcMethodNotFound,
   jsonRpcResultResponse,
   readJsonRpcResponse,
-  staleResumeRouteResponse,
 } from "@/lib/agent/bff-rpc"
 import { buildAgentRootPath, proxyAgentRootJson } from "@/lib/agent/server"
 
@@ -44,37 +42,8 @@ export async function POST(
   })
 
   const body = await readJsonRpcResponse(upstream)
-  if (!upstream.ok && !isJsonRpcMethodNotFound(body)) {
+  if (!upstream.ok) {
     return NextResponse.json(body, { status: upstream.status })
-  }
-
-  if (isJsonRpcMethodNotFound(body)) {
-    const slashMethodUpstream = await proxyAgentRootJson(
-      buildAgentRootPath("/rpc"),
-      {
-        method: "POST",
-        body: JSON.stringify(
-          buildA2ARpcTaskResumeEnvelope(
-            taskId,
-            approved,
-            reasonText,
-            "tasks/resume"
-          )
-        ),
-      }
-    )
-    const slashMethodBody = await readJsonRpcResponse(slashMethodUpstream)
-    if (!slashMethodUpstream.ok && !isJsonRpcMethodNotFound(slashMethodBody)) {
-      return NextResponse.json(slashMethodBody, {
-        status: slashMethodUpstream.status,
-      })
-    }
-    if (isJsonRpcMethodNotFound(slashMethodBody)) {
-      return staleResumeRouteResponse()
-    }
-    return jsonRpcResultResponse(slashMethodBody, {
-      invalidMessage: "Invalid A2A resume response",
-    })
   }
 
   return jsonRpcResultResponse(body, {

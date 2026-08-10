@@ -182,42 +182,30 @@ Use another configured model:
 vermay "weather forecast for Beijing" --model local_ollama
 ```
 
-Provider-specific CLI override example:
+The CLI accepts only configured model names. Add or change provider-specific
+settings in `config/models.json`, then select that entry with `--model`:
 
-```bash
-vermay "weather forecast for Beijing" \
-  --model-provider ollama \
-  --ollama-model qwen3.6:27b \
-  --ollama-base-url http://127.0.0.1:11434 \
-  --ollama-timeout-seconds 120
+```json
+{
+  "models": {
+    "qwen_vllm": {
+      "provider": "openai_compatible",
+      "options": {
+        "model": "qwen",
+        "base_url": "http://localhost:8000/v1",
+        "timeout_seconds": 120
+      }
+    }
+  }
+}
 ```
 
-Advanced model provider options can be passed as repeated flat `key=value` pairs:
-
 ```bash
-vermay "weather forecast for Beijing" \
-  --model-provider ollama \
-  --model-option model=deepseek-v4-flash:cloud \
-  --model-option tool_calling=native \
-  --model-option timeout_seconds=120
+vermay "weather forecast for Beijing" --model qwen_vllm
 ```
 
-`--model-option` has higher priority than provider-specific flags. It is intended as a generic escape hatch for provider options; nested JSON values are not supported.
-
-`--ollama-*` flags are valid only with `--model-provider ollama`. Other providers should use `--model-option` until provider-specific flags are added for them.
-
-`timeout_seconds` must be a positive integer.
-
-The CLI maps configured model selections or provider override flags into `ModelProviderConfig(provider, options)`. Runtime assembly lives in `vermay/app_factory.py`; provider-specific model construction lives in `vermay/langgraph_runtime/model_factory.py`.
-
-OpenAI-compatible endpoint example:
-
-```bash
-vermay "weather forecast for Beijing" \
-  --model-provider openai_compatible \
-  --model-option model=qwen \
-  --model-option base_url=http://localhost:8000/v1
-```
+Runtime assembly lives in `vermay/app_factory.py`; provider-specific model
+construction lives in `vermay/langgraph_runtime/model_factory.py`.
 
 The OpenAI-compatible adapter uses Chat Completions request semantics: `{base_url}/chat/completions`, Bearer authentication when an API key is configured, standard `tools` with `tool_choice: auto` when tools are present, and standard assistant `tool_calls` plus `role: tool` messages with `tool_call_id` for tool results. When no tools are present, `tools` and `tool_choice` are omitted.
 

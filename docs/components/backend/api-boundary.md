@@ -62,7 +62,7 @@ SendStreamingMessage
 GetTask
 CancelTask
 SubscribeToTask
-ResumeTask
+tasks/resume
 ```
 
 Batch arrays are intentionally rejected until single-request usage has completed one review and burn-in pass.
@@ -318,5 +318,5 @@ Use a separate child-agent process/port for this check. Do not point `CHILD_AGEN
 
 - `/rpc` supports single-request JSON-RPC only.
 - JSON-RPC batch requests are rejected.
-- Task approval resume is exposed as the `ResumeTask` JSON-RPC method.
+- Task approval resume is exposed as the `tasks/resume` JSON-RPC method.
 - The local default server has no authentication.

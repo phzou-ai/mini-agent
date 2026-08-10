@@ -70,13 +70,12 @@ export function buildA2ARpcTaskCancelEnvelope(taskId: string, reason?: string) {
 export function buildA2ARpcTaskResumeEnvelope(
   taskId: string,
   approved: boolean,
-  reason?: string,
-  method: "ResumeTask" | "tasks/resume" = "ResumeTask"
+  reason?: string
 ) {
   return {
     jsonrpc: "2.0",
     id: `resume-task-${crypto.randomUUID()}`,
-    method,
+    method: "tasks/resume",
     params: {
       id: taskId,
       approved,

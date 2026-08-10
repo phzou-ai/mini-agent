@@ -10,7 +10,7 @@
 `vermay/cli/prompt.py`
 
 - Parses prompt-run CLI arguments.
-- Maps provider-specific flags and `--model-option key=value` into model provider options.
+- Resolves the optional `--model` name from `config/models.json`.
 - Resolves trace paths.
 - Handles approval resume CLI options.
 - Owns terminal-only interactive approval prompting.

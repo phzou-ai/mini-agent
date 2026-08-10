@@ -1516,7 +1516,7 @@ def test_a2a_rpc_get_and_cancel_task_support_pascal_case_methods(tmp_path):
     agent_store.close()
 
 
-def test_a2a_rpc_resume_task_supports_pascal_case_method(tmp_path):
+def test_a2a_rpc_resume_task_uses_canonical_method(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     runner = FakeApprovalTaskRunner()
@@ -1560,16 +1560,27 @@ def test_a2a_rpc_resume_task_supports_pascal_case_method(tmp_path):
     assert interrupted_metadata["localThreadId"] == task.runtime_thread_id
     assert interrupted_metadata["runtimeThreadId"] == task.runtime_thread_id
 
+    legacy_method = client.post(
+        "/rpc",
+        json={
+            "jsonrpc": "2.0",
+            "id": "rpc-resume-legacy",
+            "method": "ResumeTask",
+            "params": {"id": task_id, "approved": True},
+        },
+    )
     resumed = client.post(
         "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "rpc-resume-1",
-            "method": "ResumeTask",
+            "method": "tasks/resume",
             "params": {"id": task_id, "approved": True, "reason": "operator"},
         },
     )
 
+    assert legacy_method.status_code == 400
+    assert legacy_method.json()["error"]["code"] == -32601
     assert resumed.status_code == 200
     assert resumed.json()["id"] == "rpc-resume-1"
     assert resumed.json()["result"]["id"] == task_id

@@ -225,7 +225,7 @@ def _dispatch_rpc_request(
                     message="JSON-RPC params.reason must be a string.",
                 )
             return _jsonrpc_success_payload(request_id, adapter.cancel_task(task_id, reason=reason))
-        if method in {"ResumeTask", "tasks/resume"}:
+        if method == "tasks/resume":
             params = _rpc_params(payload)
             task_id = _rpc_task_id(params)
             approved = params.get("approved")

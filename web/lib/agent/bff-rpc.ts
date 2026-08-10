@@ -22,27 +22,6 @@ export async function readJsonRpcResponse(
   return (await response.json().catch(() => ({}))) as A2AJsonRpcResponse
 }
 
-export function isJsonRpcMethodNotFound(body: A2AJsonRpcResponse) {
-  return (
-    body.code === "method_not_found" ||
-    body.message === "JSON-RPC method not found." ||
-    body.error?.code === -32601 ||
-    body.error?.message === "JSON-RPC method not found."
-  )
-}
-
-export function staleResumeRouteResponse() {
-  return NextResponse.json(
-    {
-      code: "a2a_resume_method_not_found",
-      message:
-        "The running Vermay API does not support task resume yet. Restart `vermay serve` so the A2A ResumeTask route is loaded.",
-      retryable: false,
-    },
-    { status: 502 }
-  )
-}
-
 export function jsonRpcResultResponse(
   body: A2AJsonRpcResponse,
   {

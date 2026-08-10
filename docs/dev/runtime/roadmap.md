@@ -99,7 +99,7 @@ Deterministic S2 validation was refreshed on 2026-08-10:
 
 - `scripts/check_single_host_reliability.sh` passed with 189 backend tests and
   10 Playwright tests.
-- `scripts/check_full_stack_regression.sh` passed with 497 backend tests,
+- `scripts/check_full_stack_regression.sh` passed with 489 backend tests,
   frontend type checking, the Next.js production build, and 10 deterministic
   Playwright tests.
 - Both gates left tracked files unchanged.
@@ -147,10 +147,18 @@ scheduling, and generalized resource governance remain deployment-stage or
 workload-driven concerns. They are deliberately not prioritized for the current
 local, rapid-development phase.
 
-The first bounded frontend extraction moved the stateless welcome experience
-out of `agent-console.tsx`. Task streams, lifecycle actions, and session state
-remain in the existing controller until a concrete change demonstrates a
-smaller ownership boundary.
+Bounded frontend extractions have moved the stateless welcome experience and
+the Inspector timeline presentation out of `agent-console.tsx`. Task streams,
+lifecycle actions, selected-event state, and session state remain in the
+existing controller until a concrete change demonstrates another smaller
+ownership boundary.
+
+CLI model selection now has one path: the default or named model is resolved
+from `config/models.json`, and `--model` is the only per-run selector. Provider
+URLs, credentials, timeouts, and tool-calling strategies are configuration
+concerns rather than parallel CLI overrides. Task approval resume likewise has
+one JSON-RPC method, `tasks/resume`; the former method-name retry path has been
+removed.
 
 ## Guardrails
 
