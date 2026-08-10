@@ -161,7 +161,7 @@ connection is terminated. A started non-read-only invocation therefore remains
 `uncertain`, never implicitly successful or automatically replayable. The
 current SSH/Kubernetes adapters do not have a shared workspace and leave
 `workspaceId` unset. See
-[workspace-and-isolation-boundary.md](../dev/runtime/workspace-and-isolation-boundary.md).
+[Workspace And Isolation Boundary](../components/backend/runtime/workspace-and-isolation-boundary.md).
 
 ### A2A Task State
 
@@ -233,7 +233,7 @@ form a third process-state model. The runner returns them to `MainAgentCore`,
 which persists an inspectable summary on Task events and artifacts while it
 alone performs the local-process transition.
 
-See [governed-execution-kernel.md](../dev/runtime/governed-execution-kernel.md) for policy
+See [Governed Execution Kernel](../components/backend/runtime/governed-execution-kernel.md) for policy
 limits, stop-reason mapping, and observation persistence.
 
 ## Message and Task Relationship
@@ -253,7 +253,7 @@ A direct Message does not require a durable Task. A Task begins only when the re
 For a local Task, `inputContextSequence` is copied from `inputMessageId` when
 the Task is created. Its first worker slice loads only Messages at or before
 that cut. Later top-level Messages do not change the Task's initial prompt;
-the detailed contract is in [context-input-cut.md](../dev/runtime/context-input-cut.md).
+the detailed contract is in [Durable Context Input Cut](../components/backend/runtime/context-input-cut.md).
 
 When a Task is waiting for input, the next user Message must carry the same `taskId`. It continues the existing process and `runtimeThreadId`; it must not create a new route decision or a new task.
 
@@ -272,7 +272,7 @@ When a Task is retried, a new `taskId` is created with lineage to the previous t
 
 - The retired service/session lifecycle and its second `TaskStatus` vocabulary
   have been removed. Historical SQLite records are intentionally outside the
-  active runtime boundary; see [clean-slate-storage.md](../dev/runtime/clean-slate-storage.md).
+  active runtime boundary; see [Clean-Slate Storage Baseline](../components/backend/runtime/clean-slate-storage.md).
 - Worker execution and active-task ownership are process-local. M4 now
   conservatively reconciles queued commands after restart, while ambiguous
   claimed work becomes a retryable failure rather than being replayed.

@@ -285,7 +285,10 @@ the project documentation root should say so explicitly.
 
 ## Documentation Layers
 
-Use two repository-facing documentation layers.
+Use two authoritative repository-facing documentation layers. A project may
+add a non-authoritative historical evidence layer when completed plans and
+dated reviews have enough continuing value and volume to harm active
+navigation.
 
 ### Stable Reference
 
@@ -327,7 +330,7 @@ Active development documentation describes changing work:
 - deferred work;
 - review findings;
 - migration or cleanup plans;
-- dated implementation evidence.
+- dated implementation evidence that still supports active work.
 
 Characteristics:
 
@@ -340,6 +343,23 @@ Characteristics:
 A common location is:
 
 `docs/dev/`
+
+### Optional Historical Evidence
+
+Historical evidence preserves completed plans, dated assessments, and earlier
+review rationale after they no longer own current work.
+
+Characteristics:
+
+- never owns current architecture or priority;
+- is removed from the default active reading path;
+- links to the stable replacement and current roadmap;
+- exists only when retention value and document volume justify it.
+
+A project may use `docs/history/` for repository-wide evidence or a domain
+`archive/` for a narrow history. Small repositories should keep the two-layer
+model and mark the few retained documents Historical instead of creating an
+empty hierarchy.
 
 ## Domain Organization
 
@@ -484,7 +504,8 @@ When an old document is no longer authoritative:
 
 1. remove it from the default reading path;
 2. mark it Historical and link to the replacement when it retains value;
-3. move it to a domain `archive/` only if historical volume harms navigation;
+3. move it to `docs/history/` or a domain `archive/` only if historical volume
+   harms navigation;
 4. delete it when it is redundant, unreferenced, and has no troubleshooting or
    decision value.
 

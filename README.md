@@ -463,9 +463,11 @@ Start with the [documentation index](docs/README.md) for the project quick
 profile, architecture, component boundaries, operations, and active
 development plans.
 
-Developers and AI coding tools should also read the
-[AI Collaboration Guide](docs/AI-collaboration-guide.md) before substantial
-work.
+Developers and AI coding tools should read the concise
+[AI Collaboration Summary](docs/AI-collaboration-summary.md) before substantial
+work. Use the full [AI Collaboration Guide](docs/AI-collaboration-guide.md)
+when changing documentation structure, resolving authority, or preparing a
+durable handoff.
 
 ## License
 

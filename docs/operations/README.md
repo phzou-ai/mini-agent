@@ -8,6 +8,7 @@ persistence and secret boundaries, and regression gates.
 1. [local-development.md](local-development.md)
 2. [runtime-and-release.md](runtime-and-release.md)
 3. [regression-gate.md](regression-gate.md)
+4. [single-host-reliability-matrix.md](single-host-reliability-matrix.md)
 
 Operational truth belongs here. Temporary rollout notes and implementation
 plans belong under [../dev/](../dev/README.md).

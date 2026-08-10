@@ -1,14 +1,34 @@
 # Vermay Documentation
 
-This directory is the durable documentation memory for Vermay. It separates
-stable project truth from active implementation work so that contributors and
-AI tools can identify the current authority without reconstructing it from
-chat history.
+This directory is the durable documentation memory for Vermay. It has three
+explicit layers so that contributors and AI tools can distinguish the product
+that exists, the work authorized now, and the evidence that explains earlier
+decisions without reconstructing them from chat history.
 
 Before substantial work, read the concise
 [AI Collaboration Summary](AI-collaboration-summary.md). Use the complete
 [AI Collaboration Guide](AI-collaboration-guide.md) when organizing
 documentation, resolving authority conflicts, or preparing a durable handoff.
+
+## Documentation Model
+
+| Layer | Question it answers | Entry |
+| --- | --- | --- |
+| Stable Reference | What is Vermay now, and how does the supported system work? | [overview/](overview/README.md) |
+| Active Development | What work is authorized now, and what evidence closes it? | [dev/](dev/README.md) |
+| Historical Evidence | Why was an earlier decision made, and what work is already complete? | [history/](history/README.md) |
+
+Stable Reference is the product truth. Active Development may change
+frequently but must not silently override stable architecture. Historical
+Evidence is explanatory and never authorizes new work.
+
+## Start Here
+
+- To understand the current product, follow [Understand The Project](#understand-the-project).
+- To continue current work, read the [Active Development index](dev/README.md)
+  and its authoritative roadmap.
+- To investigate an earlier decision, enter [Historical Evidence](history/README.md)
+  only after reading the current stable boundary.
 
 ## Project Quick Profile
 
@@ -50,7 +70,7 @@ convenience. See
 - `web/`: independently buildable Next.js Agent Console.
 - `config/`: model and runtime configuration.
 - `tests/` and `web/tests/`: backend and browser verification.
-- `docs/`: stable reference and active development memory.
+- `docs/`: stable reference, active development control, and historical evidence.
 
 The detailed map is in [Repository Map](overview/repository-map.md).
 
@@ -61,13 +81,15 @@ Agent OS platform. Reliability, lifecycle clarity, protocol correctness,
 failure handling, and maintainable boundaries take priority over new
 infrastructure or speculative extensibility.
 
-Current implementation status and next priorities are owned by
-[Runtime Development](dev/runtime/README.md) and its
-[Roadmap](dev/runtime/roadmap.md).
+Current implementation facts are owned by
+[Current System Architecture](architecture/current-system.md) and the
+[Backend Runtime Contracts](components/backend/runtime/README.md). Current
+priority and acceptance criteria are owned by the
+[Runtime Roadmap](dev/runtime/roadmap.md).
 
-## Documentation Layers
+## Stable Reference
 
-### Stable Overview
+### Overview
 
 [overview/](overview/README.md) explains the project position, repository map,
 and primary request flows. Start here when first reading the repository.
@@ -88,11 +110,21 @@ implementation units, including their module and API boundaries.
 [operations/](operations/README.md) owns local development, runtime topology,
 release boundaries, persistence, and regression gates.
 
-### Active Development
+Stable documents describe supported current behavior. They do not contain
+implementation queues, temporary rollout narration, or unactivated TODO lists.
+
+## Active Development
 
 [dev/](dev/README.md) owns active priorities, implementation specifications,
-maintenance plans, deferred work, and dated review evidence. Content here may
+deferred work, acceptance criteria, and durable handoff state. Content here may
 change frequently and must not override stable architecture silently.
+
+## Historical Evidence
+
+[history/](history/README.md) contains completed roadmaps, dated assessments,
+and finished maintenance records. These documents preserve rationale and
+verification evidence but do not describe the current system or current
+priority.
 
 ## Suggested Reading Paths
 
@@ -134,8 +166,8 @@ For lifecycle or execution changes, continue with
 
 1. [architecture/current-system.md](architecture/current-system.md)
 2. [components/README.md](components/README.md)
-3. [dev/maintenance/README.md](dev/maintenance/README.md)
-4. [dev/runtime/README.md](dev/runtime/README.md)
+3. [history/maintenance/README.md](history/maintenance/README.md)
+4. [dev/README.md](dev/README.md)
 
 ### Run Or Release The System
 
@@ -147,11 +179,14 @@ For lifecycle or execution changes, continue with
 ## Update Rule
 
 1. Record iterative implementation state in `docs/dev/*` first.
-2. Promote only settled behavior and boundaries into stable documentation.
-3. Keep patch history and temporary debugging notes out of stable reference.
-4. Each major domain has one `README.md` as its navigation and ownership entry.
-5. Use relative links so documentation works on GitHub and every checkout.
-6. Do not create deeper folders until multiple real documents need the split.
+2. Promote only settled behavior and boundaries into Stable Reference.
+3. Move completed, still-useful implementation evidence into `docs/history/*`.
+4. Keep patch history and temporary debugging notes out of Stable Reference.
+5. Each major domain has one `README.md` as its navigation and ownership entry.
+6. Use relative links so documentation works on GitHub and every checkout.
+7. Create a new `docs/dev/<domain>/` only when an independent development
+   concern has its own status and multiple related documents. A code module or
+   one small task does not justify a documentation domain.
 
 External issue trackers may coordinate assignment and delivery, but repository
 documentation remains authoritative for durable technical decisions and

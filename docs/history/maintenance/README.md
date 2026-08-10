@@ -1,7 +1,7 @@
-# Maintenance Development
+# Maintenance History
 
-This directory contains active or completed cleanup and code-organization work.
-It is not a second runtime roadmap.
+This directory contains completed cleanup and code-organization evidence. It
+is not an active development domain or a second runtime roadmap.
 
 ## Status
 

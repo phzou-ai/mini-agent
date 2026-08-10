@@ -113,18 +113,10 @@ MCP v1 is feature-frozen for the current project scope. The implemented boundary
 - CLI and API session metadata preserve selected MCP servers, prompts, prompt arguments, and resources.
 - The Kubernetes MCP test example under `examples/mcp_servers/k8s/` demonstrates read-only tools, resources, and prompts.
 
-The current MCP implementation is sufficient for validating the runtime integration pattern. Further MCP work should be treated as production hardening rather than feature completion.
-
-Production-complete MCP todo list:
-
-- Replace per-operation stdio process startup with a managed MCP client lifecycle where appropriate.
-- Add retry, backoff, and circuit-breaker policy for unavailable MCP servers.
-- Add stronger auth, trust, and capability review for non-local MCP servers.
-- Add support for additional MCP transports only when a real deployment needs them.
-- Add UI or API discovery endpoints for browsing selected MCP tools, resources, and prompts.
-- Add redaction policy for sensitive MCP tool/resource outputs before trace or session persistence.
-- Add configurable limits for MCP output size, argument size, and prompt/resource injection budgets.
-- Add production observability around MCP latency, timeout rate, error rate, and approval rate.
+The current MCP implementation is sufficient for validating the runtime
+integration pattern. Broader production hardening is not active work. A future
+MCP milestone requires concrete deployment evidence and authorization in the
+[active development roadmap](../dev/runtime/roadmap.md).
 
 ## Local Storage
 

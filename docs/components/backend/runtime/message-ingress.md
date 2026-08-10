@@ -96,11 +96,11 @@ stored failure and cannot route or execute again; a caller must send a new
 - The active clean-slate SQLite baseline always includes ingress records.
   Historical local data is intentionally discarded rather than backfilled or
   replayed; see
-  [Clean-Slate Storage](../../../dev/runtime/clean-slate-storage.md).
+  [Clean-Slate Storage](clean-slate-storage.md).
 - This milestone does not persist a direct-message failure as a conversational
   agent Message. It persists the ingress failure needed for idempotency. The
   separate first-party read-model presentation is implemented in
-  [Direct Message Failures](../../../dev/runtime/direct-message-failures.md).
+  [Direct Message Failures](direct-message-failures.md).
 - This milestone does not add final-answer token streaming for LangGraph Tasks,
   worker leases, or automatic replay of uncertain direct-message work.
 

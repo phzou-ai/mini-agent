@@ -128,7 +128,7 @@ distributed worker leases or replay ambiguous execution; see
   as misleading A2A status updates.
 - Deliberate boundary. Remote proxy synchronization retains its explicit,
   separate path and now applies the monotonic policy documented in
-  [Runtime Composition And Remote Proxy](../../../dev/runtime/runtime-composition-and-remote-proxy.md).
+  [Runtime Composition And Remote Proxy](runtime-composition-and-remote-proxy.md).
 
 ## Implementation
 

@@ -1,5 +1,8 @@
 # Code Organization Review
 
+> Status: Completed review, 2026-08-06
+> Authority: Maintenance evidence and future refactor triggers; not an active plan
+
 ## Scope
 
 This review describes the supported product path after the August 2026

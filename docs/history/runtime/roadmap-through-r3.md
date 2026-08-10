@@ -6,7 +6,7 @@
 
 This snapshot preserves the detailed M0 through R3 milestone record that led
 to the current runtime. It is not the active implementation queue. Current
-priority and handoff are owned by [roadmap.md](roadmap.md).
+priority and handoff are owned by [roadmap.md](../../dev/runtime/roadmap.md).
 
 ## Scope
 
@@ -26,9 +26,9 @@ causality, direct-message failures, lifecycle ownership, and remote proxy
 ordering.
 
 The staged path beyond the correctness work at the time was defined in
-[runtime-evolution-path.md](runtime-evolution-path.md). That document provides
+[runtime-evolution-path.md](../../dev/runtime/runtime-evolution-path.md). That document provides
 feasibility and activation criteria. Current implementation priority has since
-moved to [roadmap.md](roadmap.md).
+moved to [roadmap.md](../../dev/runtime/roadmap.md).
 
 It does not add a new product feature. It makes the current A2A, LangGraph, SQLite, MCP, approval, and Web UI behavior easier to reason about and safer to extend.
 
@@ -59,7 +59,8 @@ Detailed milestone rationale and acceptance criteria remain below.
 
 ## Phase Gate At Snapshot
 
-**Current priority: complete S2, the single-host release baseline refresh.**
+**Priority recorded at this snapshot: complete S2, the single-host release
+baseline refresh.**
 
 R3.1 and R3.2 close the narrow execution-control gaps in the current
 single-host path: durable cancellation reaches active SSH/Kubernetes adapters
@@ -68,11 +69,11 @@ R2 deadline when it is configured; and uncertain side-effect outcomes remain
 visible. MCP and other independently timed HTTP tools retain their own
 capability-level timeouts rather than a generic Task-deadline wrapper. The
 capability boundary is in
-[workspace-and-isolation-boundary.md](workspace-and-isolation-boundary.md),
+[Workspace And Isolation Boundary](../../components/backend/runtime/workspace-and-isolation-boundary.md),
 while the model-call and cancellation semantics are in
-[governed-execution-kernel.md](governed-execution-kernel.md).
+[Governed Execution Kernel](../../components/backend/runtime/governed-execution-kernel.md).
 The deterministic verification matrix is in
-[single-host-reliability-matrix.md](single-host-reliability-matrix.md).
+[Single-Host Reliability Matrix](../../operations/single-host-reliability-matrix.md).
 
 No broader R3, R4, or R5 implementation milestone is active. The default work
 is to validate the existing direct Message, local Task, continuation,
@@ -85,7 +86,7 @@ missing boundary it exposes, and the smallest contract that closes it. A
 general workspace, sandbox, planner, scheduler, or distributed runtime is not
 the default response to a hypothetical future need.
 
-### Active Work Item: S2 Release Baseline Refresh
+### Work Item Recorded At Snapshot: S2 Release Baseline Refresh
 
 **Scope:** verification and defect closure only. Do not add a product feature
 or a new runtime owner.
@@ -158,7 +159,7 @@ contributor to continue without reconstructing this iteration from chat.
   documentation-only iteration.
 - No live model, MCP, SSH/Kubernetes, or child-agent workflow was exercised.
 
-**Next recommended task:** execute S2 in its documented order. Run the focused
+**Next task recorded at this snapshot:** execute S2 in its documented order. Run the focused
 single-host gate, then the full-stack gate, verify that tracked files remain
 unchanged, and record any live dependency check as passed, a bounded defect, or
 an explicit external blocker.
@@ -171,7 +172,7 @@ handoff.
 
 The retired service/session stack and its historical SQLite support have been
 removed by an explicit clean-slate decision. See
-[clean-slate-storage.md](clean-slate-storage.md).
+[Clean-Slate Storage Baseline](../../components/backend/runtime/clean-slate-storage.md).
 
 ## Priority Order At Snapshot
 
@@ -191,7 +192,7 @@ does not justify Temporal, Redis, a persistent plan DAG, or a new scheduler.
 
 The sections below retain the problem statements, scope, and acceptance
 criteria for each milestone. The table above records execution status at the
-snapshot date; current status is owned by [roadmap.md](roadmap.md).
+snapshot date; current status is owned by [roadmap.md](../../dev/runtime/roadmap.md).
 
 > Status: Historical implementation evidence unless the status table above
 > explicitly marks a milestone Active. The `Work` and `Acceptance` sections
@@ -402,7 +403,8 @@ worker reads initial history only through that cut. The router, direct
 responder, and local-task runner share route-specific persisted-history
 policies. `RuntimeContextProvider` caps injected MCP prompts, skills, memory,
 and resources by section and in total. These are character caps, not a
-model-token guarantee. See [context-input-cut.md](context-input-cut.md).
+model-token guarantee. See
+[Durable Context Input Cut](../../components/backend/runtime/context-input-cut.md).
 
 ### M7. Retire the Compatibility Lifecycle Path
 
@@ -413,7 +415,7 @@ clean-slate cut: obsolete service/session modules, their tests, the retired A2A
 projection adapter, and historical SQLite migrations have been deleted. The
 active store has one `main_agent_clean_slate_v1` baseline and does not read,
 export, or migrate retired local data. See
-[clean-slate-storage.md](clean-slate-storage.md).
+[Clean-Slate Storage Baseline](../../components/backend/runtime/clean-slate-storage.md).
 
 **Acceptance:** complete. `MainAgentCore` is the only product lifecycle owner,
 and existing local records are discarded by an explicit documented decision.
@@ -424,7 +426,7 @@ and existing local records are discarded by an explicit documented decision.
 
 **Status:** Complete, 2026-08-02. The detailed staged contract and exit
 criteria are in
-[runtime-evolution-path.md](runtime-evolution-path.md#r0-close-current-runtime-integrity-gaps).
+[runtime-evolution-path.md](../../dev/runtime/runtime-evolution-path.md#r0-close-current-runtime-integrity-gaps).
 
 **Work:**
 
@@ -469,5 +471,5 @@ The following are explicitly outside this refinement sequence:
 
 Persistent planning, workspace isolation, bounded autonomous execution, and
 distributed scheduling are governed by the activation criteria in
-[runtime-evolution-path.md](runtime-evolution-path.md); they are not implied by
+[runtime-evolution-path.md](../../dev/runtime/runtime-evolution-path.md); they are not implied by
 the use of LangGraph or the Agent OS vocabulary.

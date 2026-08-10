@@ -8,9 +8,10 @@ Agent OS is an architectural lens for organizing agent workloads. It is not an o
 
 The current `vermay.main_agent.models.TaskRecord` is the backing record for what this document calls an `AgentProcessRecord`. This document does not require an immediate code or database rename. The API session projection also has a `TaskRecord`; it is a read model, not a second lifecycle owner.
 
-For an assessment of the currently implemented runtime, including its safety
-guarantees, liveness limitations, and staged evolution order, see
-[current runtime assessment](../dev/runtime/current-architecture-assessment.md).
+For the currently implemented runtime, see
+[Current System Architecture](current-system.md). The dated
+[2026-08-02 assessment](../history/runtime/assessment-2026-08-02.md) is retained
+only as historical reasoning and evidence.
 For active milestone status and acceptance criteria, see the
 [runtime-refinement roadmap](../dev/runtime/roadmap.md). When this document
 describes a future direction, the focused runtime contract and roadmap take
@@ -44,7 +45,7 @@ The Agent OS model defines responsibilities before it defines components. A conc
 
 The current implementation remains intentionally compact:
 
-| Responsibility | Current implementation | Near-term action |
+| Responsibility | Current implementation | Stability guardrail |
 | --- | --- | --- |
 | Service hosting | FastAPI app factory and lifecycle hooks | Keep one process boundary; do not add a private gateway protocol. |
 | Context/turn coordination | `MainAgentCore` request preparation plus `MainAgentStore` | Causal ordering, route-specific character limits, and initial input cuts are implemented; add token-aware budgets only when needed. |
@@ -82,7 +83,12 @@ The technical direction is sound because it separates public protocol identity, 
 
 Its extension path is adequate for additional runtimes, remote agents, capability policies, and stronger execution coordination because those concerns meet at narrow records and adapters rather than inheriting LangGraph or A2A types throughout the codebase.
 
-The main complexity risk is literal implementation of the OS analogy. The current version should therefore strengthen existing boundaries rather than create an Agent OS framework. The phase list below remains a capability map; the runtime-refinement roadmap and evolution path determine which work is active and when a later capability is justified.
+The main complexity risk is literal implementation of the OS analogy. The
+current version should therefore strengthen existing boundaries rather than
+create an Agent OS framework. The
+[runtime evolution path](../dev/runtime/runtime-evolution-path.md) remains the
+conditional capability map, while the runtime roadmap determines which work is
+active.
 
 The recommended product and architecture position is:
 
@@ -776,103 +782,15 @@ The UI should display A2A state as the public state. Internal process state and 
 22. Accepting an asynchronous local Task must also establish a recoverable execution owner. A publicly accepted Task cannot depend on a later best-effort queue write.
 23. A LangGraph checkpoint proves execution position, not whether an external side effect occurred. Side-effect attempts and uncertain outcomes require separate durable invocation facts.
 
-## Incremental Migration Plan
+## Evolution And Activation
 
-The roadmap is ordered by correctness and operational risk rather than by feature visibility:
+This document defines strategic vocabulary, invariants, and the conditional
+target boundary. It intentionally does not maintain implementation phases or
+completion status.
 
-```text
-runtime integrity
-  -> context causality
-  -> event and UI contract clarity
-  -> liveness and recovery
-  -> deployment security
-  -> A2A federation hardening
-  -> evidence-driven extensibility
-```
-
-Channel adapters, automation, general workflow features, autonomous memory/skill mutation, and a plugin marketplace remain optional product directions. They should not enter the runtime roadmap unless Vermay deliberately changes from an A2A service foundation into a personal-assistant product.
-
-### Phase 0: Vocabulary And Contracts
-
-- Adopt this document and glossary.
-- Keep A2A protocol names unchanged.
-- Document `vermay.main_agent.models.TaskRecord` as the current Agent Process backing record and the API `TaskRecord` as a read model.
-- Stop introducing unqualified `status` fields across boundaries.
-
-### Phase 1: State Governance
-
-- Done: add durable `messageId` ingress/outcome ownership before any router or execution work.
-- Done: add one transition policy and validation helper around the existing `TaskStatus` model.
-- Done: centralize LangGraph RunOutcome to local process-state mapping without introducing another lifecycle model.
-- Done: store typed pending continuations independently from lifecycle events, and atomically consume them when an approval or task-input continuation is accepted.
-- Keep one A2A state projection for locally owned processes while preserving explicit remote-proxy synchronization.
-- Consolidate child A2A state to local proxy-state synchronization into one helper; do not merge it with the owned-process projection.
-- Add exhaustive transition and projection tests.
-- Do not rename database tables, identifiers, or public DTOs in this phase.
-
-### Phase 2: Context Causality And Assembly
-
-- Done: add stable per-Context message ordering and persist each local Task's input cut.
-- Done: make initial worker execution load history only through that cut.
-- Evaluate full Context-ingress serialization only when concurrent route work
-  demonstrates a concrete ordering requirement; it is not implied by the
-  input-cut contract.
-- Extract one context-assembly interface with separate router, direct-answer, and task policies.
-- Replace fixed message-count behavior with explicit token and output-size budgets incrementally.
-- Add concurrent-ingress and queued-task context-isolation tests.
-
-### Phase 3: Event And Frontend Contracts
-
-- Separate `eventType`, internal process state, A2A state, and runtime outcome.
-- Remove frontend reverse-normalization into local-looking status values.
-- Omit non-applicable state fields from artifact events.
-
-### Phase 4: Liveness And Recovery
-
-- Add an execution-slice deadline and typed `execution_timeout` failure.
-- Done: reconcile stale local `running` and `cancel_requested` records on startup.
-- Done: retain intentionally blocked checkpoints and requeue only a durable, unclaimed command.
-- Add approval expiry and capability-binding revalidation before a later non-local or privileged deployment.
-- Represent remote child unavailability as stale diagnostics without fabricating a child terminal state.
-- Requeue a queued process only when its durable lifecycle record proves that
-  no execution slice was claimed or started. Treat any ambiguous work as a
-  structured retryable recovery outcome rather than repeating side effects.
-
-### Phase 5: Deployment Security
-
-- Add caller authentication and Context/Task authorization before non-local exposure.
-- Bind approvals to task, tool, arguments, operator, and expiry.
-- Add sandbox or workspace isolation for host-reaching capabilities according to deployment needs.
-- Treat MCP and child-agent content as external input with redaction and size limits.
-
-### Phase 6: Kernel Boundaries
-
-- Narrow `MainAgentCore` only where duplication or testability shows a concrete ownership problem.
-- Keep dispatch policy separate from execution coordination without creating speculative framework layers.
-- Extract independently deployable components only when scaling, security isolation, or a second implementation requires them.
-
-### Phase 7: A2A Federation Hardening
-
-- Cache child Agent Cards with explicit freshness and health diagnostics.
-- Add remote Task continuation forwarding and reconcile child status without inventing a parent-side success state.
-- Define child authentication, trust policy, timeout, retry, idempotency, and duplicate-submission behavior.
-- Bound and sanitize imported child Messages, Artifacts, errors, and metadata.
-- Add delegation contract tests against at least one independently deployed child implementation.
-
-### Phase 8: Optional Naming Migration
-
-- Consider `TaskRecord` to `AgentProcessRecord` and related internal renames.
-- Avoid database renames until runtime behavior and migration value justify them.
-- Preserve A2A `Task`, `taskId`, and protocol method names.
-
-Most Phase 1 and Phase 2 contracts, along with the implemented R0-R3.1
-boundaries, are now in place: destructive cleanup is core-owned, asynchronous
-Task acceptance is atomic, stale direct ingress has an explicit retryable
-failure, local non-read-only effects have a durable invocation boundary, and
-the SSH/Kubernetes path has bounded child-process control. The phase list
-remains a capability map, not an automatic implementation sequence. The
-[runtime evolution path](../dev/runtime/runtime-evolution-path.md) owns
-the activation criteria for broader execution, workspaces, persistent
-planning, and distributed scheduling. Phase 8 remains optional.
-
-The migration should improve ownership and observability without turning the OS analogy into unnecessary framework complexity.
+The [Runtime Evolution Path](../dev/runtime/runtime-evolution-path.md) owns
+stage feasibility and activation criteria. The
+[Runtime Roadmap](../dev/runtime/roadmap.md) is the only authority for work
+authorized now. A capability described here does not become implementation
+work until the roadmap records a concrete workload, the missing current
+boundary, and the smallest justified extension.

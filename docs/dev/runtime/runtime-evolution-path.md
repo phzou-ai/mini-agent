@@ -240,7 +240,7 @@ R2 makes the existing ReAct loop bounded and evidence-driven without adding a
 general planning framework.
 
 **Status: Complete, 2026-08-02.** The implementation is documented in
-[governed-execution-kernel.md](governed-execution-kernel.md). It keeps
+[Governed Execution Kernel](../../components/backend/runtime/governed-execution-kernel.md). It keeps
 `MainAgentCore` as the A2A lifecycle owner while the LangGraph kernel applies
 per-process model/tool/failure/loop limits, records normalized observations,
 and returns a typed stop reason plus deterministic evidence and residual risk.
@@ -275,7 +275,7 @@ capability path has a narrow project-owned execution context. It binds a
 durable Task cancellation request, the remaining R2 deadline, and an optional
 R1 invocation identity to the local `ssh` subprocess. It does not create a
 shared filesystem workspace or a general command executor. See
-[workspace-and-isolation-boundary.md](workspace-and-isolation-boundary.md).
+[Workspace And Isolation Boundary](../../components/backend/runtime/workspace-and-isolation-boundary.md).
 
 The next R3 increment should define a workspace only when a capability truly
 shares an execution namespace. A future context may expose working directory,

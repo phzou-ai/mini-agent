@@ -5,10 +5,12 @@
 
 ## Purpose
 
-This is the active P0 verification boundary for the current single-host
+This is the deterministic verification contract for the current single-host
 runtime. It does not introduce a scheduler, a second lifecycle owner, or a
 test-only product execution path. It makes the existing guarantees observable
-across the durable core, A2A JSON-RPC/SSE projection, and browser console.
+across the durable core, A2A JSON-RPC/SSE projection, and browser console. The
+[Runtime Roadmap](../dev/runtime/roadmap.md) decides when this matrix must be
+refreshed as an active release gate.
 
 Run the focused matrix from the repository root:
 

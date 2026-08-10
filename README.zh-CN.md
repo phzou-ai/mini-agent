@@ -2,6 +2,10 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+开发人员和 AI 工具应从[文档总索引](docs/README.md)和精简版
+[AI 协作摘要](docs/AI-collaboration-summary.md)开始。完整的
+[AI 协作指南](docs/AI-collaboration-guide.md)定义可复用的文档治理与交接约定。
+
 Vermay 是一个基于 A2A 协议的本地主 Agent runtime。它提供一个主 agent，可以：
 
 - 以 message 方式直接回答轻量请求；
@@ -453,7 +457,9 @@ vermay skills approve <proposal-id>
 
 请从[文档总索引](docs/README.md)开始阅读，其中包含项目快速画像、架构、组件边界、运行说明和当前开发计划。
 
-开发人员和 AI 编程工具在开展较大改动前，还应阅读
+开发人员和 AI 编程工具在开展较大改动前，应先阅读精简版
+[AI 协作摘要](docs/AI-collaboration-summary.md)。当需要调整文档结构、
+解决文档权威冲突或准备持久化交接时，再使用完整的
 [AI 协作指南](docs/AI-collaboration-guide.md)。
 
 ## License

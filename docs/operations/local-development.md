@@ -225,7 +225,7 @@ The OpenAI-compatible adapter uses Chat Completions request semantics: `{base_ur
 `native`, `prompt_json`, and `none`; the checked-in primary model uses
 `native`. OpenAI-compatible endpoints support `native` and `none`. The runtime
 does not silently retry a request with another strategy. See
-[Model Tool Calling](../dev/runtime/model-tool-calling.md) for the
+[Model Tool Calling](../components/backend/runtime/model-tool-calling.md) for the
 supported matrix and safety behavior.
 
 ## Memory

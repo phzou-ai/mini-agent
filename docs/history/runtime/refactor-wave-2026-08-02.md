@@ -125,7 +125,7 @@ reader or export path.
 retired local database is cleared before this baseline is installed; an unknown
 schema family fails explicitly. LangGraph checkpoints are reset alongside the
 metadata store, so no retired task identity is resumable. See
-[clean-slate-storage.md](clean-slate-storage.md).
+[Clean-Slate Storage Baseline](../../components/backend/runtime/clean-slate-storage.md).
 
 ### Token-aware context, full prompt snapshots, and task token streaming
 
@@ -159,6 +159,6 @@ explicit terminal failure without replaying routing, Task creation, or tool
 execution for the same `messageId`.
 
 See [Durable Message Ingress](../../components/backend/runtime/message-ingress.md) and
-[direct-message-failures.md](direct-message-failures.md) for the implemented
+[Direct-Message Failure Presentation](../../components/backend/runtime/direct-message-failures.md) for the implemented
 contract. Current priorities are maintained only in
-[roadmap.md](roadmap.md#current-phase-gate); this dated review is historical.
+[roadmap.md](../../dev/runtime/roadmap.md#current-phase-gate); this dated review is historical.

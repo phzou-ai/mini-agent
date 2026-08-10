@@ -1,11 +1,15 @@
-# Current Runtime Architecture Assessment
+# Runtime Architecture Assessment - 2026-08-02
+
+> Status: Historical assessment
+> Authority: Dated evidence only; not current architecture or active priority
 
 ## Scope
 
-This assessment describes the implemented runtime as of 2026-08-02. It is not
-a target-state design and does not require introducing new infrastructure. The
-[roadmap](roadmap.md) owns active implementation priority; the focused
-contracts in this folder own detailed runtime behavior.
+This assessment describes the implemented runtime as observed on 2026-08-02.
+It is not a target-state design or current architecture authority. Use
+[Current System Architecture](../../architecture/current-system.md) for the
+implemented system, [Backend Runtime Contracts](../../components/backend/runtime/README.md)
+for settled runtime behavior, and [roadmap.md](../../dev/runtime/roadmap.md) for active priority.
 
 ```text
 A2A Message ingress
@@ -154,7 +158,7 @@ model tokens, summarize old history, globally cap tool output, or persist a
 complete rendered prompt. A changed system prompt, model selection, skill set,
 MCP resource, tool catalog, or memory result can still change an execution
 after it was queued or recovered. The implemented contract is documented in
-[context-input-cut.md](context-input-cut.md).
+[Durable Context Input Cut](../../components/backend/runtime/context-input-cut.md).
 
 That tradeoff is appropriate now. Persist a full prompt or capability snapshot
 only when reproducible execution, audit requirements, or recovery behavior
@@ -239,10 +243,10 @@ once restart recovery and deployment coordination are reliable.
    a bounded extension is justified.
 
 The feasibility and entry criteria for these stages are defined in
-[runtime-evolution-path.md](runtime-evolution-path.md). The active backlog and
-acceptance criteria remain in [roadmap.md](roadmap.md).
+[runtime-evolution-path.md](../../dev/runtime/runtime-evolution-path.md). The active backlog and
+acceptance criteria remain in [roadmap.md](../../dev/runtime/roadmap.md).
 
 The retired service/session stack and its historical local databases were
 explicitly removed in the clean-slate storage cut. The current baseline and
 reset boundary are documented in
-[clean-slate-storage.md](clean-slate-storage.md).
+[Clean-Slate Storage Baseline](../../components/backend/runtime/clean-slate-storage.md).

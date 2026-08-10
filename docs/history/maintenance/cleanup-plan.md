@@ -203,12 +203,15 @@ validation and error contracts, including protected secret handling.
 
 **Priority:** medium/low; perform alongside completed code batches.
 
+**Status:** completed. This section records the documentation policy used by
+the maintenance pass; it is not an active cleanup sequence.
+
 **Goal:** make active guidance easy to find without deleting implementation
 history.
 
 **Allowed work:**
 
-- Keep this document as the active cleanup sequence.
+- Keep this document as completed maintenance evidence.
 - Update indices and short module descriptions when a batch moves code.
 - Mark dated reviews and completed refactor notes as evidence, not live plans.
 - Normalize only local/private filenames where no public import, script, or

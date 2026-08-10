@@ -119,4 +119,4 @@ Those concerns remain separate refinements. Local-process transition governance,
 startup reconciliation, direct-message failure presentation and ingress
 recovery, executor ownership, and remote-proxy synchronization are complete.
 Current phase gates and priorities are maintained in
-[roadmap.md](roadmap.md#current-phase-gate).
+[Runtime Roadmap](../../../dev/runtime/roadmap.md#current-phase-gate).

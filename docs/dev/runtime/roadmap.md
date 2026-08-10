@@ -13,7 +13,7 @@ This document answers three questions only:
 3. What should the next contributor preserve?
 
 Completed milestone detail is retained in the
-[Runtime Roadmap Through R3](roadmap-history-through-r3.md). That historical
+[Runtime Roadmap Through R3](../../history/runtime/roadmap-through-r3.md). That historical
 record explains how the present boundaries were reached; it is not an active
 implementation queue.
 
@@ -128,9 +128,9 @@ full stack gate.
 | Startup reconciliation | Implemented | [Backend Runtime Contracts](../../components/backend/runtime/README.md) |
 | Task failure projection and retry | Implemented | [Backend Runtime Contracts](../../components/backend/runtime/README.md) |
 | Side-effect execution ledger | Implemented | [Backend Runtime Contracts](../../components/backend/runtime/README.md) |
-| Governed model/tool execution | Implemented | [Governed Execution Kernel](governed-execution-kernel.md) |
-| Single-host regression matrix | Implemented; refresh active | [Single-Host Reliability Matrix](single-host-reliability-matrix.md) |
-| Detailed M0-R3 record | Historical | [Runtime Roadmap Through R3](roadmap-history-through-r3.md) |
+| Governed model/tool execution | Implemented | [Governed Execution Kernel](../../components/backend/runtime/governed-execution-kernel.md) |
+| Single-host regression matrix | Implemented; refresh active | [Single-Host Reliability Matrix](../../operations/single-host-reliability-matrix.md) |
+| Detailed M0-R3 record | Historical | [Runtime Roadmap Through R3](../../history/runtime/roadmap-through-r3.md) |
 
 ## Activation Rule For Future Work
 
