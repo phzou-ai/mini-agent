@@ -87,7 +87,9 @@ graph.invoke(...)
 - finishes normally, or
 - pauses at an interrupt.
 
-The archived hands-on runtime contains the earlier graph stream inspection implementation. The active runtime does not expose stream mode through the CLI.
+The active CLI runtime uses `graph.invoke` and does not expose graph-stream
+inspection. Earlier stream-inspection experiments are historical context, not
+an alternate executable runtime in the current product path.
 
 ## Approval Decision Point
 

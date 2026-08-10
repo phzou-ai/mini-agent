@@ -1,7 +1,7 @@
 # Runtime Refinement Roadmap
 
 > Status: Active
-> Last reviewed: 2026-08-09
+> Last reviewed: 2026-08-10
 > Authority: Current runtime priority, phase gate, and handoff
 
 ## Purpose
@@ -95,17 +95,28 @@ runtime ownership from chat history.
 
 ### Validation State
 
-The documentation-only reorganization does not establish a new runtime test
-result. Run the S2 commands above before claiming the release baseline is
-current. Report branch position, commits, and working-tree state as live Git
-state, not as durable content in this roadmap.
+Deterministic S2 validation was refreshed on 2026-08-10:
+
+- `scripts/check_single_host_reliability.sh` passed with 189 backend tests and
+  10 Playwright tests.
+- `scripts/check_full_stack_regression.sh` passed with 497 backend tests,
+  frontend type checking, the Next.js production build, and 10 deterministic
+  Playwright tests.
+- Both gates left tracked files unchanged.
+
+The suite still reports a non-blocking Starlette `TestClient` deprecation
+warning. Live model, MCP, SSH/Kubernetes, and child-agent workflows remain
+operator-dependent and were not exercised by this deterministic refresh.
+Report branch position, commits, and working-tree state as live Git state, not
+as durable content in this roadmap.
 
 ### Next Task
 
-Execute S2 in the documented order. If it passes, record the dated validation
-result and explicitly close the active item. If it fails, fix only the bounded
-defect at its current owner and rerun the narrowest relevant gate before the
-full stack gate.
+Complete the operator-dependent portion of S2 when configured dependencies are
+available: exercise one representative direct Message and one local Task. For
+each attempted workflow, record either a pass, one bounded defect at its current
+owner, or an explicit external blocker. Do not weaken the deterministic gates
+to accommodate unavailable external services.
 
 ## Guardrails
 

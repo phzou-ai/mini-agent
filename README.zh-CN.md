@@ -43,7 +43,6 @@ flowchart TB
     CKPT["Checkpoint thread_id"]
   end
 
-  CLI --> BOUNDARY
   A2A --> BOUNDARY
   API --> BOUNDARY
   UI --> BOUNDARY
@@ -52,9 +51,14 @@ flowchart TB
   CORE --> STORE
   CORE --> CHILD
   CORE --> GRAPH
+  CLI -. "development harness" .-> GRAPH
   GRAPH --> APPROVAL
   GRAPH --> CKPT
 ```
+
+服务路径通过 adapter boundary 和 `MainAgentCore` 持久化管理 A2A 生命周期。
+CLI 是直接组装并调用 LangGraph runtime 的开发调试入口；它不创建或管理公开的
+A2A Task 生命周期。
 
 关键标识：
 
@@ -69,11 +73,13 @@ flowchart TB
 
 ### Task 执行流程
 
-正常执行从一个控制入口开始，转换成带生命周期管理的 task，然后进入 LangGraph runtime。公开的 task record 和 event stream 保持在原始 graph state 之外。
+正常的服务执行从 A2A client 或 Web UI 开始，转换成带生命周期管理的 task，
+然后进入 LangGraph runtime。公开的 task record 和 event stream 保持在原始
+graph state 之外。CLI 属于独立的开发调试路径，不包含在下面的生命周期流程中。
 
 ```mermaid
 sequenceDiagram
-  participant C as Control Surface<br/>CLI / A2A / API
+  participant C as A2A Client / Web UI
   participant M as MainAgentCore
   participant S as Store
   participant R as LangGraph Runtime
@@ -95,7 +101,7 @@ Approval 和模型请求补充信息的 interrupt 都会保持 `task_id` 和 `th
 
 ```mermaid
 sequenceDiagram
-  participant C as Control Surface<br/>Web UI / A2A / CLI
+  participant C as A2A Client / Web UI
   participant M as MainAgentCore
   participant S as Store
   participant R as LangGraph Runtime

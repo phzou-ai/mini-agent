@@ -45,7 +45,6 @@ flowchart TB
     CKPT["Checkpoint thread_id"]
   end
 
-  CLI --> BOUNDARY
   A2A --> BOUNDARY
   API --> BOUNDARY
   UI --> BOUNDARY
@@ -54,9 +53,15 @@ flowchart TB
   CORE --> STORE
   CORE --> CHILD
   CORE --> GRAPH
+  CLI -. "development harness" .-> GRAPH
   GRAPH --> APPROVAL
   GRAPH --> CKPT
 ```
+
+The service path uses the adapter boundary and `MainAgentCore` for durable A2A
+lifecycle ownership. The CLI is a development harness that composes and invokes
+the LangGraph runtime directly; it does not create or own the public A2A Task
+lifecycle.
 
 Key identifiers:
 
@@ -71,11 +76,14 @@ One session can contain many tasks, and each resumable task has its own `thread_
 
 ### Task Execution Flow
 
-Normal execution starts from a control surface, becomes a lifecycle-managed task, and then advances through the LangGraph runtime. Public task records and event streams stay outside the raw graph state.
+Normal service execution starts from an A2A client or the Web UI, becomes a
+lifecycle-managed task, and then advances through the LangGraph runtime. Public
+task records and event streams stay outside the raw graph state. CLI execution
+is a separate development path and is not represented in this lifecycle flow.
 
 ```mermaid
 sequenceDiagram
-  participant C as Control Surface<br/>CLI / A2A / API
+  participant C as A2A Client / Web UI
   participant M as MainAgentCore
   participant S as Store
   participant R as LangGraph Runtime
@@ -97,7 +105,7 @@ Approval and model-requested input interrupts keep `task_id` and `thread_id` sep
 
 ```mermaid
 sequenceDiagram
-  participant C as Control Surface<br/>Web UI / A2A / CLI
+  participant C as A2A Client / Web UI
   participant M as MainAgentCore
   participant S as Store
   participant R as LangGraph Runtime

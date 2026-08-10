@@ -12,15 +12,17 @@ The active store starts from one clean baseline, identified by:
 
 ```text
 store_metadata.schema_family = main_agent_clean_slate_v1
-schema_migrations.version = 2
+schema_migrations.version = 3
 ```
 
 The clean baseline is migration `1`; current clean-slate stores also apply
-migration `2`, which adds the Tool Invocation Ledger. Together they create the
-current shared metadata tables and the complete `MainAgentCore` record set:
-Contexts, Messages, route decisions, local Tasks, events, artifacts, registered
-agents, delegations, pending continuations, message ingress records, queued
-execution commands, and durable non-read-only tool invocations.
+migration `2`, which adds the Tool Invocation Ledger, and migration `3`, which
+persists Task failure retryability and enforces one idempotent direct retry per
+retry lineage. Together they create the current shared metadata tables and the
+complete `MainAgentCore` record set: Contexts, Messages, route decisions, local
+Tasks, events, artifacts, registered agents, delegations, pending
+continuations, message ingress records, queued execution commands, and durable
+non-read-only tool invocations.
 
 The migration framework remains only for future forward changes to this
 baseline. It does not contain retired schema steps or data backfills.
@@ -51,7 +53,7 @@ crosses the clean-slate boundary.
 ## Verification
 
 - A fresh store creates only the active baseline tables and records schema
-  version `2`.
+  version `3`.
 - A historical versioned or unversioned session database is discarded and
   recreated as the active baseline.
 - An unknown schema family raises an explicit error.

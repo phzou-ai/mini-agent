@@ -86,9 +86,10 @@ CLI input
 - Repeated top-level A2A `messageId` values reuse one durable ingress outcome rather than routing or executing twice.
 - A local Task captures a causal Context input cut; later independent Messages cannot change its initial prompt.
 - A2A routes are API-edge bindings and do not alter LangGraph graph topology or checkpoint semantics.
-- The local metadata store starts from the `main_agent_clean_slate_v1` baseline
-  at schema version `1`. Historical service/session databases are intentionally
-  discarded rather than migrated.
+- The local metadata store belongs to the `main_agent_clean_slate_v1` schema
+  family and currently applies forward migrations through schema version `3`.
+  Historical service/session databases are intentionally discarded rather
+  than migrated.
 - Public errors use a stable `{ code, message, retryable }` contract where a structured error applies.
 - Local trace outputs are not intended for Git.
 - Evaluation replay defaults to recorded trace/scenario data and does not execute a live model or live tools.
@@ -110,7 +111,10 @@ MCP v1 is feature-frozen for the current project scope. The implemented boundary
 - Selected MCP resources are read once at run start and injected as bounded external data.
 - MCP discovery, tool calls, prompt reads, and resource reads use configured operation timeouts.
 - MCP transport errors are surfaced through a dedicated transport error boundary.
-- CLI and API session metadata preserve selected MCP servers, prompts, prompt arguments, and resources.
+- CLI run configuration passes explicitly selected MCP servers, prompts,
+  prompt arguments, and resources into runtime composition. The API-hosted
+  runtime currently uses its configured default tool context; it does not
+  persist per-session MCP selections.
 - The Kubernetes MCP test example under `examples/mcp_servers/k8s/` demonstrates read-only tools, resources, and prompts.
 
 The current MCP implementation is sufficient for validating the runtime
