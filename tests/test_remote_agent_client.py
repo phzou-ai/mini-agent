@@ -62,7 +62,7 @@ def test_direct_a2a_remote_agent_send_message_uses_rpc(monkeypatch):
     assert request.full_url == "http://child-agent.local/rpc"
     assert request.get_method() == "POST"
     assert timeout == 3.0
-    assert payload["method"] == "SendMessage"
+    assert payload["method"] == "message/send"
     assert payload["params"]["message"]["contextId"] == "ctx-1"
     assert payload["params"]["metadata"] == {
         "delegatedBy": "vermay-main-agent",
@@ -105,7 +105,7 @@ def test_direct_a2a_remote_agent_get_task_uses_rpc(monkeypatch):
     assert payload == {
         "jsonrpc": "2.0",
         "id": "get-remote-task-remote-task-1",
-        "method": "GetTask",
+        "method": "tasks/get",
         "params": {"id": "remote-task-1"},
     }
     assert snapshot.task_id == "remote-task-1"
@@ -147,7 +147,7 @@ def test_direct_a2a_remote_agent_cancel_task_uses_rpc(monkeypatch):
     assert payload == {
         "jsonrpc": "2.0",
         "id": "cancel-remote-task-remote-task-1",
-        "method": "CancelTask",
+        "method": "tasks/cancel",
         "params": {"id": "remote-task-1", "reason": "operator"},
     }
     assert snapshot.task_id == "remote-task-1"

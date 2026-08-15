@@ -13,7 +13,9 @@ Vermay 是一个基于 A2A 协议的本地主 Agent runtime。它提供一个主
 - 将合适的请求路由到已注册的子 A2A agent；
 - 提供浏览器 workbench，用于查看会话记录、路由诊断、任务事件、payload 和审批操作。
 
-客户端通过 `/rpc` endpoint 使用 A2A JSON-RPC 与 agent 通信。
+客户端通过 `/rpc` endpoint 使用 A2A `0.3.0` JSON-RPC 与 agent 通信。
+Approval continuation 使用 Agent Card 中声明的 Vermay 扩展方法
+`tasks/resume`。
 
 ## 架构
 
@@ -239,7 +241,8 @@ scripts/a2a_dev_smoke.sh
 
 ## A2A JSON-RPC 示例
 
-`/rpc` endpoint 接收 A2A JSON-RPC 请求。
+`/rpc` endpoint 接收使用 slash-style method name 的 A2A `0.3.0`
+JSON-RPC 请求。
 
 发送 direct message：
 
@@ -249,7 +252,7 @@ curl -X POST http://127.0.0.1:8000/rpc \
   -d '{
     "jsonrpc": "2.0",
     "id": "req-1",
-    "method": "SendMessage",
+    "method": "message/send",
     "params": {
       "message": {
         "kind": "message",
@@ -270,7 +273,7 @@ curl -X POST http://127.0.0.1:8000/rpc \
   -d '{
     "jsonrpc": "2.0",
     "id": "req-2",
-    "method": "SendMessage",
+    "method": "message/send",
     "params": {
       "message": {
         "kind": "message",
@@ -291,7 +294,7 @@ curl -X POST http://127.0.0.1:8000/rpc \
   -d '{
     "jsonrpc": "2.0",
     "id": "req-3",
-    "method": "SendMessage",
+    "method": "message/send",
     "params": {
       "message": {
         "kind": "message",
@@ -309,7 +312,7 @@ curl -X POST http://127.0.0.1:8000/rpc \
 ```bash
 curl -X POST http://127.0.0.1:8000/rpc \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":"req-4","method":"GetTask","params":{"id":"<task-id>"}}'
+  -d '{"jsonrpc":"2.0","id":"req-4","method":"tasks/get","params":{"id":"<task-id>"}}'
 ```
 
 取消 task：
@@ -317,7 +320,7 @@ curl -X POST http://127.0.0.1:8000/rpc \
 ```bash
 curl -X POST http://127.0.0.1:8000/rpc \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":"req-5","method":"CancelTask","params":{"id":"<task-id>","reason":"operator canceled"}}'
+  -d '{"jsonrpc":"2.0","id":"req-5","method":"tasks/cancel","params":{"id":"<task-id>","reason":"operator canceled"}}'
 ```
 
 ## 模型配置
@@ -390,7 +393,7 @@ vermay mcp list-prompts --server k8s
 
 ```bash
 vermay "check k8s status" --mcp-server k8s
-vermay "debug phzou-core service" --mcp-server k8s --mcp-prompt 'k8s-service-health-check?service=phzou-core&namespace=default'
+vermay "debug example-service" --mcp-server k8s --mcp-prompt 'k8s-service-health-check?service=example-service&namespace=default'
 ```
 
 选中的 MCP tools 会被包装成 LangChain `StructuredTool`，并使用类似 `mcp__k8s__kubectl_get` 的命名空间名称。除非 server 或 tool 被标记为 read-only，否则 MCP tools 默认需要 approval。
@@ -403,7 +406,7 @@ vermay "debug phzou-core service" --mcp-server k8s --mcp-prompt 'k8s-service-hea
 
 在 Web UI 中，input-required task 会直接在 transcript 中渲染 approval controls 或补充信息表单。
 
-A2A 调用方通过新的 `SendMessage` 请求提交补充信息，并携带已有 `taskId`。main agent 会恢复同一个 LangGraph `thread_id`，不会再次路由，也不会创建新 task。
+A2A 调用方通过新的 `message/send` 请求提交补充信息，并携带已有 `taskId`。main agent 会恢复同一个 LangGraph `thread_id`，不会再次路由，也不会创建新 task。
 
 在交互式 terminal 中，approval 会自动提示：
 

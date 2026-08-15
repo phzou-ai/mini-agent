@@ -1,8 +1,17 @@
 import type { AgentA2AMessagePayload } from "@/lib/agent/types"
 
+const A2A_METHOD = {
+  messageSend: "message/send",
+  messageStream: "message/stream",
+  taskGet: "tasks/get",
+  taskCancel: "tasks/cancel",
+  taskResubscribe: "tasks/resubscribe",
+  taskResume: "tasks/resume",
+} as const
+
 function buildA2AMessageEnvelope(
   payload: AgentA2AMessagePayload,
-  method: "SendMessage" | "SendStreamingMessage"
+  method: typeof A2A_METHOD.messageSend | typeof A2A_METHOD.messageStream
 ) {
   const requestId = `req-${crypto.randomUUID()}`
   const messageId = payload.messageId || `msg-${crypto.randomUUID()}`
@@ -35,20 +44,20 @@ function buildA2AMessageEnvelope(
 export function buildA2ARpcMessageSendEnvelope(
   payload: AgentA2AMessagePayload
 ) {
-  return buildA2AMessageEnvelope(payload, "SendMessage")
+  return buildA2AMessageEnvelope(payload, A2A_METHOD.messageSend)
 }
 
 export function buildA2ARpcMessageStreamEnvelope(
   payload: AgentA2AMessagePayload
 ) {
-  return buildA2AMessageEnvelope(payload, "SendStreamingMessage")
+  return buildA2AMessageEnvelope(payload, A2A_METHOD.messageStream)
 }
 
 export function buildA2ARpcTaskGetEnvelope(taskId: string) {
   return {
     jsonrpc: "2.0",
     id: `get-task-${crypto.randomUUID()}`,
-    method: "GetTask",
+    method: A2A_METHOD.taskGet,
     params: {
       id: taskId,
     },
@@ -59,7 +68,7 @@ export function buildA2ARpcTaskCancelEnvelope(taskId: string, reason?: string) {
   return {
     jsonrpc: "2.0",
     id: `cancel-task-${crypto.randomUUID()}`,
-    method: "CancelTask",
+    method: A2A_METHOD.taskCancel,
     params: {
       id: taskId,
       ...(reason ? { reason } : {}),
@@ -75,7 +84,7 @@ export function buildA2ARpcTaskResumeEnvelope(
   return {
     jsonrpc: "2.0",
     id: `resume-task-${crypto.randomUUID()}`,
-    method: "tasks/resume",
+    method: A2A_METHOD.taskResume,
     params: {
       id: taskId,
       approved,
@@ -84,14 +93,14 @@ export function buildA2ARpcTaskResumeEnvelope(
   }
 }
 
-export function buildA2ARpcTaskSubscribeEnvelope(
+export function buildA2ARpcTaskResubscribeEnvelope(
   taskId: string,
   afterEventId = 0
 ) {
   return {
     jsonrpc: "2.0",
     id: `subscribe-task-${crypto.randomUUID()}`,
-    method: "SubscribeToTask",
+    method: A2A_METHOD.taskResubscribe,
     params: {
       id: taskId,
       afterEventId,

@@ -33,7 +33,7 @@ from vermay.model_selection import (
 )
 from vermay.storage import AgentStore
 
-from .a2a import A2AAdapter, A2AAdapterConfig, A2AAgentCardConfig, create_a2a_router
+from .a2a import A2AAdapter, create_a2a_router
 from .management_models import (
     ContextUpdateRequest,
     ModelConfigResponse,
@@ -81,10 +81,7 @@ def create_app(
 
     app.include_router(
         create_a2a_router(
-            A2AAdapter(
-                config=A2AAdapterConfig(agent_card=A2AAgentCardConfig(streaming=True)),
-                main_agent_core=main_agent_core,
-            )
+            A2AAdapter(main_agent_core=main_agent_core)
         )
     )
 

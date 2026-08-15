@@ -6,6 +6,12 @@ from typing import Any, Protocol
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
+from vermay.a2a_protocol import (
+    MESSAGE_SEND_METHOD,
+    TASK_CANCEL_METHOD,
+    TASK_GET_METHOD,
+)
+
 from .models import MainAgentRequest, RegisteredAgentRecord
 
 
@@ -75,7 +81,7 @@ class DirectA2ARemoteAgentClient:
         payload = {
             "jsonrpc": "2.0",
             "id": f"delegate-{message_id}",
-            "method": "SendMessage",
+            "method": MESSAGE_SEND_METHOD,
             "params": {
                 "message": {
                     "kind": "message",
@@ -94,7 +100,7 @@ class DirectA2ARemoteAgentClient:
         payload = {
             "jsonrpc": "2.0",
             "id": f"get-remote-task-{task_id}",
-            "method": "GetTask",
+            "method": TASK_GET_METHOD,
             "params": {"id": task_id},
         }
         body, result = self._post_jsonrpc(agent, payload)
@@ -110,7 +116,7 @@ class DirectA2ARemoteAgentClient:
         payload = {
             "jsonrpc": "2.0",
             "id": f"cancel-remote-task-{task_id}",
-            "method": "CancelTask",
+            "method": TASK_CANCEL_METHOD,
             "params": {
                 "id": task_id,
             },

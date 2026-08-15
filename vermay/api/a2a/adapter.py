@@ -25,7 +25,7 @@ from vermay.main_agent.projection import (
 )
 
 from .agent_card import A2AAgentCardConfig, build_agent_card
-from .models import A2AJsonRpcMessageSendRequest, A2AMessage, A2ASendMessageRequest
+from .models import A2AJsonRpcMessageSendRequest, A2AMessage
 
 
 @dataclass(frozen=True)
@@ -62,35 +62,11 @@ class A2AAdapter:
         card["metadata"] = metadata
         return card
 
-    def send_message(self, request: A2ASendMessageRequest, *, wait: bool = True) -> dict[str, Any]:
-        core = self._require_main_agent_core("A2A message/send")
-        # Path-style bindings are only a transport compatibility surface. They
-        # must use the same lifecycle as the JSON-RPC binding.
-        _ = wait  # MainAgentCore owns task scheduling and continuation semantics.
-        message = request.message
-        _validate_jsonrpc_user_message(message)
-        metadata = dict(message.metadata)
-        metadata.update(request.metadata)
-        if message.task_id is not None:
-            task = core.submit_task_input(
-                message.task_id,
-                _main_agent_request(message, metadata=metadata),
-            )
-            return _main_task_payload(task, store=core.store)
-        result = core.handle_message(_main_agent_request(message, metadata=metadata))
-        return _main_agent_result_payload(result, store=core.store)
-
-    def send_message_payload(self, payload: dict[str, Any], *, wait: bool = True) -> dict[str, Any]:
-        if _is_jsonrpc_message_send(payload):
-            return self._send_jsonrpc_message(payload)
-        return self.send_message(A2ASendMessageRequest.model_validate(payload), wait=wait)
+    def send_message_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._send_jsonrpc_message(payload)
 
     def stream_message_payload(self, payload: dict[str, Any]) -> Iterable[dict[str, Any]]:
         core = self._require_main_agent_core("A2A message/stream")
-        if not _is_jsonrpc_message_send(payload):
-            yield self.send_message_payload(payload)
-            return
-
         request_id = payload.get("id")
         params = _jsonrpc_params(payload)
         message = _jsonrpc_message(params)
@@ -229,10 +205,6 @@ def _validate_jsonrpc_user_message(message: A2AMessage) -> None:
     text_parts = [str(part["text"]).strip() for part in message.parts if isinstance(part.get("text"), str)]
     if not any(text_parts):
         raise InvalidRequestError("A2A message must include at least one text part.")
-
-
-def _is_jsonrpc_message_send(payload: dict[str, Any]) -> bool:
-    return payload.get("jsonrpc") == "2.0" or payload.get("method") == "message/send"
 
 
 def _jsonrpc_params(payload: dict[str, Any]) -> dict[str, Any]:

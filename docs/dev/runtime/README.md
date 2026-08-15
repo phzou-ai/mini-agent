@@ -35,7 +35,7 @@ The target is an A2A-native main-agent runtime and inspectable process host. Lan
 | [runtime-evolution-path.md](runtime-evolution-path.md) | Feasibility, stage gates, and strategic sequence from runtime integrity through governed execution, optional planning, and optional distribution. |
 | [Lifecycle And State Ownership](../../architecture/lifecycle-and-state.md) | Normative ownership of identifiers, states, interruptions, and projections. |
 | [Backend Runtime Contracts](../../components/backend/runtime/README.md) | Stable implemented runtime and persistence contracts. |
-| [Single-Host Reliability Matrix](../../operations/single-host-reliability-matrix.md) | Stable deterministic verification coverage used by the active release-baseline refresh. |
+| [Single-Host Reliability Matrix](../../operations/single-host-reliability-matrix.md) | Stable deterministic verification coverage for the single-host release baseline. |
 | [Runtime History](../../history/runtime/README.md) | Completed milestones, dated assessments, and refactor evidence; not an active queue. |
 
 When these documents differ in emphasis, use the roadmap for current priority,
@@ -45,10 +45,10 @@ recorded at that time.
 
 ## Current Phase: Stabilize The Single-Host Runtime
 
-R0 through R3.2 close the currently demonstrated correctness and
-execution-control gaps. There is no active expansion milestone after R3.2.
-The current bounded verification task is
-[S2, Release Baseline Refresh](roadmap.md#active-work-item-s2-release-baseline-refresh).
+R0 through R3.2 close the demonstrated correctness and execution-control gaps.
+S2 and S3 are closed, and no runtime expansion milestone is active. The
+current protocol baseline is recorded under
+[S3, Protocol Surface Governance](roadmap.md#closed-work-item-s3-protocol-surface-governance).
 The roadmap also owns the
 [latest durable handoff](roadmap.md#current-handoff). This index intentionally
 does not maintain another implementation-status table or validation record.
@@ -67,9 +67,9 @@ execution, sandboxes, persistent plan DAGs, distributed scheduling, new Agent
 OS services, and task final-answer streaming are not active work merely
 because they are described elsewhere in these documents.
 
-R3, R4, and R5 are conditional capability maps. They become implementation
-work only when their documented workload signals are present and a bounded
-scope is recorded before code changes begin.
+Broader R3, R4, and R5 stages are conditional capability maps. They become
+implementation work only when their documented workload signals are present
+and a bounded scope is recorded before code changes begin.
 
 ## Guardrails
 

@@ -30,7 +30,7 @@ def send_rpc_message(client: TestClient, *, request_id: str, message_id: str, te
         json={
             "jsonrpc": "2.0",
             "id": request_id,
-            "method": "SendMessage",
+            "method": "message/send",
             "params": {
                 "message": {
                     "kind": "message",

@@ -94,11 +94,56 @@ print(json.dumps({
 PY
 }
 
+wait_for_completed_task() {
+  local task_id="$1"
+  local timeout_seconds="${2:-180}"
+  local deadline=$((SECONDS + timeout_seconds))
+  local response
+  local state
+
+  while ((SECONDS < deadline)); do
+    response="$(
+      post_json "$BASE_URL/rpc" "{\"jsonrpc\":\"2.0\",\"id\":\"get-smoke-$RUN_ID\",\"method\":\"tasks/get\",\"params\":{\"id\":\"$task_id\"}}"
+    )"
+    state="$(printf '%s' "$response" | json_value "result.status.state")"
+    case "$state" in
+      completed)
+        printf '%s' "$response"
+        return 0
+        ;;
+      failed|canceled|rejected|input-required|auth-required)
+        echo "task reached unexpected state while waiting for completion: id=$task_id state=$state" >&2
+        echo "$response" >&2
+        return 1
+        ;;
+    esac
+    sleep 1
+  done
+
+  echo "task did not complete within ${timeout_seconds}s: id=$task_id" >&2
+  return 1
+}
+
 echo "A2A smoke: backend=$BASE_URL"
-echo "Checking path-style compatibility routes"
+echo "Checking canonical /rpc surface"
+
+agent_card="$(curl -fsS "$BASE_URL/.well-known/agent-card.json")"
+printf '%s' "$agent_card" | python -c 'import json, sys
+card = json.load(sys.stdin)
+assert card.get("protocolVersion") == "0.3.0", card
+assert card.get("preferredTransport") == "JSONRPC", card
+assert card.get("url", "").endswith("/rpc"), card
+extensions = card.get("capabilities", {}).get("extensions", [])
+if not any(
+    item.get("uri") == "urn:vermay:a2a:task-approval-resume:0.1"
+    and item.get("params", {}).get("method") == "tasks/resume"
+    for item in extensions
+    if isinstance(item, dict)
+):
+    raise SystemExit(f"missing Vermay task-resume extension: {card}")'
 
 message_response="$(
-  post_json "$BASE_URL/message:send" "$(
+  post_json "$BASE_URL/rpc" "$(
     message_send_payload "smoke-message-$RUN_ID" "msg-smoke-message-$RUN_ID" "hello smoke" "message"
   )"
 )"
@@ -109,56 +154,30 @@ if [[ "$message_kind" != "message" ]]; then
 fi
 
 task_response="$(
-  post_json "$BASE_URL/message:send" "$(
-    message_send_payload "smoke-task-$RUN_ID" "msg-smoke-task-$RUN_ID" "run smoke task" "task"
+  post_json "$BASE_URL/rpc" "$(
+    message_send_payload "smoke-task-$RUN_ID" "msg-smoke-task-$RUN_ID" "Reply with exactly: task smoke passed" "task"
   )"
 )"
 task_id="$(printf '%s' "$task_response" | json_value "result.id")"
 task_state="$(printf '%s' "$task_response" | json_value "result.status.state")"
-if [[ -z "$task_id" || "$task_state" != "completed" ]]; then
-  echo "expected completed task, got id=$task_id state=$task_state" >&2
+if [[ -z "$task_id" || "$task_state" == "failed" || "$task_state" == "canceled" || "$task_state" == "rejected" ]]; then
+  echo "expected accepted task, got id=$task_id state=$task_state" >&2
   exit 1
 fi
 
-get_response="$(curl -fsS "$BASE_URL/tasks/$task_id")"
+get_response="$(wait_for_completed_task "$task_id")"
 get_task_id="$(printf '%s' "$get_response" | json_value "result.id")"
 if [[ "$get_task_id" != "$task_id" ]]; then
   echo "task get mismatch: expected=$task_id got=$get_task_id" >&2
   exit 1
 fi
 
-echo "Checking canonical /rpc routes"
-
-rpc_message_response="$(
-  post_json "$BASE_URL/rpc" "$(
-    message_send_payload "rpc-smoke-message-$RUN_ID" "msg-rpc-smoke-message-$RUN_ID" "hello rpc smoke" "message" \
-      | python -c 'import json, sys
-payload = json.load(sys.stdin)
-payload["method"] = "SendMessage"
-print(json.dumps(payload, separators=(",", ":")))'
-  )"
-)"
-rpc_message_kind="$(printf '%s' "$rpc_message_response" | json_value "result.kind")"
-if [[ "$rpc_message_kind" != "message" ]]; then
-  echo "expected rpc message result, got: $rpc_message_kind" >&2
-  exit 1
-fi
-
-rpc_get_response="$(
-  post_json "$BASE_URL/rpc" "{\"jsonrpc\":\"2.0\",\"id\":\"rpc-get-smoke-$RUN_ID\",\"method\":\"GetTask\",\"params\":{\"id\":\"$task_id\"}}"
-)"
-rpc_get_task_id="$(printf '%s' "$rpc_get_response" | json_value "result.id")"
-if [[ "$rpc_get_task_id" != "$task_id" ]]; then
-  echo "rpc task get mismatch: expected=$task_id got=$rpc_get_task_id" >&2
-  exit 1
-fi
-
 rpc_stream_response="$(
   post_json "$BASE_URL/rpc" "$(
-    message_send_payload "rpc-stream-smoke-$RUN_ID" "msg-rpc-stream-smoke-$RUN_ID" "run rpc stream smoke task" "task" \
+    message_send_payload "rpc-stream-smoke-$RUN_ID" "msg-rpc-stream-smoke-$RUN_ID" "Reply with exactly: stream smoke passed" "task" \
       | python -c 'import json, sys
 payload = json.load(sys.stdin)
-payload["method"] = "SendStreamingMessage"
+payload["method"] = "message/stream"
 print(json.dumps(payload, separators=(",", ":")))'
   )"
 )"
@@ -168,30 +187,16 @@ require_contains "$rpc_stream_response" "event: status-update"
 require_contains "$rpc_stream_response" "\"id\": \"rpc-stream-smoke-$RUN_ID\""
 
 rpc_subscribe_response="$(
-  post_json "$BASE_URL/rpc" "{\"jsonrpc\":\"2.0\",\"id\":\"rpc-subscribe-smoke-$RUN_ID\",\"method\":\"SubscribeToTask\",\"params\":{\"id\":\"$task_id\",\"afterEventId\":0}}"
+  post_json "$BASE_URL/rpc" "{\"jsonrpc\":\"2.0\",\"id\":\"rpc-subscribe-smoke-$RUN_ID\",\"method\":\"tasks/resubscribe\",\"params\":{\"id\":\"$task_id\",\"afterEventId\":0}}"
 )"
 require_contains "$rpc_subscribe_response" "event: artifact-update"
 require_contains "$rpc_subscribe_response" "event: status-update"
 require_contains "$rpc_subscribe_response" "\"id\": \"rpc-subscribe-smoke-$RUN_ID\""
 
-subscribe_response="$(curl -fsS -X POST "$BASE_URL/tasks/${task_id}:subscribe")"
-require_contains "$subscribe_response" "event: artifact-update"
-require_contains "$subscribe_response" "event: status-update"
-require_contains "$subscribe_response" '"state": "completed"'
-
-cancel_error="$(
-  curl -sS -X POST "$BASE_URL/tasks/${task_id}:cancel" \
-    -H "Content-Type: application/json" \
-    --data "{\"jsonrpc\":\"2.0\",\"id\":\"cancel-smoke-$RUN_ID\",\"method\":\"tasks/cancel\",\"params\":{\"id\":\"$task_id\",\"reason\":\"too late\"}}"
-)"
-require_contains "$cancel_error" "\"id\":\"cancel-smoke-$RUN_ID\""
-require_contains "$cancel_error" '"localCode":"invalid_session_state"'
-require_contains "$cancel_error" '"errorInfo"'
-
 rpc_cancel_error="$(
   curl -sS -X POST "$BASE_URL/rpc" \
     -H "Content-Type: application/json" \
-    --data "{\"jsonrpc\":\"2.0\",\"id\":\"rpc-cancel-smoke-$RUN_ID\",\"method\":\"CancelTask\",\"params\":{\"id\":\"$task_id\",\"reason\":\"too late\"}}"
+    --data "{\"jsonrpc\":\"2.0\",\"id\":\"rpc-cancel-smoke-$RUN_ID\",\"method\":\"tasks/cancel\",\"params\":{\"id\":\"$task_id\",\"reason\":\"too late\"}}"
 )"
 require_contains "$rpc_cancel_error" "\"id\":\"rpc-cancel-smoke-$RUN_ID\""
 require_contains "$rpc_cancel_error" '"localCode":"invalid_session_state"'
@@ -199,6 +204,12 @@ require_contains "$rpc_cancel_error" '"errorInfo"'
 
 echo "A2A backend smoke passed: task=$task_id"
 
+require_http_status 404 "$BASE_URL/message:send" POST
+require_http_status 404 "$BASE_URL/message:stream" POST
+require_http_status 404 "$BASE_URL/tasks/$task_id"
+require_http_status 404 "$BASE_URL/tasks/${task_id}:cancel" POST
+require_http_status 404 "$BASE_URL/tasks/${task_id}:resume" POST
+require_http_status 404 "$BASE_URL/tasks/${task_id}:subscribe" POST
 require_http_status 404 "$BASE_URL/api/sessions"
 require_http_status 404 "$BASE_URL/api/tasks/$task_id"
 require_http_status 404 "$BASE_URL/api/tasks/$task_id/events"
@@ -220,7 +231,6 @@ if [[ -n "$CHILD_AGENT_A2A_BASE_URL" ]]; then
         | python -c 'import json, sys
 target_agent_id = sys.argv[1]
 payload = json.load(sys.stdin)
-payload["method"] = "SendMessage"
 payload["params"]["metadata"]["route"] = "remote_agent"
 payload["params"]["metadata"]["targetAgentId"] = target_agent_id
 print(json.dumps(payload, separators=(",", ":")))' "$child_agent_id"

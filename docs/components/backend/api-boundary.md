@@ -34,21 +34,8 @@ POST /rpc
 
 Agent operations use A2A JSON-RPC methods through `/rpc`. Child-agent delegation in `vermay/main_agent/remote_agent.py` uses the same boundary.
 
-The server also exposes supported path-style A2A bindings. They are thin
-transport adapters over the same `MainAgentCore` lifecycle owner; they do not
-define a second execution path:
-
-```text
-POST /message:send
-POST /message:stream
-GET  /tasks/{task_id}
-POST /tasks/{task_id}:cancel
-POST /tasks/{task_id}:resume
-POST /tasks/{task_id}:subscribe
-```
-
-Use `/rpc` for new integrations. The path-style bindings remain part of the
-tested service surface until a separate compatibility decision removes them.
+The service implements the A2A `0.3.0` JSON-RPC binding. Unadvertised
+path-style agent routes are not part of the service surface.
 
 ## JSON-RPC Methods
 
@@ -57,13 +44,18 @@ tested service surface until a separate compatibility decision removes them.
 Supported canonical methods:
 
 ```text
-SendMessage
-SendStreamingMessage
-GetTask
-CancelTask
-SubscribeToTask
+message/send
+message/stream
+tasks/get
+tasks/cancel
+tasks/resubscribe
 tasks/resume
 ```
+
+`tasks/resume` is a Vermay extension for explicit approval continuation. The
+Agent Card advertises it under `capabilities.extensions` with URI
+`urn:vermay:a2a:task-approval-resume:0.1`. The other methods above are the A2A
+`0.3.0` JSON-RPC method names.
 
 Batch arrays are intentionally rejected until single-request usage has completed one review and burn-in pass.
 
@@ -94,7 +86,7 @@ curl -X POST http://127.0.0.1:8000/rpc \
   -d '{
     "jsonrpc": "2.0",
     "id": "req-message-1",
-    "method": "SendMessage",
+    "method": "message/send",
     "params": {
       "message": {
         "kind": "message",
@@ -115,7 +107,7 @@ curl -X POST http://127.0.0.1:8000/rpc \
   -d '{
     "jsonrpc": "2.0",
     "id": "req-task-1",
-    "method": "SendMessage",
+    "method": "message/send",
     "params": {
       "message": {
         "kind": "message",
@@ -138,13 +130,13 @@ task
 
 Registered child-agent routing can be requested with route metadata such as `targetAgentId`.
 
-If a task is in `input-required` because the model requested missing information, continue it with another `SendMessage`. Put the existing `taskId` on the user message; `contextId` may be omitted and will be inferred from the task.
+If a task is in `input-required` because the model requested missing information, continue it with another `message/send`. Put the existing `taskId` on the user message; `contextId` may be omitted and will be inferred from the task.
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": "req-input-1",
-  "method": "SendMessage",
+  "method": "message/send",
   "params": {
     "message": {
       "kind": "message",
@@ -164,7 +156,7 @@ This resumes the existing LangGraph checkpoint and bypasses routing. A supplied 
 ```bash
 curl -X POST http://127.0.0.1:8000/rpc \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":"req-get-1","method":"GetTask","params":{"id":"<task-id>"}}'
+  -d '{"jsonrpc":"2.0","id":"req-get-1","method":"tasks/get","params":{"id":"<task-id>"}}'
 ```
 
 ## Task Events
@@ -174,7 +166,7 @@ Subscribe through `/rpc`:
 ```bash
 curl -N -X POST http://127.0.0.1:8000/rpc \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":"req-subscribe-1","method":"SubscribeToTask","params":{"id":"<task-id>","afterEventId":0}}'
+  -d '{"jsonrpc":"2.0","id":"req-subscribe-1","method":"tasks/resubscribe","params":{"id":"<task-id>","afterEventId":0}}'
 ```
 
 SSE streams replay persisted task events and then stop at a terminal, `input-required`, or `auth-required` task state.
@@ -195,7 +187,7 @@ Streams do not expose raw graph state, raw prompts, raw model output, or full to
 ```bash
 curl -X POST http://127.0.0.1:8000/rpc \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":"req-cancel-1","method":"CancelTask","params":{"id":"<task-id>","reason":"operator requested"}}'
+  -d '{"jsonrpc":"2.0","id":"req-cancel-1","method":"tasks/cancel","params":{"id":"<task-id>","reason":"operator requested"}}'
 ```
 
 Terminal tasks return `invalid_session_state` when cancellation is no longer allowed.
@@ -318,5 +310,6 @@ Use a separate child-agent process/port for this check. Do not point `CHILD_AGEN
 
 - `/rpc` supports single-request JSON-RPC only.
 - JSON-RPC batch requests are rejected.
-- Task approval resume is exposed as the `tasks/resume` JSON-RPC method.
+- Task approval resume is exposed as the Agent Card-declared Vermay extension
+  method `tasks/resume`.
 - The local default server has no authentication.

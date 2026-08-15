@@ -16,13 +16,6 @@ class A2AMessage(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class A2ASendMessageRequest(BaseModel):
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
-
-    message: A2AMessage
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
 class A2AJsonRpcMessageSendRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 

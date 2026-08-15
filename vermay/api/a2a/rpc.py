@@ -149,7 +149,7 @@ def rpc_params(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def rpc_task_id(params: dict[str, Any]) -> str:
-    task_id = params.get("id", params.get("taskId"))
+    task_id = params.get("id")
     if not isinstance(task_id, str) or not task_id:
         raise ValueError("JSON-RPC params.id must be a non-empty string.")
     return task_id
@@ -160,10 +160,6 @@ def rpc_after_event_id(params: dict[str, Any]) -> int:
     if not isinstance(after_event_id, int) or after_event_id < 0:
         raise ValueError("JSON-RPC params.afterEventId must be a non-negative integer.")
     return after_event_id
-
-
-def is_jsonrpc_request(payload: dict[str, Any]) -> bool:
-    return payload.get("jsonrpc") == "2.0" or payload.get("method") is not None
 
 
 def _jsonrpc_error_code(code: AgentErrorCode) -> int:

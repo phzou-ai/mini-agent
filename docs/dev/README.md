@@ -21,9 +21,9 @@ The Runtime roadmap owns the current engineering priority. Completed runtime
 and maintenance records live under [Historical Evidence](../history/README.md)
 and do not authorize more implementation by themselves.
 
-The current bounded work item is S2, the release baseline refresh. Its scope,
-acceptance criteria, and latest durable handoff are maintained in the
-[Runtime roadmap](runtime/roadmap.md#active-work-item-s2-release-baseline-refresh).
+No runtime expansion work item is active. The closed S3 protocol-surface
+baseline, acceptance evidence, and latest durable handoff are maintained in
+the [Runtime roadmap](runtime/roadmap.md#closed-work-item-s3-protocol-surface-governance).
 
 ## Rules
 

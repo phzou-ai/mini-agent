@@ -182,6 +182,42 @@ def jsonrpc_error_data(local_code: str) -> dict:
     }
 
 
+def rpc_get_task(client: TestClient, task_id: str):
+    return client.post(
+        "/rpc",
+        json={
+            "jsonrpc": "2.0",
+            "id": f"get-{task_id}",
+            "method": "tasks/get",
+            "params": {"id": task_id},
+        },
+    )
+
+
+def rpc_cancel_task(client: TestClient, task_id: str, *, reason: str | None = None):
+    return client.post(
+        "/rpc",
+        json={
+            "jsonrpc": "2.0",
+            "id": f"cancel-{task_id}",
+            "method": "tasks/cancel",
+            "params": {"id": task_id, **({"reason": reason} if reason else {})},
+        },
+    )
+
+
+def rpc_resubscribe_task(client: TestClient, task_id: str, *, after_event_id: int = 0):
+    return client.post(
+        "/rpc",
+        json={
+            "jsonrpc": "2.0",
+            "id": f"resubscribe-{task_id}",
+            "method": "tasks/resubscribe",
+            "params": {"id": task_id, "afterEventId": after_event_id},
+        },
+    )
+
+
 def test_a2a_agent_card_declares_local_skeleton_capabilities(tmp_path):
     adapter, store = make_adapter(tmp_path)
 
@@ -189,12 +225,19 @@ def test_a2a_agent_card_declares_local_skeleton_capabilities(tmp_path):
 
     assert card["name"] == "Vermay"
     assert card["url"] == "http://127.0.0.1:8000/rpc"
+    assert card["protocolVersion"] == "0.3.0"
     assert card["preferredTransport"] == "JSONRPC"
-    assert card["capabilities"] == {
-        "streaming": False,
-        "pushNotifications": False,
-        "extendedAgentCard": False,
-    }
+    assert card["capabilities"]["streaming"] is True
+    assert card["capabilities"]["pushNotifications"] is False
+    assert card["capabilities"]["extensions"] == [
+        {
+            "uri": "urn:vermay:a2a:task-approval-resume:0.1",
+            "description": "Resume a local task waiting for explicit operator approval.",
+            "required": False,
+            "params": {"method": "tasks/resume", "version": "0.1"},
+        }
+    ]
+    assert card["supportsAuthenticatedExtendedCard"] is False
     assert card["securitySchemes"] == {}
     assert card["security"] == []
     assert card["defaultInputModes"] == ["text/plain"]
@@ -246,7 +289,7 @@ def test_a2a_agent_card_includes_enabled_registered_agent_summaries(tmp_path):
     store.close()
 
 
-def test_a2a_routes_are_exposed_by_the_default_app(tmp_path):
+def test_default_app_exposes_only_agent_card_and_jsonrpc_a2a_surface(tmp_path):
     store = AgentStore(tmp_path / "agent.sqlite")
     core = MainAgentCore(
         store=MainAgentStore(store),
@@ -257,18 +300,32 @@ def test_a2a_routes_are_exposed_by_the_default_app(tmp_path):
 
     card = client.get("/.well-known/agent-card.json")
     sent = client.post(
-        "/message:send",
+        "/rpc",
         json={
-            "message": {
-                "role": "user",
-                "parts": [{"text": "weather forecast for Beijing"}],
+            "jsonrpc": "2.0",
+            "id": "req-task",
+            "method": "message/send",
+            "params": {
+                "message": {
+                    "kind": "message",
+                    "role": "user",
+                    "messageId": "msg-task",
+                    "parts": [{"kind": "text", "text": "weather forecast for Beijing"}],
+                },
+                "metadata": {"executionMode": "task"},
             },
-            "metadata": {"executionMode": "task"},
         },
     )
-    task_id = sent.json()["id"]
-    fetched = client.get(f"/tasks/{task_id}")
-    legacy_local_fetched = client.get(f"/api/tasks/{task_id}")
+    task_id = sent.json()["result"]["id"]
+    fetched = rpc_get_task(client, task_id)
+    removed_bindings = [
+        client.post("/message:send", json={}),
+        client.post("/message:stream", json={}),
+        client.get(f"/tasks/{task_id}"),
+        client.post(f"/tasks/{task_id}:cancel", json={}),
+        client.post(f"/tasks/{task_id}:resume", json={}),
+        client.post(f"/tasks/{task_id}:subscribe", json={}),
+    ]
 
     assert card.status_code == 200
     assert card.json()["capabilities"]["streaming"] is True
@@ -279,17 +336,17 @@ def test_a2a_routes_are_exposed_by_the_default_app(tmp_path):
     ]
     assert card.json()["metadata"]["routeKinds"] == ["local_message", "local_task", "remote_agent"]
     assert sent.status_code == 200
-    assert sent.json()["kind"] == "task"
-    assert sent.json()["status"]["state"] == "completed"
-    assert sent.json()["contextId"].startswith("ctx-")
-    assert sent.json()["metadata"]["localStatus"] == "completed"
+    result = sent.json()["result"]
+    assert result["kind"] == "task"
+    assert result["status"]["state"] == "completed"
+    assert result["contextId"].startswith("ctx-")
+    assert result["metadata"]["localStatus"] == "completed"
     assert "thread_id" not in str(sent.json()).lower()
-    assert sent.json()["metadata"]["localThreadId"].startswith("thread-")
+    assert result["metadata"]["localThreadId"].startswith("thread-")
     assert fetched.status_code == 200
     assert fetched.json()["jsonrpc"] == "2.0"
     assert fetched.json()["result"]["id"] == task_id
-    assert legacy_local_fetched.status_code == 404
-    assert legacy_local_fetched.json() == {"detail": "Not Found"}
+    assert all(response.status_code == 404 for response in removed_bindings)
     store.close()
 
 
@@ -304,7 +361,7 @@ def test_create_app_with_fake_main_agent_supports_a2a_message_task_get_and_subsc
     client = TestClient(create_app(main_agent_core=core))
 
     message_response = client.post(
-        "/message:send",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-message",
@@ -321,7 +378,7 @@ def test_create_app_with_fake_main_agent_supports_a2a_message_task_get_and_subsc
         },
     )
     task_response = client.post(
-        "/message:send",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-task",
@@ -338,8 +395,8 @@ def test_create_app_with_fake_main_agent_supports_a2a_message_task_get_and_subsc
         },
     )
     task_id = task_response.json()["result"]["id"]
-    fetched = client.get(f"/tasks/{task_id}")
-    subscribed = client.post(f"/tasks/{task_id}:subscribe")
+    fetched = rpc_get_task(client, task_id)
+    subscribed = rpc_resubscribe_task(client, task_id)
 
     assert message_response.status_code == 200
     assert message_response.json()["result"]["kind"] == "message"
@@ -369,7 +426,7 @@ def test_create_app_with_fake_main_agent_can_hold_and_cancel_task(tmp_path):
     client = TestClient(create_app(main_agent_core=core))
 
     task_response = client.post(
-        "/message:send",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-task",
@@ -386,8 +443,8 @@ def test_create_app_with_fake_main_agent_can_hold_and_cancel_task(tmp_path):
         },
     )
     task_id = task_response.json()["result"]["id"]
-    canceled = client.post(f"/tasks/{task_id}:cancel", json={"reason": "operator requested"})
-    subscribed = client.post(f"/tasks/{task_id}:subscribe")
+    canceled = rpc_cancel_task(client, task_id, reason="operator requested")
+    subscribed = rpc_resubscribe_task(client, task_id)
 
     assert task_response.status_code == 200
     assert task_response.json()["result"]["kind"] == "task"
@@ -446,7 +503,7 @@ def test_a2a_route_jsonrpc_message_send_uses_injected_main_agent_core(tmp_path):
     client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
-        "/message:send",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-1",
@@ -497,7 +554,7 @@ def test_a2a_route_jsonrpc_remote_agent_message_is_projected(tmp_path):
     client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
-        "/message:send",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-remote",
@@ -565,7 +622,7 @@ def test_a2a_route_jsonrpc_remote_agent_task_is_projected_as_proxy_task(tmp_path
     client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
-        "/message:send",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-remote",
@@ -583,10 +640,10 @@ def test_a2a_route_jsonrpc_remote_agent_task_is_projected_as_proxy_task(tmp_path
     )
     task_id = sent.json()["result"]["id"]
 
-    fetched = client.get(f"/tasks/{task_id}")
+    fetched = rpc_get_task(client, task_id)
     delegations_response = client.get(f"/api/contexts/{sent.json()['result']['contextId']}/delegations")
-    canceled = client.post(f"/tasks/{task_id}:cancel", json={"reason": "test cleanup"})
-    subscribed = client.post(f"/tasks/{task_id}:subscribe")
+    canceled = rpc_cancel_task(client, task_id, reason="test cleanup")
+    subscribed = rpc_resubscribe_task(client, task_id)
 
     assert sent.status_code == 200
     assert sent.json()["result"]["kind"] == "task"
@@ -648,7 +705,7 @@ def test_a2a_route_jsonrpc_remote_proxy_task_get_syncs_remote_status(tmp_path):
     )
     client = TestClient(create_app(main_agent_core=core))
     sent = client.post(
-        "/message:send",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-remote",
@@ -666,8 +723,8 @@ def test_a2a_route_jsonrpc_remote_proxy_task_get_syncs_remote_status(tmp_path):
     )
     task_id = sent.json()["result"]["id"]
 
-    fetched = client.get(f"/tasks/{task_id}")
-    fetched_again = client.get(f"/tasks/{task_id}")
+    fetched = rpc_get_task(client, task_id)
+    fetched_again = rpc_get_task(client, task_id)
 
     assert fetched.status_code == 200
     assert fetched_again.status_code == 200
@@ -736,7 +793,7 @@ def test_a2a_route_jsonrpc_remote_proxy_ignores_stale_status_regression(tmp_path
     client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
-        "/message:send",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-remote",
@@ -754,8 +811,8 @@ def test_a2a_route_jsonrpc_remote_proxy_ignores_stale_status_regression(tmp_path
     )
     task_id = sent.json()["result"]["id"]
 
-    first = client.get(f"/tasks/{task_id}")
-    second = client.get(f"/tasks/{task_id}")
+    first = rpc_get_task(client, task_id)
+    second = rpc_get_task(client, task_id)
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -819,7 +876,7 @@ def test_a2a_route_jsonrpc_remote_proxy_ignores_terminal_regression(tmp_path):
     client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
-        "/message:send",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-remote",
@@ -837,8 +894,8 @@ def test_a2a_route_jsonrpc_remote_proxy_ignores_terminal_regression(tmp_path):
     )
     task_id = sent.json()["result"]["id"]
 
-    first = client.get(f"/tasks/{task_id}")
-    second = client.get(f"/tasks/{task_id}")
+    first = rpc_get_task(client, task_id)
+    second = rpc_get_task(client, task_id)
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -889,7 +946,7 @@ def test_a2a_route_jsonrpc_remote_proxy_task_cancel_forwards_to_remote_agent(tmp
     )
     client = TestClient(create_app(main_agent_core=core))
     sent = client.post(
-        "/message:send",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-remote",
@@ -907,7 +964,7 @@ def test_a2a_route_jsonrpc_remote_proxy_task_cancel_forwards_to_remote_agent(tmp
     )
     task_id = sent.json()["result"]["id"]
 
-    canceled = client.post(f"/tasks/{task_id}:cancel", json={"reason": "operator"})
+    canceled = rpc_cancel_task(client, task_id, reason="operator")
 
     assert canceled.status_code == 200
     assert canceled.json()["result"]["status"]["state"] == "canceled"
@@ -927,7 +984,7 @@ def test_a2a_route_jsonrpc_errors_use_jsonrpc_error_envelope(tmp_path):
     client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
-        "/message:send",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-1",
@@ -992,7 +1049,7 @@ def test_a2a_route_jsonrpc_message_validation_errors_are_jsonrpc_errors(
     client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
-        "/message:send",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-invalid-message",
@@ -1053,7 +1110,7 @@ def test_a2a_route_jsonrpc_message_shape_errors_are_jsonrpc_errors(
     client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
-        "/message:send",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-invalid-message-shape",
@@ -1075,71 +1132,18 @@ def test_a2a_route_jsonrpc_message_shape_errors_are_jsonrpc_errors(
     agent_store.close()
 
 
-@pytest.mark.parametrize(
-    ("payload", "message"),
-    [
-        (
-            {
-                "jsonrpc": "2.0",
-                "id": "req-1",
-                "method": "message/send",
-                "params": [],
-            },
-            "JSON-RPC params must be an object.",
-        ),
-        (
-            {
-                "jsonrpc": "2.0",
-                "id": "req-1",
-                "method": "tasks/get",
-                "params": {},
-            },
-            "JSON-RPC method must be 'message/send'.",
-        ),
-        (
-            {
-                "jsonrpc": "1.0",
-                "id": "req-1",
-                "method": "message/send",
-                "params": {},
-            },
-            "JSON-RPC request jsonrpc must be '2.0'.",
-        ),
-    ],
-)
-def test_a2a_route_jsonrpc_envelope_validation_errors_are_jsonrpc_errors(tmp_path, payload, message):
-    agent_store = AgentStore(tmp_path / "agent.sqlite")
-    main_store = MainAgentStore(agent_store)
-    core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
-    client = TestClient(create_app(main_agent_core=core))
-
-    response = client.post("/message:send", json=payload)
-
-    assert response.status_code == 400
-    assert response.json() == {
-        "jsonrpc": "2.0",
-        "id": "req-1",
-        "error": {
-            "code": -32602,
-            "message": message,
-            "data": jsonrpc_error_data("invalid_request"),
-        },
-    }
-    agent_store.close()
-
-
-def test_a2a_route_message_stream_emits_local_message_result(tmp_path):
+def test_a2a_rpc_message_stream_emits_local_message_result(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
     client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
-        "/message:stream",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-stream-message",
-            "method": "message/send",
+            "method": "message/stream",
             "params": {
                 "message": {
                     "kind": "message",
@@ -1161,7 +1165,7 @@ def test_a2a_route_message_stream_emits_local_message_result(tmp_path):
     agent_store.close()
 
 
-def test_a2a_route_message_stream_emits_local_task_events(tmp_path):
+def test_a2a_rpc_message_stream_emits_local_task_events(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(
@@ -1172,11 +1176,11 @@ def test_a2a_route_message_stream_emits_local_task_events(tmp_path):
     client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
-        "/message:stream",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-stream-task",
-            "method": "message/send",
+            "method": "message/stream",
             "params": {
                 "message": {
                     "kind": "message",
@@ -1284,18 +1288,18 @@ def test_a2a_rpc_stream_ignores_trailing_failure_after_terminal_task_event(monke
     assert "event: error" not in events[0]
 
 
-def test_a2a_route_message_stream_emits_jsonrpc_error_event(tmp_path):
+def test_a2a_rpc_message_stream_emits_jsonrpc_error_event(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
     client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
-        "/message:stream",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-stream-error",
-            "method": "tasks/get",
+            "method": "message/stream",
             "params": {},
         },
     )
@@ -1303,7 +1307,7 @@ def test_a2a_route_message_stream_emits_jsonrpc_error_event(tmp_path):
     assert response.status_code == 200
     assert "event: error" in response.text
     assert '"id": "req-stream-error"' in response.text
-    assert "JSON-RPC method must be" in response.text
+    assert "JSON-RPC params.message must be an object." in response.text
     agent_store.close()
 
 
@@ -1318,7 +1322,7 @@ def test_a2a_rpc_masks_model_provider_details_and_preserves_retryability(tmp_pat
         json={
             "jsonrpc": "2.0",
             "id": "req-model-error",
-            "method": "SendMessage",
+            "method": "message/send",
             "params": {
                 "message": {
                     "kind": "message",
@@ -1350,18 +1354,18 @@ def test_a2a_rpc_masks_model_provider_details_and_preserves_retryability(tmp_pat
     agent_store.close()
 
 
-def test_a2a_route_message_stream_emits_jsonrpc_error_event_for_invalid_message(tmp_path):
+def test_a2a_rpc_message_stream_emits_jsonrpc_error_event_for_invalid_message(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
     client = TestClient(create_app(main_agent_core=core))
 
     response = client.post(
-        "/message:stream",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-stream-invalid-message",
-            "method": "message/send",
+            "method": "message/stream",
             "params": {
                 "message": {
                     "kind": "message",
@@ -1389,7 +1393,7 @@ def test_a2a_route_jsonrpc_local_task_get_cancel_and_subscribe(tmp_path):
     client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
-        "/message:send",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-task",
@@ -1407,9 +1411,9 @@ def test_a2a_route_jsonrpc_local_task_get_cancel_and_subscribe(tmp_path):
     )
     task_id = sent.json()["result"]["id"]
 
-    fetched = client.get(f"/tasks/{task_id}")
-    canceled = client.post(f"/tasks/{task_id}:cancel", json={"reason": "test cleanup"})
-    subscribed = client.post(f"/tasks/{task_id}:subscribe")
+    fetched = rpc_get_task(client, task_id)
+    canceled = rpc_cancel_task(client, task_id, reason="test cleanup")
+    subscribed = rpc_resubscribe_task(client, task_id)
 
     assert sent.status_code == 200
     assert sent.json()["result"]["kind"] == "task"
@@ -1424,7 +1428,7 @@ def test_a2a_route_jsonrpc_local_task_get_cancel_and_subscribe(tmp_path):
     agent_store.close()
 
 
-def test_a2a_rpc_send_message_supports_pascal_case_method(tmp_path):
+def test_a2a_rpc_send_message_uses_a2a_03_method(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
@@ -1435,7 +1439,7 @@ def test_a2a_rpc_send_message_supports_pascal_case_method(tmp_path):
         json={
             "jsonrpc": "2.0",
             "id": "rpc-send-1",
-            "method": "SendMessage",
+            "method": "message/send",
             "params": {
                 "message": {
                     "kind": "message",
@@ -1457,7 +1461,7 @@ def test_a2a_rpc_send_message_supports_pascal_case_method(tmp_path):
     agent_store.close()
 
 
-def test_a2a_rpc_get_and_cancel_task_support_pascal_case_methods(tmp_path):
+def test_a2a_rpc_get_and_cancel_task_use_a2a_03_methods(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
@@ -1468,7 +1472,7 @@ def test_a2a_rpc_get_and_cancel_task_support_pascal_case_methods(tmp_path):
         json={
             "jsonrpc": "2.0",
             "id": "rpc-task-1",
-            "method": "SendMessage",
+            "method": "message/send",
             "params": {
                 "message": {
                     "kind": "message",
@@ -1487,7 +1491,7 @@ def test_a2a_rpc_get_and_cancel_task_support_pascal_case_methods(tmp_path):
         json={
             "jsonrpc": "2.0",
             "id": "rpc-get-1",
-            "method": "GetTask",
+            "method": "tasks/get",
             "params": {"id": task_id},
         },
     )
@@ -1496,7 +1500,7 @@ def test_a2a_rpc_get_and_cancel_task_support_pascal_case_methods(tmp_path):
         json={
             "jsonrpc": "2.0",
             "id": "rpc-cancel-1",
-            "method": "CancelTask",
+            "method": "tasks/cancel",
             "params": {"id": task_id, "reason": "operator"},
         },
     )
@@ -1532,7 +1536,7 @@ def test_a2a_rpc_resume_task_uses_canonical_method(tmp_path):
         json={
             "jsonrpc": "2.0",
             "id": "rpc-task-1",
-            "method": "SendMessage",
+            "method": "message/send",
             "params": {
                 "message": {
                     "kind": "message",
@@ -1615,7 +1619,7 @@ def test_a2a_send_message_continues_input_required_task_without_router(tmp_path)
         json={
             "jsonrpc": "2.0",
             "id": "rpc-input-start",
-            "method": "SendMessage",
+            "method": "message/send",
             "params": {
                 "message": {
                     "kind": "message",
@@ -1642,7 +1646,7 @@ def test_a2a_send_message_continues_input_required_task_without_router(tmp_path)
         json={
             "jsonrpc": "2.0",
             "id": "rpc-input-mismatch",
-            "method": "SendMessage",
+            "method": "message/send",
             "params": {
                 "message": {
                     "kind": "message",
@@ -1663,7 +1667,7 @@ def test_a2a_send_message_continues_input_required_task_without_router(tmp_path)
         json={
             "jsonrpc": "2.0",
             "id": "rpc-input-continue",
-            "method": "SendMessage",
+            "method": "message/send",
             "params": {
                 "message": {
                     "kind": "message",
@@ -1690,7 +1694,7 @@ def test_a2a_send_message_continues_input_required_task_without_router(tmp_path)
     agent_store.close()
 
 
-def test_a2a_rpc_accepts_current_slash_method_aliases(tmp_path):
+def test_a2a_rpc_accepts_a2a_03_slash_methods(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
@@ -1717,7 +1721,7 @@ def test_a2a_rpc_accepts_current_slash_method_aliases(tmp_path):
 
     fetched = client.post(
         "/rpc",
-        json={"jsonrpc": "2.0", "id": "rpc-get-slash", "method": "tasks/get", "params": {"taskId": task_id}},
+        json={"jsonrpc": "2.0", "id": "rpc-get-slash", "method": "tasks/get", "params": {"id": task_id}},
     )
 
     assert sent.status_code == 200
@@ -1735,7 +1739,7 @@ def test_a2a_rpc_missing_task_preserves_request_id_in_jsonrpc_error(tmp_path):
 
     response = client.post(
         "/rpc",
-        json={"jsonrpc": "2.0", "id": "rpc-missing", "method": "GetTask", "params": {"id": "missing-task"}},
+        json={"jsonrpc": "2.0", "id": "rpc-missing", "method": "tasks/get", "params": {"id": "missing-task"}},
     )
 
     assert response.status_code == 404
@@ -1763,7 +1767,7 @@ def test_a2a_rpc_send_streaming_message_emits_local_message_result(tmp_path):
         json={
             "jsonrpc": "2.0",
             "id": "rpc-stream-message",
-            "method": "SendStreamingMessage",
+            "method": "message/stream",
             "params": {
                 "message": {
                     "kind": "message",
@@ -1798,7 +1802,7 @@ def test_a2a_rpc_send_streaming_message_emits_partial_local_message_events(tmp_p
         json={
             "jsonrpc": "2.0",
             "id": "rpc-stream-message",
-            "method": "SendStreamingMessage",
+            "method": "message/stream",
             "params": {
                 "message": {
                     "kind": "message",
@@ -1853,7 +1857,7 @@ def test_a2a_rpc_send_streaming_auto_falls_back_to_local_message(tmp_path):
         json={
             "jsonrpc": "2.0",
             "id": "rpc-stream-auto-message",
-            "method": "SendStreamingMessage",
+            "method": "message/stream",
             "params": {
                 "message": {
                     "kind": "message",
@@ -1893,7 +1897,7 @@ def test_a2a_rpc_send_streaming_message_emits_local_task_events(tmp_path):
         json={
             "jsonrpc": "2.0",
             "id": "rpc-stream-task",
-            "method": "SendStreamingMessage",
+            "method": "message/stream",
             "params": {
                 "message": {
                     "kind": "message",
@@ -1935,7 +1939,7 @@ def test_a2a_rpc_send_streaming_message_follows_background_task_to_terminal_stat
         json={
             "jsonrpc": "2.0",
             "id": "rpc-stream-background-task",
-            "method": "SendStreamingMessage",
+            "method": "message/stream",
             "params": {
                 "message": {
                     "kind": "message",
@@ -1972,7 +1976,7 @@ def test_a2a_rpc_subscribe_to_task_replays_artifact_update(tmp_path):
         json={
             "jsonrpc": "2.0",
             "id": "rpc-task-for-subscribe",
-            "method": "SendMessage",
+            "method": "message/send",
             "params": {
                 "message": {
                     "kind": "message",
@@ -1991,7 +1995,7 @@ def test_a2a_rpc_subscribe_to_task_replays_artifact_update(tmp_path):
         json={
             "jsonrpc": "2.0",
             "id": "rpc-subscribe-1",
-            "method": "SubscribeToTask",
+            "method": "tasks/resubscribe",
             "params": {"id": task_id, "afterEventId": 2},
         },
     )
@@ -2026,7 +2030,7 @@ def test_a2a_rpc_subscribe_to_task_validation_errors_stream_jsonrpc_error(tmp_pa
         json={
             "jsonrpc": "2.0",
             "id": "rpc-subscribe-invalid",
-            "method": "SubscribeToTask",
+            "method": "tasks/resubscribe",
             "params": params,
         },
     )
@@ -2050,7 +2054,7 @@ def test_a2a_rpc_subscribe_to_task_validation_errors_stream_jsonrpc_error(tmp_pa
             "batch_not_supported",
         ),
         (
-            {"jsonrpc": "1.0", "id": "bad-version", "method": "GetTask", "params": {"id": "task-1"}},
+            {"jsonrpc": "1.0", "id": "bad-version", "method": "tasks/get", "params": {"id": "task-1"}},
             -32600,
             "JSON-RPC request jsonrpc must be '2.0'.",
             "invalid_request",
@@ -2062,13 +2066,19 @@ def test_a2a_rpc_subscribe_to_task_validation_errors_stream_jsonrpc_error(tmp_pa
             "method_not_found",
         ),
         (
-            {"jsonrpc": "2.0", "id": "bad-params", "method": "GetTask", "params": []},
+            {"jsonrpc": "2.0", "id": "old-method", "method": "SendMessage", "params": {}},
+            -32601,
+            "JSON-RPC method not found.",
+            "method_not_found",
+        ),
+        (
+            {"jsonrpc": "2.0", "id": "bad-params", "method": "tasks/get", "params": []},
             -32602,
             "JSON-RPC params must be an object.",
             "invalid_request",
         ),
         (
-            {"jsonrpc": "2.0", "id": "missing-id", "method": "GetTask", "params": {}},
+            {"jsonrpc": "2.0", "id": "missing-id", "method": "tasks/get", "params": {}},
             -32602,
             "JSON-RPC params.id must be a non-empty string.",
             "invalid_request",
@@ -2117,14 +2127,14 @@ def test_a2a_rpc_invalid_json_returns_parse_error(tmp_path):
     agent_store.close()
 
 
-def test_a2a_route_jsonrpc_task_cancel_accepts_request_body_and_preserves_id(tmp_path):
+def test_a2a_rpc_task_cancel_preserves_request_id(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
     client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
-        "/message:send",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-task",
@@ -2143,7 +2153,7 @@ def test_a2a_route_jsonrpc_task_cancel_accepts_request_body_and_preserves_id(tmp
     task_id = sent.json()["result"]["id"]
 
     canceled = client.post(
-        f"/tasks/{task_id}:cancel",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "cancel-req-1",
@@ -2161,7 +2171,7 @@ def test_a2a_route_jsonrpc_task_cancel_accepts_request_body_and_preserves_id(tmp
     agent_store.close()
 
 
-def test_a2a_route_jsonrpc_local_task_subscribe_replays_artifact_update(tmp_path):
+def test_a2a_rpc_local_task_resubscribe_replays_artifact_update(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(
@@ -2172,7 +2182,7 @@ def test_a2a_route_jsonrpc_local_task_subscribe_replays_artifact_update(tmp_path
     client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
-        "/message:send",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-task",
@@ -2190,7 +2200,7 @@ def test_a2a_route_jsonrpc_local_task_subscribe_replays_artifact_update(tmp_path
     )
     task_id = sent.json()["result"]["id"]
 
-    subscribed = client.post(f"/tasks/{task_id}:subscribe")
+    subscribed = rpc_resubscribe_task(client, task_id)
 
     assert sent.status_code == 200
     assert sent.json()["result"]["status"]["state"] == "completed"
@@ -2204,7 +2214,7 @@ def test_a2a_route_jsonrpc_local_task_subscribe_replays_artifact_update(tmp_path
     agent_store.close()
 
 
-def test_a2a_route_jsonrpc_task_subscribe_accepts_request_body_after_event_id(tmp_path):
+def test_a2a_rpc_task_resubscribe_accepts_after_event_id(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(
@@ -2215,7 +2225,7 @@ def test_a2a_route_jsonrpc_task_subscribe_accepts_request_body_after_event_id(tm
     client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
-        "/message:send",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-task",
@@ -2234,11 +2244,11 @@ def test_a2a_route_jsonrpc_task_subscribe_accepts_request_body_after_event_id(tm
     task_id = sent.json()["result"]["id"]
 
     subscribed = client.post(
-        f"/tasks/{task_id}:subscribe",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "subscribe-1",
-            "method": "tasks/subscribe",
+            "method": "tasks/resubscribe",
             "params": {"id": task_id, "afterEventId": 2},
         },
     )
@@ -2256,27 +2266,27 @@ def test_a2a_route_jsonrpc_task_subscribe_accepts_request_body_after_event_id(tm
     ("params", "error_message"),
     [
         (
-            {"id": "different-task", "afterEventId": 0},
-            "JSON-RPC params.id must match the route task id.",
+            {},
+            "JSON-RPC params.id must be a non-empty string.",
         ),
         (
-            {"afterEventId": -1},
+            {"id": "task-1", "afterEventId": -1},
             "JSON-RPC params.afterEventId must be a non-negative integer.",
         ),
     ],
 )
-def test_a2a_route_jsonrpc_task_subscribe_request_validation_errors(tmp_path, params, error_message):
+def test_a2a_rpc_task_resubscribe_validation_errors(tmp_path, params, error_message):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
     client = TestClient(create_app(main_agent_core=core))
 
     subscribed = client.post(
-        "/tasks/task-1:subscribe",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "subscribe-invalid",
-            "method": "tasks/subscribe",
+            "method": "tasks/resubscribe",
             "params": params,
         },
     )
@@ -2288,18 +2298,18 @@ def test_a2a_route_jsonrpc_task_subscribe_request_validation_errors(tmp_path, pa
     agent_store.close()
 
 
-def test_a2a_route_jsonrpc_task_subscribe_unknown_task_streams_jsonrpc_error(tmp_path):
+def test_a2a_rpc_task_resubscribe_unknown_task_streams_jsonrpc_error(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
     client = TestClient(create_app(main_agent_core=core))
 
     subscribed = client.post(
-        "/tasks/missing-task:subscribe",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "subscribe-missing",
-            "method": "tasks/subscribe",
+            "method": "tasks/resubscribe",
             "params": {"id": "missing-task", "afterEventId": 0},
         },
     )
@@ -2316,8 +2326,8 @@ def test_a2a_route_jsonrpc_task_subscribe_unknown_task_streams_jsonrpc_error(tmp
     ("params", "error_message"),
     [
         (
-            {"id": "different-task", "reason": "operator"},
-            "JSON-RPC params.id must match the route task id.",
+            {},
+            "JSON-RPC params.id must be a non-empty string.",
         ),
         (
             {"id": "task-1", "reason": 123},
@@ -2325,14 +2335,14 @@ def test_a2a_route_jsonrpc_task_subscribe_unknown_task_streams_jsonrpc_error(tmp
         ),
     ],
 )
-def test_a2a_route_jsonrpc_task_cancel_request_validation_errors(tmp_path, params, error_message):
+def test_a2a_rpc_task_cancel_validation_errors(tmp_path, params, error_message):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(store=main_store, local_message_responder=FakeLocalMessageResponder())
     client = TestClient(create_app(main_agent_core=core))
 
     canceled = client.post(
-        "/tasks/task-1:cancel",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "cancel-invalid",
@@ -2350,7 +2360,7 @@ def test_a2a_route_jsonrpc_task_cancel_request_validation_errors(tmp_path, param
     agent_store.close()
 
 
-def test_a2a_route_jsonrpc_completed_local_task_cancel_is_rejected(tmp_path):
+def test_a2a_rpc_completed_local_task_cancel_returns_jsonrpc_error(tmp_path):
     agent_store = AgentStore(tmp_path / "agent.sqlite")
     main_store = MainAgentStore(agent_store)
     core = MainAgentCore(
@@ -2361,50 +2371,7 @@ def test_a2a_route_jsonrpc_completed_local_task_cancel_is_rejected(tmp_path):
     client = TestClient(create_app(main_agent_core=core))
 
     sent = client.post(
-        "/message:send",
-        json={
-            "jsonrpc": "2.0",
-            "id": "req-task",
-            "method": "message/send",
-            "params": {
-                "message": {
-                    "kind": "message",
-                    "role": "user",
-                    "messageId": "msg-user-1",
-                    "parts": [{"kind": "text", "text": "run"}],
-                },
-                "metadata": {"executionMode": "task"},
-            },
-        },
-    )
-    task_id = sent.json()["result"]["id"]
-
-    canceled = client.post(f"/tasks/{task_id}:cancel", json={"reason": "too late"})
-
-    assert sent.status_code == 200
-    assert sent.json()["result"]["status"]["state"] == "completed"
-    assert canceled.status_code == 409
-    assert canceled.json()["detail"] == {
-        "code": "invalid_session_state",
-        "message": f"task is terminal and cannot be canceled: {task_id}",
-        "retryable": False,
-    }
-    assert main_store.get_task(task_id).status == MainAgentTaskStatus.COMPLETED
-    agent_store.close()
-
-
-def test_a2a_route_jsonrpc_completed_local_task_cancel_returns_jsonrpc_error(tmp_path):
-    agent_store = AgentStore(tmp_path / "agent.sqlite")
-    main_store = MainAgentStore(agent_store)
-    core = MainAgentCore(
-        store=main_store,
-        local_message_responder=FakeLocalMessageResponder(),
-        local_task_runner=FakeLocalTaskRunner(),
-    )
-    client = TestClient(create_app(main_agent_core=core))
-
-    sent = client.post(
-        "/message:send",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "req-task",
@@ -2423,7 +2390,7 @@ def test_a2a_route_jsonrpc_completed_local_task_cancel_returns_jsonrpc_error(tmp
     task_id = sent.json()["result"]["id"]
 
     canceled = client.post(
-        f"/tasks/{task_id}:cancel",
+        "/rpc",
         json={
             "jsonrpc": "2.0",
             "id": "cancel-terminal",

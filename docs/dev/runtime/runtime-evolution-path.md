@@ -1,5 +1,9 @@
 # Runtime Evolution Path
 
+> Status: Conditional reference; no stage is active
+> Last reviewed: 2026-08-14
+> Authority: Runtime stage rationale and activation criteria
+
 ## Status And Authority
 
 This document connects the long-term Agent OS architecture to an implementable
@@ -50,7 +54,7 @@ instead of replacing it with a larger graph.
 | R0, runtime integrity closure | Complete, 2026-08-02 | Durable ingress, local transitions, queued commands, startup reconciliation, and continuation records now have one enforced integrity boundary. | Use as the baseline for R1. |
 | R1, side-effect execution boundary | Complete, 2026-08-02 | Local non-read-only ToolNode calls now receive a durable identity, exact approval binding, conservative replay prevention, and result artifact reference. | Use as the safety baseline for R2. |
 | R2, governed execution kernel | Complete, 2026-08-02 | Local Tasks now have immutable execution limits, typed stop reasons, normalized observations, and deterministic evidence/risk summaries. | Keep planning and scheduling deferred. |
-| R3, workspace and isolation boundary | R3.1 complete; broader work conditional | The concrete SSH/Kubernetes path now has bounded local-process control, but capabilities still do not share a filesystem workspace or general isolation contract. | Keep the R3.1 adapter narrow; add a workspace or sandbox only for a demonstrated workload. |
+| R3, governed host-reaching execution | R3.1 and R3.2 complete; broader workspace and isolation work conditional | SSH/Kubernetes subprocesses have bounded local-process control, and model calls respect the remaining Task budget and cancellation boundaries. Capabilities still do not share a filesystem workspace or general isolation contract. | Preserve the narrow execution controls; add a workspace or sandbox only for a demonstrated workload. |
 | R4, persistent planning and replanning | Medium, evidence-dependent | The model can choose actions, but no current workload proves that a durable task DAG improves outcomes. | Pilot only after R1-R3 make actions safe and verifiable. |
 | R5, distributed scheduling and federation | Conditional | The current runtime is intentionally single-host and has no worker lease or cross-node ownership requirement. | Defer until deployment evidence justifies it. |
 
@@ -60,11 +64,11 @@ execution boundary is reliable enough to support them.
 
 ## Current Stage Constraint
 
-R3.1 completes the only currently demonstrated host-reaching control gap.
-There is no active R3.2, R4, or R5 implementation milestone. Current work
-should stabilize and observe the R0-R3.1 single-host baseline through real
-direct Message, local Task, continuation, cancellation, and capability
-workflows.
+R3.1 and R3.2 complete the currently demonstrated host-reaching and model-call
+control gaps. There is no active broader R3, R4, or R5 implementation
+milestone. Current work should stabilize and observe the R0-R3.2 single-host
+baseline through real direct Message, local Task, continuation, cancellation,
+and capability workflows.
 
 Treat the stage sections below as activation criteria, not a default feature
 backlog. Before activating one of them, record the concrete workload, the
@@ -277,6 +281,11 @@ R1 invocation identity to the local `ssh` subprocess. It does not create a
 shared filesystem workspace or a general command executor. See
 [Workspace And Isolation Boundary](../../components/backend/runtime/workspace-and-isolation-boundary.md).
 
+**R3.2 status: implemented, 2026-08-02.** Model calls consume the smaller of
+the configured provider timeout and the remaining local Task deadline.
+Cancellation prevents later model or tool work at the next safe boundary. See
+[Governed Execution Kernel](../../components/backend/runtime/governed-execution-kernel.md).
+
 The next R3 increment should define a workspace only when a capability truly
 shares an execution namespace. A future context may expose working directory,
 filesystem operations, command execution, cancellation, snapshots, and
@@ -345,7 +354,7 @@ analogy.
 
 ## Recommended Implementation Sequence
 
-1. Stabilize and observe R0-R3.1 in real single-host workflows. Fix
+1. Stabilize and observe R0-R3.2 in real single-host workflows. Fix
    correctness, reliability, and inspection issues at existing boundaries.
 2. Activate only one evidence-backed R3, R4, or R5 extension at a time, with
    a documented scope and acceptance criteria before implementation.

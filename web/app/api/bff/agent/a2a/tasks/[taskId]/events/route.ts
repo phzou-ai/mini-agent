@@ -1,6 +1,6 @@
 import { type NextRequest } from "next/server"
 
-import { buildA2ARpcTaskSubscribeEnvelope } from "@/lib/agent/a2a"
+import { buildA2ARpcTaskResubscribeEnvelope } from "@/lib/agent/a2a"
 import { buildAgentRootPath, proxyAgentRootStream } from "@/lib/agent/server"
 
 export async function GET(
@@ -15,7 +15,7 @@ export async function GET(
   return proxyAgentRootStream(buildAgentRootPath("/rpc"), {
     method: "POST",
     body: JSON.stringify(
-      buildA2ARpcTaskSubscribeEnvelope(
+      buildA2ARpcTaskResubscribeEnvelope(
         taskId,
         Number.isFinite(afterEventId) ? afterEventId : 0,
       ),

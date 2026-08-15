@@ -15,7 +15,9 @@ Vermay is a local main-agent runtime built around the A2A protocol. It exposes a
 - route suitable requests to registered child A2A agents;
 - provide a browser workbench for session transcripts, route diagnostics, task events, payload inspection, and approval controls.
 
-Clients communicate with the agent through A2A JSON-RPC over the `/rpc` endpoint.
+Clients communicate with the agent through the A2A `0.3.0` JSON-RPC binding
+over the `/rpc` endpoint. Approval continuation uses the Agent Card-declared
+Vermay extension method `tasks/resume`.
 
 ## Architecture
 
@@ -244,7 +246,8 @@ scripts/a2a_dev_smoke.sh
 
 ## A2A JSON-RPC Examples
 
-The `/rpc` endpoint accepts A2A JSON-RPC requests.
+The `/rpc` endpoint accepts A2A `0.3.0` JSON-RPC requests using slash-style
+method names.
 
 Send a direct message:
 
@@ -254,7 +257,7 @@ curl -X POST http://127.0.0.1:8000/rpc \
   -d '{
     "jsonrpc": "2.0",
     "id": "req-1",
-    "method": "SendMessage",
+    "method": "message/send",
     "params": {
       "message": {
         "kind": "message",
@@ -275,7 +278,7 @@ curl -X POST http://127.0.0.1:8000/rpc \
   -d '{
     "jsonrpc": "2.0",
     "id": "req-2",
-    "method": "SendMessage",
+    "method": "message/send",
     "params": {
       "message": {
         "kind": "message",
@@ -296,7 +299,7 @@ curl -X POST http://127.0.0.1:8000/rpc \
   -d '{
     "jsonrpc": "2.0",
     "id": "req-3",
-    "method": "SendMessage",
+    "method": "message/send",
     "params": {
       "message": {
         "kind": "message",
@@ -314,7 +317,7 @@ Inspect a task:
 ```bash
 curl -X POST http://127.0.0.1:8000/rpc \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":"req-4","method":"GetTask","params":{"id":"<task-id>"}}'
+  -d '{"jsonrpc":"2.0","id":"req-4","method":"tasks/get","params":{"id":"<task-id>"}}'
 ```
 
 Cancel a task:
@@ -322,7 +325,7 @@ Cancel a task:
 ```bash
 curl -X POST http://127.0.0.1:8000/rpc \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":"req-5","method":"CancelTask","params":{"id":"<task-id>","reason":"operator canceled"}}'
+  -d '{"jsonrpc":"2.0","id":"req-5","method":"tasks/cancel","params":{"id":"<task-id>","reason":"operator canceled"}}'
 ```
 
 ## Model Configuration
@@ -396,7 +399,7 @@ Configured MCP servers are inactive by default during agent runs. Select servers
 
 ```bash
 vermay "check k8s status" --mcp-server k8s
-vermay "debug phzou-core service" --mcp-server k8s --mcp-prompt 'k8s-service-health-check?service=phzou-core&namespace=default'
+vermay "debug example-service" --mcp-server k8s --mcp-prompt 'k8s-service-health-check?service=example-service&namespace=default'
 ```
 
 Selected MCP tools are wrapped as LangChain `StructuredTool` instances with namespaced names such as `mcp__k8s__kubectl_get`. MCP tools require approval by default unless the server or tool is marked read-only.
@@ -409,7 +412,7 @@ Dangerous tools pause execution and require explicit approval. When the model ca
 
 In the Web UI, an input-required task renders either approval controls or a requested-input form directly in the transcript.
 
-An A2A caller supplies requested input with another `SendMessage` request carrying the existing `taskId`. The main agent resumes the same LangGraph `thread_id` without routing or creating a new task.
+An A2A caller supplies requested input with another `message/send` request carrying the existing `taskId`. The main agent resumes the same LangGraph `thread_id` without routing or creating a new task.
 
 In an interactive terminal, approval is prompted automatically:
 

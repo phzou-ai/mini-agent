@@ -135,7 +135,7 @@ inputSchema=<text input schema>
 toolCallId=<original model tool-call id>
 ```
 
-The public A2A continuation uses another `SendMessage` with the existing `taskId`. `MainAgentCore.submit_task_input()` validates the task and context, persists the user message, and resumes the same runtime `thread_id`. The router is not called again.
+The public A2A continuation uses another `message/send` with the existing `taskId`. `MainAgentCore.submit_task_input()` validates the task and context, persists the user message, and resumes the same runtime `thread_id`. The router is not called again.
 
 The runtime resumes with:
 
@@ -295,7 +295,7 @@ CLI/runtime layer:
 
 Main-agent/A2A layer:
   task event input_request payload
-  SendMessage with existing taskId
+  message/send with existing taskId
   submit_task_input()
   resume_input()
 ```

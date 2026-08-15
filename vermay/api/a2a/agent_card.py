@@ -3,6 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from vermay.a2a_protocol import (
+    A2A_PROTOCOL_VERSION,
+    TASK_RESUME_EXTENSION_URI,
+    TASK_RESUME_EXTENSION_VERSION,
+    TASK_RESUME_METHOD,
+)
+
 
 @dataclass(frozen=True)
 class A2AAgentSkillConfig:
@@ -19,12 +26,12 @@ class A2AAgentCardConfig:
     description: str = "An A2A-first main agent for direct answers, local task execution, and child-agent delegation."
     url: str = "http://127.0.0.1:8000/rpc"
     version: str = "0.1.0"
-    protocol_versions: tuple[str, ...] = ("0.3",)
+    protocol_version: str = A2A_PROTOCOL_VERSION
     default_input_modes: tuple[str, ...] = ("text/plain",)
     default_output_modes: tuple[str, ...] = ("text/plain",)
-    streaming: bool = False
+    streaming: bool = True
     push_notifications: bool = False
-    extended_agent_card: bool = False
+    supports_authenticated_extended_card: bool = False
     skills: tuple[A2AAgentSkillConfig, ...] = field(
         default_factory=lambda: (
             A2AAgentSkillConfig(
@@ -68,17 +75,28 @@ def build_agent_card(config: A2AAgentCardConfig | None = None) -> dict[str, Any]
         "url": active.url,
         "preferredTransport": "JSONRPC",
         "version": active.version,
-        "protocolVersions": list(active.protocol_versions),
+        "protocolVersion": active.protocol_version,
         "capabilities": {
             "streaming": active.streaming,
             "pushNotifications": active.push_notifications,
-            "extendedAgentCard": active.extended_agent_card,
+            "extensions": [
+                {
+                    "uri": TASK_RESUME_EXTENSION_URI,
+                    "description": "Resume a local task waiting for explicit operator approval.",
+                    "required": False,
+                    "params": {
+                        "method": TASK_RESUME_METHOD,
+                        "version": TASK_RESUME_EXTENSION_VERSION,
+                    },
+                }
+            ],
         },
         "defaultInputModes": list(active.default_input_modes),
         "defaultOutputModes": list(active.default_output_modes),
         "skills": [_skill_payload(skill) for skill in active.skills],
         "securitySchemes": dict(active.security_schemes),
         "security": list(active.security),
+        "supportsAuthenticatedExtendedCard": active.supports_authenticated_extended_card,
         "metadata": dict(active.metadata),
     }
 

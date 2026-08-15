@@ -47,9 +47,8 @@ first-party management and diagnostic APIs used by the Web UI:
 vermay serve
 ```
 
-Agent-to-agent operations use A2A JSON-RPC methods through `/rpc`. The server
-also retains tested path-style A2A bindings over the same lifecycle owner. The
-authoritative route and method inventory is maintained in
+Agent-to-agent operations use the A2A `0.3.0` JSON-RPC binding through `/rpc`.
+The authoritative route and method inventory is maintained in
 [API Boundary](../components/backend/api-boundary.md); do not duplicate that
 catalog in operational guides. The `/api` prefix is reserved for first-party
 Web UI management and diagnostics and is not the external A2A integration
@@ -79,7 +78,7 @@ curl -X POST http://127.0.0.1:8000/rpc \
   -d '{
     "jsonrpc": "2.0",
     "id": "ops-message-1",
-    "method": "SendMessage",
+    "method": "message/send",
     "params": {
       "message": {
         "kind": "message",
@@ -100,7 +99,7 @@ curl -X POST http://127.0.0.1:8000/rpc \
   -d '{
     "jsonrpc": "2.0",
     "id": "ops-task-1",
-    "method": "SendMessage",
+    "method": "message/send",
     "params": {
       "message": {
         "kind": "message",
@@ -118,7 +117,7 @@ Inspect a task:
 ```bash
 curl -X POST http://127.0.0.1:8000/rpc \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":"ops-get-1","method":"GetTask","params":{"id":"<task-id>"}}'
+  -d '{"jsonrpc":"2.0","id":"ops-get-1","method":"tasks/get","params":{"id":"<task-id>"}}'
 ```
 
 Subscribe to task events:
@@ -126,7 +125,7 @@ Subscribe to task events:
 ```bash
 curl -N -X POST http://127.0.0.1:8000/rpc \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":"ops-subscribe-1","method":"SubscribeToTask","params":{"id":"<task-id>","afterEventId":0}}'
+  -d '{"jsonrpc":"2.0","id":"ops-subscribe-1","method":"tasks/resubscribe","params":{"id":"<task-id>","afterEventId":0}}'
 ```
 
 The `/api` prefix is reserved for Web UI management and diagnostics. Its
@@ -271,11 +270,11 @@ Selected MCP prompts and resources can be injected as bounded context:
 
 ```bash
 vermay "debug service health" --mcp-server k8s --mcp-prompt k8s-service-health-check
-vermay "debug phzou-core service" --mcp-server k8s --mcp-prompt 'k8s-service-health-check?service=phzou-core&namespace=default'
+vermay "debug example-service" --mcp-server k8s --mcp-prompt 'k8s-service-health-check?service=example-service&namespace=default'
 vermay "check service status" --mcp-server k8s --mcp-resource k8s://cluster/services
 ```
 
-Prompts and resources are read once at run start. Prompts are injected as external workflow guidance before local skills, memory, and resources. Resources are injected as external data after local memory. Prompt arguments use query-string syntax after the prompt name. When multiple MCP servers are selected, use qualified forms such as `--mcp-prompt 'k8s:k8s-service-health-check?service=phzou-core'` and `--mcp-resource k8s:k8s://cluster/services`.
+Prompts and resources are read once at run start. Prompts are injected as external workflow guidance before local skills, memory, and resources. Resources are injected as external data after local memory. Prompt arguments use query-string syntax after the prompt name. When multiple MCP servers are selected, use qualified forms such as `--mcp-prompt 'k8s:k8s-service-health-check?service=example-service'` and `--mcp-resource k8s:k8s://cluster/services`.
 
 A local `k8s` MCP test example lives under `examples/mcp_servers/k8s/` and exposes read-only Kubernetes tools, resources, and prompts. It uses the existing SSH/microk8s backend, so live tool/resource reads require `VERMAY_SSH_*` environment configuration. The config starts it with `.venv/bin/python` and applies `timeout_seconds` to MCP discovery, tool calls, resources, and prompts. Update `config/mcp_servers.json` if the project is run from another Python environment.
 

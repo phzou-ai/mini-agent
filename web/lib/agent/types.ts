@@ -127,11 +127,17 @@ export type AgentA2AAgentCard = {
   description: string
   url: string
   version: string
-  protocolVersions?: string[]
+  protocolVersion: string
+  preferredTransport?: string
   capabilities?: {
     streaming?: boolean
     pushNotifications?: boolean
-    extendedAgentCard?: boolean
+    extensions?: Array<{
+      uri: string
+      description?: string
+      required?: boolean
+      params?: Record<string, unknown>
+    }>
     [key: string]: unknown
   }
   defaultInputModes?: string[]
@@ -139,6 +145,7 @@ export type AgentA2AAgentCard = {
   skills: AgentA2AAgentSkill[]
   securitySchemes?: Record<string, unknown>
   security?: Array<Record<string, unknown>>
+  supportsAuthenticatedExtendedCard?: boolean
   metadata?: Record<string, unknown>
 }
 
