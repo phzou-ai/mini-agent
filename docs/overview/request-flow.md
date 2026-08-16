@@ -10,6 +10,7 @@ The detailed component graph is in
 
 ```text
 A2A Message
+  -> AdmitMessageCommand through MainAgentCore execute/stream
   -> persist the user Message and reserve durable ingress
   -> reuse an existing ingress outcome or route the new Message once
   -> local_message, local_task, or remote_agent
@@ -27,6 +28,8 @@ creating an A2A Task. Direct Message token deltas may stream over SSE.
 `local_task` creates a durable A2A Task and local process record before handing
 execution to LangGraph. `MainAgentCore` owns the public lifecycle; LangGraph
 owns graph execution and checkpoint continuation addressed by `thread_id`.
+The execution result returns as a typed accepted-outcome command and is
+persisted through the core-owned `TaskOutcomeRecorder`.
 
 ## Child-agent Delegation
 
@@ -38,4 +41,3 @@ and projects validated remote snapshots through the main-agent boundary.
 - [Lifecycle And State Ownership](../architecture/lifecycle-and-state.md)
 - [Backend API Boundary](../components/backend/api-boundary.md)
 - [Runtime Development](../dev/runtime/README.md)
-

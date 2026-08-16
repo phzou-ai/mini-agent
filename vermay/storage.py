@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -9,9 +10,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 STORE_SCHEMA_FAMILY = "main_agent_clean_slate_v1"
 SQLITE_BUSY_TIMEOUT_MS = 5_000
+
+logger = logging.getLogger(__name__)
 
 
 def configure_sqlite_connection(connection: sqlite3.Connection) -> None:
@@ -391,10 +394,37 @@ def _apply_schema_v3(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_schema_v4(conn: sqlite3.Connection) -> None:
+    """Version Task projections independently from the event replay cursor."""
+
+    conn.executescript(
+        """
+        ALTER TABLE main_agent_tasks
+            ADD COLUMN lifecycle_revision INTEGER NOT NULL DEFAULT 1;
+
+        ALTER TABLE main_agent_task_events
+            ADD COLUMN lifecycle_revision INTEGER NOT NULL DEFAULT 1;
+        """
+    )
+
+
+def _apply_schema_v5(conn: sqlite3.Connection) -> None:
+    """Version durable local execution commands independently from the schema."""
+
+    conn.execute(
+        """
+        ALTER TABLE main_agent_queued_executions
+            ADD COLUMN command_version INTEGER NOT NULL DEFAULT 1
+        """
+    )
+
+
 MIGRATIONS: tuple[SchemaMigration, ...] = (
     SchemaMigration(1, "main_agent_clean_slate_baseline", _apply_schema_v1),
     SchemaMigration(2, "tool_invocation_ledger", _apply_schema_v2),
     SchemaMigration(3, "task_failure_retryability", _apply_schema_v3),
+    SchemaMigration(4, "task_lifecycle_revision", _apply_schema_v4),
+    SchemaMigration(5, "local_execution_command_version", _apply_schema_v5),
 )
 
 
@@ -406,6 +436,7 @@ class AgentStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._transaction_depth = 0
+        self._after_commit_callbacks: list[Callable[[], None]] = []
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         try:
@@ -462,16 +493,48 @@ class AgentStore:
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
+        committed_callbacks: tuple[Callable[[], None], ...] = ()
         with self._lock:
+            is_outer_transaction = self._transaction_depth == 0
+            if is_outer_transaction:
+                self._after_commit_callbacks = []
             self._transaction_depth += 1
             try:
-                if self._transaction_depth == 1:
+                if is_outer_transaction:
                     with self.conn:
                         yield self.conn
+                    committed_callbacks = tuple(self._after_commit_callbacks)
                 else:
                     yield self.conn
             finally:
                 self._transaction_depth -= 1
+                if is_outer_transaction:
+                    self._after_commit_callbacks = []
+
+        self._run_after_commit_callbacks(committed_callbacks)
+
+    def register_after_commit(self, callback: Callable[[], None]) -> None:
+        """Run a best-effort process-local action after durable commit.
+
+        Nested scopes join the outermost SQLite transaction; they are not
+        savepoints. Their callbacks therefore commit or roll back with that
+        outer transaction. Outside an explicit transaction, the preceding
+        store write has already committed, so the callback runs immediately.
+        """
+
+        with self._lock:
+            if self._transaction_depth > 0:
+                self._after_commit_callbacks.append(callback)
+                return
+        self._run_after_commit_callbacks((callback,))
+
+    @staticmethod
+    def _run_after_commit_callbacks(callbacks: Iterable[Callable[[], None]]) -> None:
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:
+                logger.exception("post-commit callback failed")
 
     def schema_version(self) -> int:
         rows = self.query("SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations")

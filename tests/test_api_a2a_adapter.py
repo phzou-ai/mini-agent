@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from vermay.api.a2a import A2AAdapter, create_a2a_router
 from vermay.api.a2a import routes as a2a_routes
 from vermay.api.app import create_app
-from vermay.errors import ModelProviderError
+from vermay.errors import ModelProviderError, TaskEventProjectionError
 from vermay.main_agent import (
     LocalTaskRunResult,
     MainAgentCore,
@@ -341,11 +341,16 @@ def test_default_app_exposes_only_agent_card_and_jsonrpc_a2a_surface(tmp_path):
     assert result["status"]["state"] == "completed"
     assert result["contextId"].startswith("ctx-")
     assert result["metadata"]["localStatus"] == "completed"
+    assert result["metadata"]["lifecycleRevision"] >= 1
     assert "thread_id" not in str(sent.json()).lower()
     assert result["metadata"]["localThreadId"].startswith("thread-")
     assert fetched.status_code == 200
     assert fetched.json()["jsonrpc"] == "2.0"
     assert fetched.json()["result"]["id"] == task_id
+    assert (
+        fetched.json()["result"]["metadata"]["lifecycleRevision"]
+        == result["metadata"]["lifecycleRevision"]
+    )
     assert all(response.status_code == 404 for response in removed_bindings)
     store.close()
 
@@ -412,6 +417,7 @@ def test_create_app_with_fake_main_agent_supports_a2a_message_task_get_and_subsc
     assert subscribed.status_code == 200
     assert "event: artifact-update" in subscribed.text
     assert "task answer" in subscribed.text
+    assert '"lifecycleRevision":' in subscribed.text
     agent_store.close()
 
 
@@ -1563,6 +1569,7 @@ def test_a2a_rpc_resume_task_uses_canonical_method(tmp_path):
     interrupted_metadata = interrupted["result"]["metadata"]
     assert interrupted_metadata["localThreadId"] == task.runtime_thread_id
     assert interrupted_metadata["runtimeThreadId"] == task.runtime_thread_id
+    interrupted_event_id = interrupted_metadata["localEventId"]
 
     legacy_method = client.post(
         "/rpc",
@@ -1592,6 +1599,7 @@ def test_a2a_rpc_resume_task_uses_canonical_method(tmp_path):
     assert runner.resume_calls == [(task.runtime_thread_id, True, "operator")]
     assert [event.type for event in main_store.list_task_events(task_id)] == [
         "task_created",
+        "task_queued",
         "task_started",
         "task_interrupted",
         "task_resumed",
@@ -1600,6 +1608,18 @@ def test_a2a_rpc_resume_task_uses_canonical_method(tmp_path):
         "task_artifact_created",
         "task_completed",
     ]
+    replayed = adapter.wait_for_task_events(
+        task_id,
+        after_event_id=interrupted_event_id,
+        timeout_seconds=0,
+    )
+    assert [event["result"]["metadata"]["localEventType"] for event in replayed.events] == [
+        "task_queued",
+        "task_started",
+        "task_artifact_created",
+        "task_completed",
+    ]
+    assert replayed.last_event_id == main_store.list_task_events(task_id)[-1].event_id
     agent_store.close()
 
 
@@ -1640,6 +1660,7 @@ def test_a2a_send_message_continues_input_required_task_without_router(tmp_path)
         {"kind": "text", "text": "Which environment?"}
     ]
     assert started_result["metadata"]["inputRequest"]["choices"] == ["staging", "production"]
+    interrupted_event_id = main_store.list_task_events(task_id)[-1].event_id
 
     mismatched = client.post(
         "/rpc",
@@ -1691,6 +1712,18 @@ def test_a2a_send_message_continues_input_required_task_without_router(tmp_path)
         (task.runtime_thread_id, [{"kind": "text", "text": "staging"}], {"source": "a2a-test"})
     ]
     assert len(main_store.list_context_route_decisions(context_id)) == 1
+    replayed = A2AAdapter(main_agent_core=core).wait_for_task_events(
+        task_id,
+        after_event_id=interrupted_event_id,
+        timeout_seconds=0,
+    )
+    assert [event["result"]["metadata"]["localEventType"] for event in replayed.events] == [
+        "task_queued",
+        "task_started",
+        "task_artifact_created",
+        "task_completed",
+    ]
+    assert replayed.last_event_id == main_store.list_task_events(task_id)[-1].event_id
     agent_store.close()
 
 
@@ -2259,6 +2292,129 @@ def test_a2a_rpc_task_resubscribe_accepts_after_event_id(tmp_path):
     assert '"localEventId": 1' not in subscribed.text
     assert '"localEventId": 2' not in subscribed.text
     assert '"localEventId": 3' in subscribed.text
+    agent_store.close()
+
+
+def test_a2a_task_replay_keeps_cursor_before_unprojectable_durable_event(tmp_path):
+    agent_store = AgentStore(tmp_path / "agent.sqlite")
+    main_store = MainAgentStore(agent_store)
+    core = MainAgentCore(
+        store=main_store,
+        local_message_responder=FakeLocalMessageResponder(),
+        local_task_runner=FakeLocalTaskRunner(),
+    )
+    client = TestClient(create_app(main_agent_core=core))
+    adapter = A2AAdapter(main_agent_core=core)
+
+    sent = client.post(
+        "/rpc",
+        json={
+            "jsonrpc": "2.0",
+            "id": "req-task",
+            "method": "message/send",
+            "params": {
+                "message": {
+                    "kind": "message",
+                    "role": "user",
+                    "messageId": "msg-user-1",
+                    "parts": [{"kind": "text", "text": "run"}],
+                },
+                "metadata": {"executionMode": "task"},
+            },
+        },
+    )
+    task_id = sent.json()["result"]["id"]
+    previous_event_id = main_store.list_task_events(task_id)[-1].event_id
+    invalid_event = main_store.append_task_event(
+        task_id=task_id,
+        type="task_internal_only",
+        payload={"detail": "not part of the public A2A event contract"},
+    )
+
+    for _ in range(2):
+        with pytest.raises(TaskEventProjectionError) as exc_info:
+            adapter.wait_for_task_events(
+                task_id,
+                after_event_id=previous_event_id,
+                timeout_seconds=0,
+            )
+        assert exc_info.value.event_id == invalid_event.event_id
+
+    subscribed = client.post(
+        "/rpc",
+        json={
+            "jsonrpc": "2.0",
+            "id": "subscribe-projection-error",
+            "method": "tasks/resubscribe",
+            "params": {
+                "id": task_id,
+                "afterEventId": previous_event_id,
+            },
+        },
+    )
+
+    assert subscribed.status_code == 200
+    assert "event: error" in subscribed.text
+    assert '"localCode": "task_event_projection_error"' in subscribed.text
+    assert '"retryable": false' in subscribed.text
+    assert "A persisted Task event could not be projected to A2A." in subscribed.text
+    assert f"id: {invalid_event.event_id}" not in subscribed.text
+    agent_store.close()
+
+
+@pytest.mark.parametrize(
+    "event_type",
+    [
+        "task_input_submitted",
+        "task_resumed",
+        "task_retry_requested",
+        "task_retried",
+    ],
+)
+def test_a2a_task_replay_advances_past_declared_internal_audit_events(tmp_path, event_type):
+    agent_store = AgentStore(tmp_path / "agent.sqlite")
+    main_store = MainAgentStore(agent_store)
+    core = MainAgentCore(
+        store=main_store,
+        local_message_responder=FakeLocalMessageResponder(),
+        local_task_runner=FakeLocalTaskRunner(),
+    )
+    client = TestClient(create_app(main_agent_core=core))
+    adapter = A2AAdapter(main_agent_core=core)
+
+    sent = client.post(
+        "/rpc",
+        json={
+            "jsonrpc": "2.0",
+            "id": "req-task",
+            "method": "message/send",
+            "params": {
+                "message": {
+                    "kind": "message",
+                    "role": "user",
+                    "messageId": "msg-user-1",
+                    "parts": [{"kind": "text", "text": "run"}],
+                },
+                "metadata": {"executionMode": "task"},
+            },
+        },
+    )
+    task_id = sent.json()["result"]["id"]
+    previous_event_id = main_store.list_task_events(task_id)[-1].event_id
+    audit_event = main_store.append_task_event(
+        task_id=task_id,
+        type=event_type,
+        payload={"detail": "durable internal control-plane audit fact"},
+    )
+
+    replayed = adapter.wait_for_task_events(
+        task_id,
+        after_event_id=previous_event_id,
+        timeout_seconds=0,
+    )
+
+    assert replayed.events == []
+    assert replayed.last_event_id == audit_event.event_id
     agent_store.close()
 
 

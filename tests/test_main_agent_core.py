@@ -17,6 +17,9 @@ from vermay.errors import (
     error_info_from_exception,
 )
 from vermay.main_agent import (
+    LOCAL_EXECUTION_COMMAND_VERSION,
+    AdmitMessageCommand,
+    ApprovalTaskExecutionPayload,
     DefaultMainAgentRouter,
     DirectModelRouterModelClient,
     LocalMessageResult,
@@ -25,6 +28,7 @@ from vermay.main_agent import (
     MainAgentCore,
     MainAgentRequest,
     MainAgentStore,
+    MessageCommandOutcome,
     MessageIngressOutcomeKind,
     MessageIngressState,
     MessageRecord,
@@ -37,6 +41,7 @@ from vermay.main_agent import (
     RouteDecisionKind,
     RouterModelDecision,
     TaskStatus,
+    UserInputTaskExecutionPayload,
 )
 from vermay.langgraph_runtime.model_adapters import ModelInvocation
 from vermay.storage import AgentStore
@@ -111,6 +116,37 @@ class FakeTaskRunner:
         )
 
 
+def test_main_agent_typed_command_surface_preserves_message_idempotency(tmp_path):
+    store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
+    responder = FakeResponder()
+    core = MainAgentCore(store=store, local_message_responder=responder)
+    command = AdmitMessageCommand(
+        MainAgentRequest(
+            context_id=None,
+            message_id="msg-command-1",
+            role=MessageRole.USER,
+            parts=[{"kind": "text", "text": "hello"}],
+            metadata={"executionMode": "message"},
+        )
+    )
+
+    first = core.execute(command)
+    second = core.execute(command)
+
+    assert isinstance(first, MessageCommandOutcome)
+    assert isinstance(second, MessageCommandOutcome)
+    assert first.result == second.result
+    assert len(responder.calls) == 1
+
+
+def test_main_agent_typed_command_surface_rejects_unknown_commands(tmp_path):
+    store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
+    core = MainAgentCore(store=store, local_message_responder=FakeResponder())
+
+    with pytest.raises(TypeError, match="unsupported main-agent command"):
+        core.execute(object())  # type: ignore[arg-type]
+
+
 def test_main_agent_core_submits_requested_input_without_rerouting(tmp_path):
     class InputRunner(FakeTaskRunner):
         def run(self, messages: list[MessageRecord], *, thread_id: str) -> LocalTaskRunResult:
@@ -145,6 +181,22 @@ def test_main_agent_core_submits_requested_input_without_rerouting(tmp_path):
     task = store.get_task(started.task_id)
     assert task is not None
     assert task.status == TaskStatus.INPUT_REQUIRED
+    interrupted_messages = store.list_context_messages(task.context_id)
+    assert [message.role for message in interrupted_messages] == [
+        MessageRole.USER,
+        MessageRole.AGENT,
+    ]
+    clarification = interrupted_messages[1]
+    assert clarification.parts == [{"kind": "text", "text": "Which environment?"}]
+    assert clarification.task_id == task.task_id
+    assert clarification.metadata["messageKind"] == "task_input_request"
+    assert clarification.metadata["inputRequest"] == {
+        "kind": "user_input_required",
+        "prompt": "Which environment?",
+        "choices": ["staging", "production"],
+        "inputSchema": {"type": "string", "enum": ["staging", "production"]},
+    }
+    assert clarification.metadata["inputRequestRevision"] == task.lifecycle_revision
 
     resumed = core.submit_task_input(
         task.task_id,
@@ -164,9 +216,23 @@ def test_main_agent_core_submits_requested_input_without_rerouting(tmp_path):
     submitted = store.get_message("msg-user-input")
     assert submitted is not None
     assert submitted.task_id == task.task_id
+    completed_messages = store.list_context_messages(task.context_id)
+    assert [message.role for message in completed_messages] == [
+        MessageRole.USER,
+        MessageRole.AGENT,
+        MessageRole.USER,
+        MessageRole.AGENT,
+    ]
+    assert completed_messages[1].message_id == clarification.message_id
+    assert completed_messages[1].parts == clarification.parts
+    assert completed_messages[2].message_id == "msg-user-input"
+    assert completed_messages[3].parts == [
+        {"kind": "text", "text": "input resumed answer"}
+    ]
     assert store.get_pending_input_request(task.task_id) is None
     assert [event.type for event in store.list_task_events(task.task_id)] == [
         "task_created",
+        "task_queued",
         "task_started",
         "task_interrupted",
         "task_input_submitted",
@@ -205,6 +271,10 @@ def test_main_agent_core_rejects_wrong_resume_interface_for_pending_input(tmp_pa
             metadata={"executionMode": "task"},
         )
     )
+    assert [
+        message.role
+        for message in store.list_context_messages(approval_task.context_id)
+    ] == [MessageRole.USER]
     approval_events_before = approval_core.store.list_task_events(approval_task.task_id)
 
     with pytest.raises(ValueError, match="waiting for approval, not general input"):
@@ -261,6 +331,21 @@ class DeferredTaskSubmitter:
 
 
 @dataclass
+class CommitObservingTaskSubmitter(DeferredTaskSubmitter):
+    store: MainAgentStore | None = None
+    transaction_depths: list[int] = field(default_factory=list)
+    queued_task_ids: list[str] = field(default_factory=list)
+
+    def submit(self, func, *args):
+        assert self.store is not None
+        task_id = str(args[0])
+        self.transaction_depths.append(self.store.store._transaction_depth)
+        assert self.store.get_queued_task_execution(task_id) is not None
+        self.queued_task_ids.append(task_id)
+        super().submit(func, *args)
+
+
+@dataclass
 class FakeRouterModel:
     decisions: list[RouterModelDecision]
     calls: list[list[MessageRecord]] = field(default_factory=list)
@@ -304,6 +389,28 @@ class FakeRemoteAgentClient:
         if not self.task_snapshots:
             raise AssertionError("unexpected remote get_task call")
         return self.task_snapshots.pop(0)
+
+
+class CommitObservingRemoteAgentClient(FakeRemoteAgentClient):
+    def __init__(self, *, store: MainAgentStore, responses: list[RemoteAgentSendResult]):
+        super().__init__(responses=responses)
+        self.store = store
+        self.transaction_depths: list[int] = []
+        self.route_decision_ids: list[str] = []
+
+    def send_message(self, *, agent, request, context_id: str, message_id: str):
+        self.transaction_depths.append(self.store.store._transaction_depth)
+        ingress = self.store.get_message_ingress(message_id)
+        assert ingress is not None
+        assert ingress.route_decision_id is not None
+        assert self.store.get_route_decision(ingress.route_decision_id) is not None
+        self.route_decision_ids.append(ingress.route_decision_id)
+        return super().send_message(
+            agent=agent,
+            request=request,
+            context_id=context_id,
+            message_id=message_id,
+        )
 
 
 def test_main_agent_core_local_message_persists_messages_without_task(tmp_path):
@@ -556,6 +663,34 @@ def test_main_agent_core_replays_duplicate_task_message_without_creating_task(tm
 
     submitter.run_next()
     assert len(runner.calls) == 1
+
+
+def test_main_agent_core_wakes_local_worker_only_after_task_acceptance_commits(tmp_path):
+    store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
+    submitter = CommitObservingTaskSubmitter(store=store)
+    core = MainAgentCore(
+        store=store,
+        local_message_responder=FakeResponder(),
+        local_task_runner=FakeTaskRunner(),
+        task_submitter=submitter,
+    )
+
+    result = core.handle_message(
+        MainAgentRequest(
+            context_id=None,
+            message_id="msg-commit-before-wake",
+            role=MessageRole.USER,
+            parts=[{"kind": "text", "text": "run after commit"}],
+            metadata={"executionMode": "task"},
+        )
+    )
+
+    assert isinstance(result, LocalTaskResult)
+    assert submitter.transaction_depths == [0]
+    assert submitter.queued_task_ids == [result.task_id]
+    task = store.get_task(result.task_id)
+    assert task is not None
+    assert task.status == TaskStatus.QUEUED
 
 
 def test_main_agent_core_queued_task_uses_input_snapshot(tmp_path):
@@ -825,6 +960,7 @@ def test_main_agent_core_local_task_runner_persists_output_message_artifact_and_
     assert artifacts[0].metadata["kind"] == "final_answer"
     assert [event.type for event in store.list_task_events(result.task_id)] == [
         "task_created",
+        "task_queued",
         "task_started",
         "task_artifact_created",
         "task_completed",
@@ -1046,10 +1182,12 @@ def test_main_agent_core_deletes_terminal_remote_proxy_context_only_after_it_fin
 
 def test_main_agent_core_running_background_task_honors_cancel_at_safe_boundary(tmp_path):
     class BlockingRunner:
-        def __init__(self) -> None:
+        def __init__(self, store: MainAgentStore) -> None:
+            self.store = store
             self.started = threading.Event()
             self.release = threading.Event()
             self.cancellation_requests: list[tuple[str, str | None]] = []
+            self.cancellation_transaction_depths: list[int] = []
 
         def run(self, messages: list[MessageRecord], *, thread_id: str) -> LocalTaskRunResult:
             self.started.set()
@@ -1060,6 +1198,7 @@ def test_main_agent_core_running_background_task_honors_cancel_at_safe_boundary(
             )
 
         def request_cancellation(self, *, thread_id: str, reason: str | None = None) -> bool:
+            self.cancellation_transaction_depths.append(self.store.store._transaction_depth)
             self.cancellation_requests.append((thread_id, reason))
             return True
 
@@ -1074,7 +1213,7 @@ def test_main_agent_core_running_background_task_honors_cancel_at_safe_boundary(
             return thread
 
     store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
-    runner = BlockingRunner()
+    runner = BlockingRunner(store)
     submitter = ThreadTaskSubmitter()
     core = MainAgentCore(
         store=store,
@@ -1100,6 +1239,7 @@ def test_main_agent_core_running_background_task_honors_cancel_at_safe_boundary(
     task = store.get_task(result.task_id)
     assert task is not None
     assert runner.cancellation_requests == [(task.runtime_thread_id, "operator requested")]
+    assert runner.cancellation_transaction_depths == [0]
 
     runner.release.set()
     for thread in submitter.threads:
@@ -1130,7 +1270,7 @@ def test_main_agent_core_background_resume_consumes_approval_and_completes(tmp_p
 
     store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
     runner = ApprovalRunner()
-    submitter = DeferredTaskSubmitter()
+    submitter = CommitObservingTaskSubmitter(store=store)
     core = MainAgentCore(
         store=store,
         local_message_responder=FakeResponder(),
@@ -1156,6 +1296,8 @@ def test_main_agent_core_background_resume_consumes_approval_and_completes(tmp_p
     with pytest.raises(ValueError, match="task is not waiting for approval"):
         core.resume_task(result.task_id, approved=True)
     assert len(submitter.pending) == 1
+    assert submitter.transaction_depths == [0, 0]
+    assert submitter.queued_task_ids == [result.task_id, result.task_id]
 
     submitter.run_next()
 
@@ -1297,6 +1439,7 @@ def test_main_agent_core_does_not_overwrite_terminal_task_status_after_runner_re
     assert store.list_task_artifacts(result.task_id) == []
     assert [event.type for event in store.list_task_events(result.task_id)] == [
         "task_created",
+        "task_queued",
         "task_started",
         "task_cancelled",
     ]
@@ -1315,30 +1458,29 @@ def test_main_agent_core_rolls_back_partial_completed_task_result(tmp_path):
     )
     context = store.create_context(context_id="ctx-1")
 
-    try:
-        core.handle_message(
-            MainAgentRequest(
-                context_id=context.context_id,
-                message_id="msg-user-1",
-                role=MessageRole.USER,
-                parts=[{"kind": "text", "text": "run"}],
-                metadata={"executionMode": "task"},
-            )
+    core.handle_message(
+        MainAgentRequest(
+            context_id=context.context_id,
+            message_id="msg-user-1",
+            role=MessageRole.USER,
+            parts=[{"kind": "text", "text": "run"}],
+            metadata={"executionMode": "task"},
         )
-    except RuntimeError as exc:
-        assert str(exc) == "artifact write failed"
-    else:
-        raise AssertionError("expected artifact write failure")
+    )
 
     tasks = store.list_context_tasks("ctx-1")
     assert len(tasks) == 1
-    assert tasks[0].status == TaskStatus.RUNNING
+    assert tasks[0].status == TaskStatus.FAILED
+    assert tasks[0].error_code == "runtime_error"
+    assert tasks[0].error_message == "Agent execution failed."
     assert tasks[0].output_message_id is None
     assert [message.role for message in store.list_context_messages("ctx-1")] == [MessageRole.USER]
     assert store.list_task_artifacts(tasks[0].task_id) == []
     assert [event.type for event in store.list_task_events(tasks[0].task_id)] == [
         "task_created",
+        "task_queued",
         "task_started",
+        "task_failed",
     ]
 
 
@@ -1372,6 +1514,7 @@ def test_main_agent_core_local_task_runner_failure_marks_task_failed(tmp_path):
     assert task.error_message == "Agent execution failed."
     assert [event.type for event in store.list_task_events(result.task_id)] == [
         "task_created",
+        "task_queued",
         "task_started",
         "task_failed",
     ]
@@ -1462,6 +1605,7 @@ def test_main_agent_core_model_protocol_failure_does_not_complete_task(tmp_path)
     assert task.error_retryable is False
     assert [event.type for event in store.list_task_events(result.task_id)] == [
         "task_created",
+        "task_queued",
         "task_started",
         "task_failed",
     ]
@@ -1686,6 +1830,7 @@ def test_main_agent_core_local_task_runner_can_leave_task_running(tmp_path):
     assert task.output_message_id is None
     assert [event.type for event in store.list_task_events(result.task_id)] == [
         "task_created",
+        "task_queued",
         "task_started",
     ]
 
@@ -1745,6 +1890,7 @@ def test_main_agent_core_local_task_runner_can_resume_input_required_task(tmp_pa
     assert store.get_message(resumed.output_message_id).parts == [{"kind": "text", "text": "approved answer"}]
     assert [event.type for event in store.list_task_events(result.task_id)] == [
         "task_created",
+        "task_queued",
         "task_started",
         "task_interrupted",
         "task_resumed",
@@ -1852,7 +1998,11 @@ def test_main_agent_core_recovers_durable_approval_continuation_after_restart(tm
     command = first_store.get_queued_task_execution(started.task_id)
     assert command is not None
     assert command.kind == QueuedTaskExecutionKind.APPROVAL
-    assert command.payload == {"approved": True, "reason": "operator approved"}
+    assert command.command_version == LOCAL_EXECUTION_COMMAND_VERSION
+    assert command.payload == ApprovalTaskExecutionPayload(
+        approved=True,
+        reason="operator approved",
+    )
     first_store.store.close()
 
     recovered_store = MainAgentStore(AgentStore(database_path))
@@ -1922,10 +2072,10 @@ def test_main_agent_core_recovers_durable_input_continuation_after_restart(tmp_p
     command = first_store.get_queued_task_execution(started.task_id)
     assert command is not None
     assert command.kind == QueuedTaskExecutionKind.USER_INPUT
-    assert command.payload == {
-        "parts": [{"kind": "text", "text": "staging"}],
-        "metadata": {"source": "operator"},
-    }
+    assert command.command_version == LOCAL_EXECUTION_COMMAND_VERSION
+    assert isinstance(command.payload, UserInputTaskExecutionPayload)
+    assert command.payload.materialize_parts() == [{"kind": "text", "text": "staging"}]
+    assert command.payload.materialize_metadata() == {"source": "operator"}
     first_store.store.close()
 
     recovered_store = MainAgentStore(AgentStore(database_path))
@@ -2129,6 +2279,45 @@ def test_main_agent_core_remote_message_records_delegation_and_assistant_message
     assert delegation.remote_agent_id == "agent-child-1"
     assert delegation.remote_context_id == "remote-ctx-1"
     assert delegation.remote_message_id == "remote-msg-1"
+
+
+def test_main_agent_core_calls_remote_agent_only_after_route_commit(tmp_path):
+    store = MainAgentStore(AgentStore(tmp_path / "agent.sqlite"))
+    store.upsert_registered_agent(
+        agent_id="agent-child-1",
+        name="Child agent",
+        card_url="http://127.0.0.1:9001/.well-known/agent-card.json",
+    )
+    remote_client = CommitObservingRemoteAgentClient(
+        store=store,
+        responses=[
+            RemoteAgentSendResult(
+                kind="message",
+                context_id="remote-ctx-1",
+                message_id="remote-msg-1",
+                parts=[{"kind": "text", "text": "remote answer"}],
+            )
+        ],
+    )
+    core = MainAgentCore(
+        store=store,
+        local_message_responder=FakeResponder(),
+        remote_agent_client=remote_client,
+    )
+
+    result = core.handle_message(
+        MainAgentRequest(
+            context_id=None,
+            message_id="msg-remote-after-commit",
+            role=MessageRole.USER,
+            parts=[{"kind": "text", "text": "delegate"}],
+            metadata={"route": "remote_agent", "targetAgentId": "agent-child-1"},
+        )
+    )
+
+    assert isinstance(result, RemoteAgentResult)
+    assert remote_client.transaction_depths == [0]
+    assert remote_client.route_decision_ids == [result.route_decision_id]
 
 
 def test_main_agent_core_replays_remote_message_without_a_second_remote_call(tmp_path):

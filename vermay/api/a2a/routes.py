@@ -15,6 +15,7 @@ from vermay.a2a_protocol import (
     TASK_RESUBSCRIBE_METHOD,
     TASK_RESUME_METHOD,
 )
+from vermay.errors import TaskEventProjectionError
 
 from .adapter import A2AAdapter
 from .rpc import (
@@ -156,7 +157,7 @@ async def _rpc_stream_message_events(adapter: A2AAdapter, payload: dict[str, Any
         # Once an A2A task's terminal or input-required state has reached the
         # client, a trailing replay/transport failure must not overwrite that
         # durable outcome with a JSON-RPC error event.
-        if reached_end_state:
+        if reached_end_state and not isinstance(exc, TaskEventProjectionError):
             return
         yield _format_a2a_sse_event(_jsonrpc_error_payload(request_id, exc))
 
@@ -228,31 +229,34 @@ async def _rpc_subscribe_task_events(adapter: A2AAdapter, payload: dict[str, Any
         return
 
     last_event_id = after_event_id
-    while True:
-        if await request.is_disconnected():
-            break
-        batch = await asyncio.to_thread(
-            adapter.wait_for_task_events,
-            task_id,
-            after_event_id=last_event_id,
-            timeout_seconds=1.0,
-        )
-        last_event_id = max(last_event_id, batch.last_event_id)
-        for event in batch.events:
-            yield _format_a2a_sse_event(_jsonrpc_success_payload(request_id, event))
-        task = adapter.get_task(task_id)
-        state = _task_state(task)
-        if _is_stream_end_state(state):
-            trailing_batch = await asyncio.to_thread(
+    try:
+        while True:
+            if await request.is_disconnected():
+                break
+            batch = await asyncio.to_thread(
                 adapter.wait_for_task_events,
                 task_id,
                 after_event_id=last_event_id,
-                timeout_seconds=0.0,
+                timeout_seconds=1.0,
             )
-            last_event_id = max(last_event_id, trailing_batch.last_event_id)
-            for event in trailing_batch.events:
+            last_event_id = max(last_event_id, batch.last_event_id)
+            for event in batch.events:
                 yield _format_a2a_sse_event(_jsonrpc_success_payload(request_id, event))
-            break
+            task = adapter.get_task(task_id)
+            state = _task_state(task)
+            if _is_stream_end_state(state):
+                trailing_batch = await asyncio.to_thread(
+                    adapter.wait_for_task_events,
+                    task_id,
+                    after_event_id=last_event_id,
+                    timeout_seconds=0.0,
+                )
+                last_event_id = max(last_event_id, trailing_batch.last_event_id)
+                for event in trailing_batch.events:
+                    yield _format_a2a_sse_event(_jsonrpc_success_payload(request_id, event))
+                break
+    except Exception as exc:
+        yield _format_a2a_sse_event(_jsonrpc_error_payload(request_id, exc))
 
 
 def _format_a2a_sse_event(event: dict[str, Any]) -> str:

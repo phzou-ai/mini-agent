@@ -1,7 +1,7 @@
 # Runtime Refinement Roadmap
 
 > Status: Active
-> Last reviewed: 2026-08-14
+> Last reviewed: 2026-08-16
 > Authority: Current runtime priority, phase gate, and handoff
 
 ## Purpose
@@ -19,8 +19,9 @@ implementation queue.
 
 ## Current Phase Gate
 
-**Current priority: preserve the closed S3 baseline; no runtime expansion is
-active.**
+**Current priority: preserve the closed S3 runtime baseline and the completed
+Platform M1-M6 contracts; no runtime expansion or Platform M7 work is
+authorized.**
 
 The current runtime has closed the demonstrated ownership and execution-control
 gaps through R3.2. No broader planner, scheduler, workspace, sandbox,
@@ -70,12 +71,30 @@ documentation authority or runtime ownership from chat history.
 ### Completed Baseline
 
 - `MainAgentCore` is the single A2A lifecycle owner.
+- Every committed local execution slice uses one versioned immutable queue
+  command. `InProcessLocalExecutionAdapter` owns process-local scheduling
+  mechanics only; Core-owned callbacks claim work and persist outcomes.
+- Typed lifecycle mutations enter `MainAgentCore.execute()` or
+  `MainAgentCore.stream()`; `TaskOutcomeRecorder` remains a subordinate
+  persistence boundary for accepted execution outcomes.
 - Durable Message Ingress prevents duplicate routing and execution for one
   top-level `messageId`.
 - Local process transitions, continuation kinds, startup reconciliation, and
   bounded context assembly have explicit contracts.
 - Task failures have durable public error projection and safe manual retry
   lineage.
+- Durable Task projections have a monotonic `lifecycle_revision`; replay order
+  remains independently owned by Task-event `event_id`.
+- The Task-event table is the replay authority. Process-local notification is
+  post-commit and disposable; subscribers re-read by `event_id`, and an
+  unprojectable durable event fails explicitly without advancing the cursor.
+- The Web console reconciles hydration, SSE, continuation, retry, and recovery
+  through one revision-aware Task reducer and derives Session lifecycle
+  presentation from the accepted Task projection.
+- Context detail management reads default to a bounded latest window. One
+  Session read controller owns the four related requests, and one Task event
+  controller owns replay, subscription, and recovery without becoming another
+  lifecycle state writer.
 - Local non-read-only effects use a durable Tool Invocation Ledger.
 - Governed execution limits and cancellation reach the current model and
   SSH/Kubernetes capability paths.
@@ -96,8 +115,19 @@ documentation authority or runtime ownership from chat history.
 - Stable runtime contracts belong in architecture or backend component
   documentation; this development area owns current priority and unsettled
   work.
+- Task revision and event replay cursor are separate contracts. New lifecycle
+  paths must preserve both and must not write browser Task state outside the
+  reducer.
+- Initial Task execution, approval continuation, and ordinary-input
+  continuation must not bypass the durable queue-command and Core-owned
+  claim/outcome path.
 
 ### Validation State
+
+Closed milestone counts below are immutable evidence from the date on which
+that milestone was accepted. They are not the current checkout's test count.
+The current regression baseline is owned by the
+[Single-Host Reliability Matrix](../../operations/single-host-reliability-matrix.md).
 
 S2 closed on 2026-08-14 with deterministic and live-model evidence:
 
@@ -169,7 +199,7 @@ The review also confirmed these accepted constraints and activation signals:
 
 | Current constraint | Why it remains accepted | Activation signal |
 | --- | --- | --- |
-| Context, Task, route-decision, and delegation reads are not consistently bounded. | The supported deployment is still a local single-host baseline, and no retained-data latency or response-size failure has been measured. | Measured read latency, payload growth, or browser degradation activates S4. |
+| Context list and detail reads use bounded `limit/offset` defaults, but the Web console has no older-history control. | The latest-window read closes the current payload risk without introducing cursor infrastructure or a generic query layer. | A real retained Context needs records older than the 200-record window, or concurrent writes make offset navigation observably unstable. |
 | `MainAgentCore`, `MainAgentStore`, and `agent-console.tsx` remain concentrated modules. | Their ownership is explicit, and the scan found no competing state machine or concrete change-coupling defect. | A real change becomes unsafe or repeatedly crosses unrelated responsibilities, activating one focused S5 extraction. |
 | Python and TypeScript maintain separate A2A wire constants. | Cross-language generation would add tooling and release work; current boundary tests catch known drift. | A protocol upgrade or reproduced constant mismatch authorizes a focused contract-generation decision. |
 | Child-agent endpoint inference retains a tested Agent Card compatibility fallback. | It is isolated to remote interoperability and does not create a second local lifecycle path. | A real child-agent interoperability defect determines whether to narrow, replace, or remove it. |
@@ -183,9 +213,70 @@ as durable content in this roadmap.
 
 ### Next Task
 
-Do not activate S4 automatically. Preserve the S3 release baseline and collect
-measured evidence of an unsafe unbounded read, concrete change-coupling defect,
-or release-reproducibility failure before authorizing S4, S5, or S6.
+Do not activate S4, Platform M7, or any later milestone automatically. Preserve
+the S3 release baseline and the Platform M1-M6 contracts. Collect measured
+evidence of a deep-history workflow, execution-boundary defect, concrete
+change-coupling defect, or release-reproducibility failure before authorizing
+another runtime or platform milestone.
+
+### 2026-08-16 Stabilization Strategy
+
+The current stabilization pass closes two demonstrated races and read-model
+risks without expanding runtime capabilities:
+
+- cancel and continuation HTTP responses initially used one timestamp-aware
+  Task snapshot merge. Platform M1 superseded that partial fix with one
+  revision-aware reducer for every durable Task source;
+- `/api/contexts` defaults to the latest 100 records, supports bounded
+  `limit/offset`, and resolves fallback titles with one bulk query per page;
+- `max_elapsed_seconds` remains optional. Human approval/input waiting is part
+  of its wall-clock age today, so setting an arbitrary short default would
+  create false expirations rather than predictable execution control;
+- validation counts in closed milestones remain historical. Current evidence
+  is updated only in the operations reliability matrix after the gate runs.
+
+This is a controlled subset of S4, not authorization for cursor pagination or
+incremental loading across every management endpoint.
+
+The later Platform M1 close-out on 2026-08-16 passed the 215-test focused
+single-host backend gate and 18 deterministic Playwright tests. The full-stack
+gate passed all 487 Python tests, frontend type checking, the Next.js
+production build, and the same 18 Playwright tests. Current evidence is
+maintained in the
+[Single-Host Reliability Matrix](../../operations/single-host-reliability-matrix.md)
+and the
+[M1 Task Projection Handoff](../platform/m1-task-projection.md).
+
+Platform M2 closed later on 2026-08-16. Its focused command and A2A boundary
+suite passed 137 tests; the single-host gate passed 217 backend and 18
+Playwright tests; and the full-stack gate passed 489 Python tests, frontend
+type checking, the Next.js production build, and the same 18 Playwright tests.
+The command boundary and preserved limits are recorded in the
+[M2 Lifecycle Command Surface Handoff](../platform/m2-lifecycle-command-surface.md).
+
+Platform M3 closed later on 2026-08-16. Its focused lifecycle and transaction
+suite passed 171 tests; the single-host gate passed 223 backend and 18
+Playwright tests; and the full-stack gate passed 495 Python tests, frontend
+type checking, the Next.js production build, and the same 18 Playwright tests.
+The commit-before-effect contract and preserved limits are recorded in the
+[M3 Transaction And Post-Commit Boundary Handoff](../platform/m3-transaction-post-commit-boundary.md).
+
+Platform M4 closed later on 2026-08-16. Its focused store and Core suite passed
+85 tests; the single-host gate passed 225 backend and 18 Playwright tests; and
+the full-stack gate passed 497 Python tests, frontend type checking, the
+Next.js production build, and the same 18 Playwright tests. An isolated server
+using the current configured model also passed `scripts/a2a_dev_smoke.sh` with
+temporary lifecycle and LangGraph databases. The bounded execution port,
+versioned queue-command contract, and preserved single-host limits are recorded
+in the [M4 Bounded Local Execution Handoff](../platform/m4-bounded-local-execution.md).
+
+Platform M5 closed later on 2026-08-16. Its focused store and A2A replay suite
+passed 82 tests; the single-host gate passed 228 backend and 19 Playwright
+tests; and the full-stack gate passed 500 Python tests, frontend type checking,
+the Next.js production build, and the same 19 Playwright tests. The durable
+event-table authority, disposable post-commit notifier, reconnect cursor, and
+explicit projection-error contract are recorded in the
+[M5 Event Replay And Subscription Handoff](../platform/m5-event-replay-subscription.md).
 
 ## Evidence-Gated Follow-up Plan
 

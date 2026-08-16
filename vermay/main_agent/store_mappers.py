@@ -30,6 +30,7 @@ from .models import (
     ToolInvocationRecord,
     ToolInvocationStatus,
     normalize_task_status,
+    queued_task_execution_payload_from_dict,
 )
 
 
@@ -114,6 +115,7 @@ def _task_from_row(row: Any) -> TaskRecord:
         error_code=row["error_code"],
         error_message=row["error_message"],
         error_retryable=bool(row["error_retryable"]),
+        lifecycle_revision=int(row["lifecycle_revision"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )
@@ -125,6 +127,7 @@ def _task_event_from_row(row: Any) -> TaskEventRecord:
         task_id=str(row["task_id"]),
         type=str(row["type"]),
         status=normalize_task_status(row["status"]) if row["status"] is not None else None,
+        lifecycle_revision=int(row["lifecycle_revision"]),
         payload=_loads(row["payload"]) or {},
         created_at=str(row["created_at"]),
     )
@@ -145,11 +148,18 @@ def _queued_task_execution_from_row(row: Any) -> QueuedTaskExecutionRecord:
         payload = {}
     if not isinstance(payload, dict):
         raise ValueError(f"queued execution payload must be an object: {row['task_id']}")
+    kind = QueuedTaskExecutionKind(str(row["kind"]))
+    command_version = int(row["command_version"])
     return QueuedTaskExecutionRecord(
         task_id=str(row["task_id"]),
-        kind=QueuedTaskExecutionKind(str(row["kind"])),
+        kind=kind,
         runtime_thread_id=str(row["runtime_thread_id"]),
-        payload=payload,
+        command_version=command_version,
+        payload=queued_task_execution_payload_from_dict(
+            kind=kind,
+            command_version=command_version,
+            payload=payload,
+        ),
         created_at=str(row["created_at"]),
     )
 

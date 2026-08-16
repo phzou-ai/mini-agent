@@ -27,9 +27,10 @@ main_agent_tasks
 
 main_agent_queued_executions
   task_id = <same Task>
+  command_version = 1
   kind = initial | approval | user_input
   runtime_thread_id = <same checkpoint key>
-  payload = accepted continuation data when applicable
+  payload = immutable typed execution data
 ```
 
 The command is created in the same SQLite transaction as the transition to
@@ -40,6 +41,11 @@ Task to `running` in one transaction. Thus:
 - a `running` Task proves only that a worker claimed the slice, not that it
   completed safely;
 - continuation payload is not reconstructed from audit events.
+
+Queue deserialization is strict. The store rejects unsupported command
+versions, mismatched kind/payload combinations, malformed continuation data,
+and runtime-thread mismatches. This keeps startup recovery from guessing how
+to execute an older or invalid command after code changes.
 
 The command types have explicit meaning:
 
@@ -77,10 +83,11 @@ reconciled in the same transaction: `running` non-read-only invocations become
 `canceled`. The runtime never assumes that an interrupted external call did not
 reach the external system.
 
-Recovery submission is idempotent within one process: the core tracks a
-scheduled task ID to avoid duplicate submissions. Across processes, SQLite
-claiming remains the correctness boundary; at most one worker can delete the
-command and transition the Task to `running`.
+Recovery submission is idempotent within one process: the local execution
+adapter tracks scheduled and active Task IDs as disposable optimizations.
+Across processes, the Core-owned SQLite claim remains the correctness
+boundary; at most one worker can delete the command and transition the Task to
+`running`.
 
 ## Failure Semantics
 
@@ -118,6 +125,7 @@ Focused tests cover:
 
 - initial queued work after a store restart;
 - durable approval and ordinary-input continuation commands after restart;
+- rejection of unsupported queue-command versions and invalid typed payloads;
 - failure of `running`, `cancel_requested`, and malformed/missing queued work;
 - retention of `input_required` and `auth_required` Tasks;
 - conversion of a `running` non-read-only invocation to `uncertain` when its

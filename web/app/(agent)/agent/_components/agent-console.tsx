@@ -1,6 +1,13 @@
 "use client"
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react"
 import {
   Activity,
   Bot,
@@ -17,25 +24,21 @@ import {
   textFromA2AParts as textFromParts,
 } from "@/lib/agent/a2a-stream-contract"
 import {
-  a2aEnvelopeToTaskEvent,
   a2aMessageToDisplayTask,
   approvalTasksToConversation,
   buildAssistantConversationMessage,
   buildDirectMessageFailure,
   buildUserConversationMessage,
   contextToSession,
-  eventWithTaskThreadId,
   failedTasksToConversation,
   failureFromRequestError,
   inputMessageIdFromFailureMessage,
   mergeConversationMessages,
-  mergeEvents,
   messagesToDisplayTask,
   preferredEventId,
   pruneHydratedTransientMessages,
   storedMessagesToConversation,
   storedTaskToAgentTask,
-  textFromA2AArtifact,
 } from "@/lib/agent/conversation-projection"
 import {
   a2aStateFromLocalProcessStatus,
@@ -48,10 +51,9 @@ import {
   isGeneralInputRequiredTask,
   isMessageDisplayTask,
   isTerminalStatus,
+  lifecycleRevisionFromMetadata,
   normalizeStatus,
   taskActivityLabel,
-  taskErrorFromA2AEvent,
-  taskErrorFromA2AMetadata,
   taskFailureForDisplay,
   taskInputRequest,
   taskStateProjection,
@@ -67,11 +69,7 @@ import {
   getAgentContext,
   getAgentModelConfig,
   getAgentMessageIngress,
-  listAgentContextDelegations,
-  listAgentContextMessages,
-  listAgentContextRouteDecisions,
   listAgentContexts,
-  listAgentContextTasks,
   listAgentRegisteredAgents,
   refreshAgentRegisteredAgent,
   retryAgentTask,
@@ -82,8 +80,13 @@ import {
 } from "@/lib/agent/client"
 import {
   openAgentA2AMessageStream,
-  openAgentA2ATaskEventStream,
 } from "@/lib/agent/stream"
+import { taskProjectionReducer } from "@/lib/agent/task-projection-reducer"
+import {
+  loadAgentSessionDiagnostics,
+  loadAgentSessionReadModel,
+} from "@/lib/agent/session-read-controller"
+import { useTaskEventController } from "@/lib/agent/use-task-event-controller"
 import type {
   AgentA2AAgentCard,
   AgentA2AExecutionMode,
@@ -189,7 +192,7 @@ export function AgentConsole() {
   const [messagesByContext, setMessagesByContext] = useState<
     Record<string, AgentMessage[]>
   >({})
-  const [tasks, setTasks] = useState<Record<string, AgentTask>>({})
+  const [tasks, dispatchTasks] = useReducer(taskProjectionReducer, {})
   const [eventsByTask, setEventsByTask] = useState<
     Record<string, AgentTaskEvent[]>
   >({})
@@ -223,14 +226,23 @@ export function AgentConsole() {
   const [retryingTaskId, setRetryingTaskId] = useState("")
   const [error, setError] = useState("")
   const messageStreamAbortRef = useRef<AbortController | null>(null)
-  const hydratingTaskEventsRef = useRef(new Set<string>())
-  const completedTaskEventHydrationsRef = useRef(new Set<string>())
-  const taskEventRecoveryAttemptsRef = useRef(new Set<string>())
-  const currentTaskIdRef = useRef("")
-  const eventsByTaskRef = useRef<Record<string, AgentTaskEvent[]>>({})
-  const tasksRef = useRef<Record<string, AgentTask>>({})
-  const refreshContextMessagesRef = useRef<(contextId: string) => void>(() => {})
   const userSessionSelectionRef = useRef(false)
+
+  const {
+    applyA2ATaskSnapshot,
+    hydrateTaskEvents,
+    reconcileA2ATaskSnapshot,
+    recordTaskEnvelope,
+    resetTaskHydration,
+    setRefreshContextHandler,
+  } = useTaskEventController({
+    tasks,
+    eventsByTask,
+    dispatchTasks,
+    setEventsByTask,
+    setSelectedEventId,
+    setError,
+  })
 
   const taskList = useMemo(
     () =>
@@ -241,7 +253,28 @@ export function AgentConsole() {
       ),
     [tasks]
   )
-  const currentSession = sessions.find(
+  const projectedSessions = useMemo(() => {
+    const latestTaskBySession = new Map<string, AgentTask>()
+    for (const task of taskList) {
+      if (!latestTaskBySession.has(task.session_id)) {
+        latestTaskBySession.set(task.session_id, task)
+      }
+    }
+    return sessions.map((session) => {
+      const task = latestTaskBySession.get(session.session_id)
+      return task
+        ? {
+            ...session,
+            status: task.status,
+            updated_at:
+              Date.parse(task.updated_at) >= Date.parse(session.updated_at)
+                ? task.updated_at
+                : session.updated_at,
+          }
+        : session
+    })
+  }, [sessions, taskList])
+  const currentSession = projectedSessions.find(
     (session) => session.session_id === currentSessionId
   )
   const currentTask = currentTaskId ? tasks[currentTaskId] : undefined
@@ -291,211 +324,9 @@ export function AgentConsole() {
     messageStreamAbortRef.current = null
   }, [])
 
-  useEffect(() => {
-    currentTaskIdRef.current = currentTaskId
-  }, [currentTaskId])
-
-  useEffect(() => {
-    eventsByTaskRef.current = eventsByTask
-  }, [eventsByTask])
-
-  useEffect(() => {
-    tasksRef.current = tasks
-  }, [tasks])
-
-  const applyA2ATaskSnapshot = useCallback((snapshot: AgentA2ATask) => {
-    const status = taskStatusFromA2A(snapshot.status.state, snapshot.metadata)
-    const updatedAt = snapshot.status.timestamp || new Date().toISOString()
-    const runtimeThreadId = threadIdFromMetadata(snapshot.metadata)
-
-    setTasks((previous) => {
-      const task = previous[snapshot.id]
-      if (!task) return previous
-      const stateProjection = taskStateProjection(
-        snapshot.status.state,
-        snapshot.metadata,
-        task.local_process_status
-      )
-      const taskError = taskErrorFromA2AMetadata(snapshot.metadata)
-      return {
-        ...previous,
-        [snapshot.id]: {
-          ...task,
-          thread_id: runtimeThreadId || task.thread_id,
-          a2a_state: stateProjection.a2a_state,
-          local_process_status: stateProjection.local_process_status,
-          status,
-          updated_at: updatedAt,
-          error: status === "failed" ? taskError ?? task.error : task.error,
-          metadata: {
-            ...(task.metadata ?? {}),
-            ...(snapshot.metadata ?? {}),
-          },
-        },
-      }
-    })
-    setSessions((previous) =>
-      previous.map((session) =>
-        session.session_id === snapshot.contextId
-          ? {
-              ...session,
-              status,
-              metadata: snapshot.metadata ?? session.metadata,
-              updated_at: updatedAt,
-            }
-          : session
-      )
-    )
-  }, [])
-
-  const reconcileA2ATaskSnapshot = useCallback(
-    async (taskId: string) => {
-      let snapshot: AgentA2ATask
-      try {
-        snapshot = await getAgentA2ATask(taskId)
-      } catch (taskError) {
-        setError(
-          getRequestErrorMessage(taskError, "Failed to refresh task snapshot")
-        )
-        return
-      }
-
-      applyA2ATaskSnapshot(snapshot)
-    },
-    [applyA2ATaskSnapshot]
-  )
-
-  const hydrateTaskEvents = useCallback((taskId: string, knownTerminal = false) => {
-    if (
-      !taskId ||
-      hydratingTaskEventsRef.current.has(taskId) ||
-      completedTaskEventHydrationsRef.current.has(taskId)
-    ) {
-      return
-    }
-
-    hydratingTaskEventsRef.current.add(taskId)
-    const afterEventId = Math.max(
-      0,
-      ...(eventsByTaskRef.current[taskId] ?? []).map(
-        (event) => event.event_id
-      )
-    )
-    let finished = false
-    let source: EventSource | null = null
-
-    // EventSource reports a normal EOF from a finite terminal Task stream as an
-    // error. Remember terminal replays so that EOF cannot restart hydration.
-    const taskIsTerminal = () =>
-      knownTerminal || isTerminalStatus(tasksRef.current[taskId]?.status)
-
-    const finish = (terminal = false) => {
-      if (finished) return
-      finished = true
-      source?.close()
-      hydratingTaskEventsRef.current.delete(taskId)
-      if (terminal) {
-        completedTaskEventHydrationsRef.current.add(taskId)
-        taskEventRecoveryAttemptsRef.current.delete(taskId)
-      }
-    }
-
-    const refreshTaskContext = (fallbackContextId?: string) => {
-      void reconcileA2ATaskSnapshot(taskId).finally(() => {
-        const contextId = tasksRef.current[taskId]?.session_id || fallbackContextId
-        if (contextId) refreshContextMessagesRef.current(contextId)
-      })
-    }
-
-    source = openAgentA2ATaskEventStream(taskId, {
-      after: afterEventId,
-      onEvent: (envelope) => {
-        const projectedEvent = a2aEnvelopeToTaskEvent(envelope)
-        if (!projectedEvent) return
-        const event = eventWithTaskThreadId(
-          projectedEvent,
-          tasksRef.current[projectedEvent.task_id]
-        )
-
-        const merged = mergeEvents(
-          eventsByTaskRef.current[event.task_id] ?? [],
-          [event]
-        )
-        eventsByTaskRef.current = {
-          ...eventsByTaskRef.current,
-          [event.task_id]: merged,
-        }
-        setEventsByTask((previous) => {
-          return { ...previous, [event.task_id]: merged }
-        })
-        setSelectedEventId(preferredEventId(merged))
-
-        if (event.status) {
-          const status = event.status
-          setTasks((previous) => {
-            const task = previous[event.task_id]
-            if (!task) return previous
-            const stateProjection = taskStateProjection(
-              event.a2a_state,
-              undefined,
-              event.local_process_status ?? task.local_process_status
-            )
-            const taskError = taskErrorFromA2AEvent(event)
-            return {
-              ...previous,
-              [event.task_id]: {
-                ...task,
-                a2a_state: stateProjection.a2a_state,
-                local_process_status: stateProjection.local_process_status,
-                status,
-                updated_at: event.created_at,
-                error: status === "failed" ? taskError ?? task.error : task.error,
-              },
-            }
-          })
-          setSessions((previous) =>
-            previous.map((session) =>
-              session.session_id === event.session_id
-                ? {
-                    ...session,
-                    status,
-                    updated_at: event.created_at,
-                  }
-                : session
-            )
-          )
-        }
-
-        if (event.status === "interrupted" || isTerminalStatus(event.status)) {
-          finish(true)
-          refreshTaskContext(event.session_id)
-        }
-      },
-      onError: () => {
-        if (finished) return
-        if (taskIsTerminal()) {
-          finish(true)
-          return
-        }
-
-        const alreadyRecovered = taskEventRecoveryAttemptsRef.current.has(taskId)
-        finish()
-        if (alreadyRecovered) return
-
-        taskEventRecoveryAttemptsRef.current.add(taskId)
-        refreshTaskContext(tasksRef.current[taskId]?.session_id)
-      },
-      onDone: () => {
-        finish(taskIsTerminal())
-      },
-    })
-  }, [reconcileA2ATaskSnapshot])
-
   const loadContextDiagnostics = useCallback(async (contextId: string) => {
-    const [routeDecisions, delegations] = await Promise.all([
-      listAgentContextRouteDecisions(contextId),
-      listAgentContextDelegations(contextId),
-    ])
+    const { routeDecisions, delegations } =
+      await loadAgentSessionDiagnostics(contextId)
     setRouteDecisionsByContext((previous) => ({
       ...previous,
       [contextId]: routeDecisions,
@@ -508,11 +339,21 @@ export function AgentConsole() {
 
   const loadContextMessages = useCallback(
     async (contextId: string) => {
-      const [storedMessages, storedTasks] = await Promise.all([
-        listAgentContextMessages(contextId),
-        listAgentContextTasks(contextId),
-        loadContextDiagnostics(contextId),
-      ])
+      const {
+        messages: storedMessages,
+        tasks: storedTasks,
+        routeDecisions,
+        delegations,
+      } = await loadAgentSessionReadModel(contextId)
+
+      setRouteDecisionsByContext((previous) => ({
+        ...previous,
+        [contextId]: routeDecisions,
+      }))
+      setDelegationsByContext((previous) => ({
+        ...previous,
+        [contextId]: delegations,
+      }))
 
       setMessagesByContext((previous) => ({
         ...previous,
@@ -552,28 +393,11 @@ export function AgentConsole() {
             ? latestTask
             : storedTaskToAgentTask(task, storedMessages)
         )
-        setTasks((previous) => {
-          const next = { ...previous }
-          for (const task of loadedTasks) {
-            next[task.task_id] = task
-          }
-          return next
-        })
+        dispatchTasks({ type: "upsert_many", tasks: loadedTasks })
         setCurrentTaskId(latestTask.task_id)
         hydrateTaskEvents(
           latestTask.task_id,
           isTerminalStatus(latestTask.status)
-        )
-        setSessions((previous) =>
-          previous.map((session) =>
-            session.session_id === contextId
-              ? {
-                  ...session,
-                  status: latestTask.status,
-                  updated_at: latestTask.updated_at,
-                }
-              : session
-          )
         )
         return
       }
@@ -583,20 +407,17 @@ export function AgentConsole() {
         setCurrentTaskId("")
         return
       }
-      setTasks((previous) => ({
-        ...previous,
-        [displayTask.task_id]: displayTask,
-      }))
+      dispatchTasks({ type: "upsert", task: displayTask })
       setCurrentTaskId(displayTask.task_id)
     },
-    [hydrateTaskEvents, loadContextDiagnostics]
+    [hydrateTaskEvents]
   )
 
   useEffect(() => {
-    refreshContextMessagesRef.current = (contextId) => {
+    setRefreshContextHandler((contextId) => {
       void loadContextMessages(contextId)
-    }
-  }, [loadContextMessages])
+    })
+  }, [loadContextMessages, setRefreshContextHandler])
 
   const reloadRegisteredAgents = useCallback(async () => {
     const agents = await listAgentRegisteredAgents()
@@ -770,7 +591,7 @@ export function AgentConsole() {
           )
         : [pendingSession, ...previous]
     })
-    setTasks((previous) => ({ ...previous, [pendingActivityId]: pendingTask }))
+    dispatchTasks({ type: "upsert", task: pendingTask })
     setCurrentSessionId(displayContextId)
     setCurrentTaskId(pendingActivityId)
     appendConversationMessages(displayContextId, [
@@ -826,11 +647,7 @@ export function AgentConsole() {
     }
 
     const removePendingActivity = () => {
-      setTasks((previous) => {
-        const next = { ...previous }
-        delete next[pendingActivityId]
-        return next
-      })
+      dispatchTasks({ type: "remove", taskIds: [pendingActivityId] })
     }
 
     const recoverMessageStreamFailure = async (
@@ -1006,11 +823,10 @@ export function AgentConsole() {
                   updated_at: displayTask.updated_at,
                 }
                 upsertResolvedSession(session)
-                setTasks((previous) => {
-                  const next = { ...previous }
-                  delete next[pendingActivityId]
-                  next[displayTask.task_id] = displayTask
-                  return next
+                dispatchTasks({
+                  type: "replace",
+                  removeTaskId: pendingActivityId,
+                  task: displayTask,
                 })
                 appendConversationMessages(result.contextId, [
                   buildUserConversationMessage(
@@ -1051,11 +867,10 @@ export function AgentConsole() {
                 updated_at: displayTask.updated_at,
               }
               upsertResolvedSession(session)
-              setTasks((previous) => {
-                const next = { ...previous }
-                delete next[pendingActivityId]
-                next[displayTask.task_id] = displayTask
-                return next
+              dispatchTasks({
+                type: "replace",
+                removeTaskId: pendingActivityId,
+                task: displayTask,
               })
               appendConversationMessages(result.contextId, [
                 buildUserConversationMessage(
@@ -1086,11 +901,13 @@ export function AgentConsole() {
                 result.status.state,
                 result.metadata
               )
-              promoteDraftContext(result.contextId)
               const task: AgentTask = {
                 task_id: result.id,
                 session_id: result.contextId,
                 thread_id: runtimeThreadId,
+                lifecycle_revision: lifecycleRevisionFromMetadata(
+                  result.metadata
+                ),
                 a2a_state: stateProjection.a2a_state,
                 local_process_status: stateProjection.local_process_status,
                 status: taskStatusFromA2A(result.status.state, result.metadata),
@@ -1101,6 +918,21 @@ export function AgentConsole() {
                 created_at: result.status.timestamp || new Date().toISOString(),
                 updated_at: result.status.timestamp || new Date().toISOString(),
               }
+              const inputRequest = taskInputRequest(task)
+              const isGeneralInputRequest = isGeneralInputRequiredTask(task)
+              const inputRequestMessageId =
+                isGeneralInputRequest && task.lifecycle_revision
+                  ? `msg-input-request-${task.task_id}-${task.lifecycle_revision}`
+                  : pendingAssistantMessageId
+
+              // General input requests are durable assistant turns. Project
+              // the same stable Message ID used by the backend immediately so
+              // a later Context refresh reconciles this entry instead of
+              // rendering a duplicate. Approval remains a structured card.
+              promoteDraftContext(
+                result.contextId,
+                isGeneralInputRequest ? pendingAssistantMessageId : undefined
+              )
               appendConversationMessages(result.contextId, [
                 buildUserConversationMessage(
                   outgoingMessageId,
@@ -1109,13 +941,23 @@ export function AgentConsole() {
                   task.task_id,
                   messageRequest
                 ),
-                buildAssistantConversationMessage(
-                  pendingAssistantMessageId,
-                  "",
-                  task.updated_at,
-                  isActiveStatus(task.status),
-                  task.task_id
-                ),
+                {
+                  ...buildAssistantConversationMessage(
+                    inputRequestMessageId,
+                    isGeneralInputRequest ? inputRequest?.prompt ?? "" : "",
+                    isGeneralInputRequest
+                      ? new Date().toISOString()
+                      : task.updated_at,
+                    isGeneralInputRequest ? false : isActiveStatus(task.status),
+                    task.task_id
+                  ),
+                  ...(isGeneralInputRequest
+                    ? {
+                        messageKind: "task_input_request" as const,
+                        inputRequestRevision: task.lifecycle_revision,
+                      }
+                    : {}),
+                },
               ])
               const session: AgentSession = {
                 session_id: result.contextId,
@@ -1127,11 +969,10 @@ export function AgentConsole() {
                 updated_at: task.updated_at,
               }
               upsertResolvedSession(session)
-              setTasks((previous) => {
-                const next = { ...previous }
-                delete next[pendingActivityId]
-                next[task.task_id] = task
-                return next
+              dispatchTasks({
+                type: "replace",
+                removeTaskId: pendingActivityId,
+                task,
               })
               setCurrentSessionId(result.contextId)
               setCurrentTaskId(task.task_id)
@@ -1148,91 +989,15 @@ export function AgentConsole() {
               return
             }
 
-            const projectedEvent = a2aEnvelopeToTaskEvent(envelope)
-            if (!projectedEvent) return
-            const event = eventWithTaskThreadId(
-              projectedEvent,
-              tasksRef.current[projectedEvent.task_id]
-            )
-            streamedTaskId = event.task_id
-
-            setEventsByTask((previous) => {
-              const merged = mergeEvents(previous[event.task_id] ?? [], [event])
-              eventsByTaskRef.current = {
-                ...eventsByTaskRef.current,
-                [event.task_id]: merged,
-              }
-              setSelectedEventId(preferredEventId(merged))
-              return { ...previous, [event.task_id]: merged }
-            })
-
-            if (event.status) {
-              setTasks((previous) => {
-                const task = previous[event.task_id]
-                if (!task) return previous
-                const stateProjection = taskStateProjection(
-                  event.a2a_state,
-                  undefined,
-                  event.local_process_status ?? task.local_process_status
-                )
-                const taskError = taskErrorFromA2AEvent(event)
-                const inputRequest = result.metadata?.inputRequest
-                const metadata = {
-                  ...(task.metadata ?? {}),
-                  ...(result.metadata ?? {}),
-                }
-                if (
-                  event.status === "interrupted" &&
-                  inputRequest &&
-                  typeof inputRequest === "object"
-                ) {
-                  metadata.inputRequest = inputRequest
-                } else if (event.status !== "interrupted") {
-                  delete metadata.inputRequest
-                }
-                return {
-                  ...previous,
-                  [event.task_id]: {
-                    ...task,
-                    a2a_state: stateProjection.a2a_state,
-                    local_process_status: stateProjection.local_process_status,
-                    status: event.status ?? task.status,
-                    updated_at: event.created_at,
-                    error:
-                      event.status === "failed"
-                        ? taskError ?? task.error
-                        : task.error,
-                    metadata,
-                  },
-                }
-              })
-              setSessions((previous) =>
-                previous.map((session) =>
-                  session.session_id === event.session_id
-                    ? {
-                        ...session,
-                        status: event.status ?? session.status,
-                        updated_at: event.created_at,
-                      }
-                    : session
-                )
-              )
+            const projection = recordTaskEnvelope(envelope)
+            if (!projection.ok) {
+              abortController.abort()
+              void recoverMessageStreamFailure(projection.failure)
+              return
             }
-
-            const finalAnswer = textFromA2AArtifact(envelope)
+            const { event, finalAnswer } = projection
+            streamedTaskId = event.task_id
             if (finalAnswer) {
-              setTasks((previous) => {
-                const task = previous[event.task_id]
-                if (!task) return previous
-                return {
-                  ...previous,
-                  [event.task_id]: {
-                    ...task,
-                    final_answer: finalAnswer,
-                    updated_at: event.created_at,
-                  },
-                }
-              })
               appendConversationMessages(event.session_id, [
                 buildAssistantConversationMessage(
                   pendingAssistantMessageId,
@@ -1249,7 +1014,7 @@ export function AgentConsole() {
               // message. Reconcile the durable Context after the Task reaches
               // a terminal A2A state so that record replaces the pending item.
               void reconcileA2ATaskSnapshot(event.task_id).finally(() => {
-                refreshContextMessagesRef.current(event.session_id)
+                void loadContextMessages(event.session_id)
               })
             }
           },
@@ -1361,13 +1126,7 @@ export function AgentConsole() {
         delete next[sessionId]
         return next
       })
-      setTasks((previous) => {
-        const next = { ...previous }
-        for (const taskId of deletedTaskIds) {
-          delete next[taskId]
-        }
-        return next
-      })
+      dispatchTasks({ type: "remove", taskIds: [...deletedTaskIds] })
       setEventsByTask((previous) => {
         const next = { ...previous }
         for (const taskId of deletedTaskIds) {
@@ -1445,36 +1204,7 @@ export function AgentConsole() {
         currentTask.task_id,
         "operator requested"
       )
-      const nextStatus = taskStatusFromA2A(
-        canceledTask.status.state,
-        canceledTask.metadata
-      )
-      const stateProjection = taskStateProjection(
-        canceledTask.status.state,
-        canceledTask.metadata,
-        currentTask.local_process_status
-      )
-      setTasks((previous) => ({
-        ...previous,
-        [currentTask.task_id]: {
-          ...currentTask,
-          a2a_state: stateProjection.a2a_state,
-          local_process_status: stateProjection.local_process_status,
-          status: nextStatus,
-          updated_at: canceledTask.status.timestamp || new Date().toISOString(),
-        },
-      }))
-      setSessions((previous) =>
-        previous.map((session) =>
-          session.session_id === currentTask.session_id
-            ? {
-                ...session,
-                status: nextStatus,
-                updated_at: canceledTask.status.timestamp || session.updated_at,
-              }
-            : session
-        )
-      )
+      applyA2ATaskSnapshot(canceledTask)
     } catch (cancelError) {
       setError(getRequestErrorMessage(cancelError, "Failed to cancel task"))
     }
@@ -1492,44 +1222,10 @@ export function AgentConsole() {
     setResumingTaskId(taskId)
     try {
       const resumedTask = await resumeAgentA2ATask(taskId, approved, reason)
-      const nextStatus = taskStatusFromA2A(
-        resumedTask.status.state,
-        resumedTask.metadata
-      )
-      const updatedAt = resumedTask.status.timestamp || new Date().toISOString()
       const contextId = resumedTask.contextId || task.session_id
-      const runtimeThreadId = threadIdFromMetadata(resumedTask.metadata)
-      const stateProjection = taskStateProjection(
-        resumedTask.status.state,
-        resumedTask.metadata,
-        task.local_process_status
-      )
-
-      setTasks((previous) => ({
-        ...previous,
-        [taskId]: {
-          ...task,
-          thread_id: runtimeThreadId || task.thread_id,
-          a2a_state: stateProjection.a2a_state,
-          local_process_status: stateProjection.local_process_status,
-          status: nextStatus,
-          updated_at: updatedAt,
-          metadata: resumedTask.metadata ?? task.metadata,
-        },
-      }))
-      setSessions((previous) =>
-        previous.map((session) =>
-          session.session_id === contextId
-            ? {
-                ...session,
-                status: nextStatus,
-                metadata: resumedTask.metadata ?? session.metadata,
-                updated_at: updatedAt,
-              }
-            : session
-        )
-      )
+      applyA2ATaskSnapshot(resumedTask)
       setCurrentTaskId(taskId)
+      resetTaskHydration(taskId)
       hydrateTaskEvents(taskId)
       if (contextId) {
         await loadContextMessages(contextId)
@@ -1592,41 +1288,9 @@ export function AgentConsole() {
       }
 
       const snapshot = result.task
-      const nextStatus = taskStatusFromA2A(
-        snapshot.status.state,
-        snapshot.metadata
-      )
-      const updatedAt = snapshot.status.timestamp || new Date().toISOString()
-      const runtimeThreadId = threadIdFromMetadata(snapshot.metadata)
-      const stateProjection = taskStateProjection(
-        snapshot.status.state,
-        snapshot.metadata,
-        task.local_process_status
-      )
-      setTasks((previous) => ({
-        ...previous,
-        [taskId]: {
-          ...task,
-          thread_id: runtimeThreadId || task.thread_id,
-          a2a_state: stateProjection.a2a_state,
-          local_process_status: stateProjection.local_process_status,
-          status: nextStatus,
-          updated_at: updatedAt,
-          metadata: snapshot.metadata ?? {},
-        },
-      }))
-      setSessions((previous) =>
-        previous.map((session) =>
-          session.session_id === snapshot.contextId
-            ? {
-                ...session,
-                status: nextStatus,
-                updated_at: updatedAt,
-              }
-            : session
-        )
-      )
+      applyA2ATaskSnapshot(snapshot)
       setCurrentTaskId(taskId)
+      resetTaskHydration(taskId)
       hydrateTaskEvents(taskId)
       await loadContextMessages(snapshot.contextId)
     } catch (submitError) {
@@ -1762,7 +1426,7 @@ export function AgentConsole() {
     >
       <AgentSidebar
         expanded={sidebarExpanded}
-        sessions={sessions}
+        sessions={projectedSessions}
         currentSessionId={currentSessionId}
         loading={loading}
         modelConfig={modelConfig}

@@ -6,7 +6,7 @@
 ## Purpose
 
 `main_agent_tasks.status` is the authoritative lifecycle state for a locally
-owned Agent Process. M2 makes a state change a validated operation rather than
+owned Agent Process. This contract makes a state change a validated operation rather than
 an unconstrained database update.
 
 The goal is not to introduce another status model. It keeps the existing
@@ -54,8 +54,8 @@ auth_required  -> canceled | failed
 `completed`, `canceled`, and `failed` are terminal. No transition leaves a
 terminal state. `cancel_requested` is a short-lived local state used only while
 a worker is active; it resolves to `canceled` at the next safe boundary. If a
-process restart removes that worker, M4 resolves it to a retryable `failed`
-state rather than pretending cancellation completed.
+process restart removes that worker, startup reconciliation resolves it to a
+retryable `failed` state rather than pretending cancellation completed.
 
 ## Transition Events
 
@@ -99,8 +99,14 @@ For a real transition, the API:
 A request to the already-current target state is a no-op and emits no duplicate
 event. Invalid transitions fail before either status or event is persisted.
 
-M4 now uses this transition policy for startup recovery. It does not introduce
-distributed worker leases or replay ambiguous execution; see
+The same transaction increments the Task's `lifecycle_revision` for a real
+public projection change. A no-op does not increment it. The matching event
+inherits the resulting revision; its independent `event_id` remains the replay
+order. Output Message and artifact mutations follow the same public-projection
+revision rule even though they are not local-process status transitions.
+
+Startup reconciliation and bounded local execution use this transition policy.
+They do not introduce distributed worker leases or replay ambiguous execution; see
 [startup-reconciliation.md](startup-reconciliation.md).
 
 ## Relationship to Other Contracts
@@ -110,7 +116,7 @@ distributed worker leases or replay ambiguous execution; see
   initial causal input.
 - a pending continuation decides whether a blocked Task may accept approval or
   user input.
-- this M2 transition policy decides whether the local Agent Process may change
+- this local transition policy decides whether the local Agent Process may change
   lifecycle state.
 - A2A TaskState is a projection of the resulting local state; LangGraph emits
   an execution-slice outcome that the local lifecycle layer translates.
@@ -136,6 +142,10 @@ distributed worker leases or replay ambiguous execution; see
   table and target-state-to-event mapping.
 - `vermay/main_agent/store.py` provides the atomic local-process creation
   and transition operations.
-- `vermay/main_agent/core.py` owns the local execution decisions and uses
-  those operations for queueing, execution, interruption, continuation,
-  completion, failure, and cancellation.
+- `vermay/main_agent/core.py` owns local execution policy, atomically claims
+  queued commands, and records interruption, completion, failure, and
+  cancellation outcomes.
+- `vermay/main_agent/local_execution.py` owns only process-local wake-up,
+  duplicate suppression, active-work tracking, and runner dispatch. Its
+  lifecycle callbacks return to `MainAgentCore`; it does not persist Task
+  state itself.

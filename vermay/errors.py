@@ -22,6 +22,7 @@ class AgentErrorCode(str, Enum):
     MESSAGE_IN_PROGRESS = "message_in_progress"
     MESSAGE_INGRESS_STALE = "message_ingress_stale"
     MESSAGE_STREAM_ABORTED = "message_stream_aborted"
+    TASK_EVENT_PROJECTION_ERROR = "task_event_projection_error"
     RESOURCE_CONFLICT = "resource_conflict"
     RUNTIME_ERROR = "runtime_error"
 
@@ -169,6 +170,21 @@ class TaskNotFoundError(AgentError):
             http_status=404,
             public_message="task not found",
         )
+
+
+class TaskEventProjectionError(AgentError):
+    """A durable Task event cannot be represented by the A2A stream."""
+
+    def __init__(self, *, task_id: str, event_id: int, event_type: str) -> None:
+        super().__init__(
+            f"cannot project task event {event_id} ({event_type}) for task {task_id}",
+            code=AgentErrorCode.TASK_EVENT_PROJECTION_ERROR,
+            http_status=500,
+            public_message="A persisted Task event could not be projected to A2A.",
+        )
+        self.task_id = task_id
+        self.event_id = event_id
+        self.event_type = event_type
 
 
 class ArtifactNotFoundError(AgentError):

@@ -31,8 +31,27 @@ _STATUS_TO_A2A = {
 }
 
 
+# These records are durable control-plane audit facts, not A2A lifecycle or
+# artifact events. Keep this list explicit: an unknown statusless event must
+# still fail projection instead of disappearing from a subscriber silently.
+_A2A_INTERNAL_AUDIT_EVENT_TYPES = frozenset(
+    {
+        "task_input_submitted",
+        "task_resumed",
+        "task_retry_requested",
+        "task_retried",
+    }
+)
+
+
 def task_status_to_a2a_state(status: object) -> A2ATaskState:
     return _STATUS_TO_A2A[normalize_task_status(status)]
+
+
+def is_a2a_internal_task_event(event: TaskEventRecord) -> bool:
+    """Return whether a durable audit fact intentionally has no A2A envelope."""
+
+    return event.status is None and event.type in _A2A_INTERNAL_AUDIT_EVENT_TYPES
 
 
 def task_to_a2a_payload(
@@ -59,6 +78,7 @@ def task_to_a2a_payload(
         "outputMessageId": task.output_message_id,
         "localStatus": task.status.value,
         "localAttempt": task.attempt,
+        "lifecycleRevision": task.lifecycle_revision,
         **({"inputRequest": input_request} if input_request is not None else {}),
     }
     _add_task_failure_metadata(
@@ -95,6 +115,7 @@ def task_event_to_a2a_status_update(event: TaskEventRecord, *, task: TaskRecord)
         "localEventId": event.event_id,
         "localEventType": event.type,
         "localEventCreatedAt": event.created_at,
+        "lifecycleRevision": event.lifecycle_revision,
         **thread_metadata(task.runtime_thread_id, include_runtime_alias=True),
         "localStatus": event.status.value,
         **({"inputRequest": input_request} if isinstance(input_request, dict) else {}),
@@ -186,6 +207,7 @@ def task_event_to_a2a_artifact_update(
             "localEventId": event.event_id,
             "localEventType": event.type,
             "localEventCreatedAt": event.created_at,
+            "lifecycleRevision": event.lifecycle_revision,
             "localArtifactId": artifact.artifact_id,
             **thread_metadata(task.runtime_thread_id, include_runtime_alias=True),
         },

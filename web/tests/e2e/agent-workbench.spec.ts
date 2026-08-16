@@ -176,7 +176,7 @@ test.describe("Agent Workbench", () => {
       })
     })
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/route-decisions`,
+      `**/api/bff/agent/contexts/${contextId}/route-decisions**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -186,7 +186,7 @@ test.describe("Agent Workbench", () => {
       }
     )
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/delegations`,
+      `**/api/bff/agent/contexts/${contextId}/delegations**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -263,7 +263,7 @@ test.describe("Agent Workbench", () => {
 
     await mockAgentBootstrap(page)
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/route-decisions`,
+      `**/api/bff/agent/contexts/${contextId}/route-decisions**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -273,7 +273,7 @@ test.describe("Agent Workbench", () => {
       }
     )
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/delegations`,
+      `**/api/bff/agent/contexts/${contextId}/delegations**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -589,7 +589,7 @@ test.describe("Agent Workbench", () => {
 
     await mockAgentBootstrap(page)
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/route-decisions`,
+      `**/api/bff/agent/contexts/${contextId}/route-decisions**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -599,7 +599,7 @@ test.describe("Agent Workbench", () => {
       }
     )
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/delegations`,
+      `**/api/bff/agent/contexts/${contextId}/delegations**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -691,7 +691,7 @@ test.describe("Agent Workbench", () => {
 
     await mockAgentBootstrap(page)
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/route-decisions`,
+      `**/api/bff/agent/contexts/${contextId}/route-decisions**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -701,7 +701,7 @@ test.describe("Agent Workbench", () => {
       }
     )
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/delegations`,
+      `**/api/bff/agent/contexts/${contextId}/delegations**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -829,7 +829,7 @@ test.describe("Agent Workbench", () => {
       })
     })
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/route-decisions`,
+      `**/api/bff/agent/contexts/${contextId}/route-decisions**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -839,7 +839,7 @@ test.describe("Agent Workbench", () => {
       }
     )
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/delegations`,
+      `**/api/bff/agent/contexts/${contextId}/delegations**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -901,7 +901,7 @@ test.describe("Agent Workbench", () => {
       }
     )
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/messages`,
+      `**/api/bff/agent/contexts/${contextId}/messages**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -930,7 +930,7 @@ test.describe("Agent Workbench", () => {
       }
     )
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/tasks`,
+      `**/api/bff/agent/contexts/${contextId}/tasks**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -1033,7 +1033,7 @@ test.describe("Agent Workbench", () => {
       })
     })
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/route-decisions`,
+      `**/api/bff/agent/contexts/${contextId}/route-decisions**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -1043,7 +1043,7 @@ test.describe("Agent Workbench", () => {
       }
     )
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/delegations`,
+      `**/api/bff/agent/contexts/${contextId}/delegations**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -1125,7 +1125,7 @@ test.describe("Agent Workbench", () => {
       }
     )
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/messages`,
+      `**/api/bff/agent/contexts/${contextId}/messages**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -1145,7 +1145,7 @@ test.describe("Agent Workbench", () => {
       }
     )
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/tasks`,
+      `**/api/bff/agent/contexts/${contextId}/tasks**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -1192,18 +1192,30 @@ test.describe("Agent Workbench", () => {
     const taskId = `task-e2e-input-${now}`
     const prompt = `check deployment ${now}`
     const answer = `Staging is healthy ${now}`
-    const startedAt = new Date(now).toISOString()
-    const completedAt = new Date(now + 1000).toISOString()
+    let startedAt = new Date(now).toISOString()
+    let resumedAt = new Date(now + 500).toISOString()
+    let completedAt = new Date(now + 1000).toISOString()
+    const inputRequestRevision = 4
     const inputRequest = {
       kind: "user_input_required",
       prompt: "Which environment should I inspect?",
       choices: ["staging", "production"],
       inputSchema: { type: "string", enum: ["staging", "production"] },
     }
+    let initialMessageId = ""
     let submittedPayload: Record<string, unknown> | null = null
+    let continuationCompleted = false
 
     await mockAgentBootstrap(page)
     await page.route("**/api/bff/agent/a2a/message-stream", async (route) => {
+      const request = JSON.parse(route.request().postData() || "{}") as {
+        messageId?: string
+      }
+      initialMessageId = request.messageId ?? ""
+      const taskStartedAt = Date.now()
+      startedAt = new Date(taskStartedAt).toISOString()
+      resumedAt = new Date(taskStartedAt + 500).toISOString()
+      completedAt = new Date(taskStartedAt + 1000).toISOString()
       await route.fulfill({
         status: 200,
         contentType: "text/event-stream",
@@ -1218,6 +1230,7 @@ test.describe("Agent Workbench", () => {
             metadata: {
               localThreadId: `thread-${now}`,
               runtimeThreadId: `thread-${now}`,
+              lifecycleRevision: inputRequestRevision,
               inputRequest,
             },
           },
@@ -1236,10 +1249,12 @@ test.describe("Agent Workbench", () => {
             kind: "task",
             id: taskId,
             contextId,
-            status: { state: "completed", timestamp: completedAt },
+            status: { state: "working", timestamp: resumedAt },
             metadata: {
+              localStatus: "running",
               localThreadId: `thread-${now}`,
               runtimeThreadId: `thread-${now}`,
+              lifecycleRevision: inputRequestRevision + 2,
             },
           },
           raw: {},
@@ -1247,19 +1262,19 @@ test.describe("Agent Workbench", () => {
       })
     })
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/route-decisions`,
+      `**/api/bff/agent/contexts/${contextId}/route-decisions**`,
       async (route) => {
         await route.fulfill({ status: 200, contentType: "application/json", body: "[]" })
       }
     )
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/delegations`,
+      `**/api/bff/agent/contexts/${contextId}/delegations**`,
       async (route) => {
         await route.fulfill({ status: 200, contentType: "application/json", body: "[]" })
       }
     )
     await page.route(`**/api/bff/agent/a2a/tasks/${taskId}`, async (route) => {
-      const completed = submittedPayload !== null
+      const submitted = submittedPayload !== null
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -1268,13 +1283,31 @@ test.describe("Agent Workbench", () => {
           id: taskId,
           contextId,
           status: {
-            state: completed ? "completed" : "input-required",
-            timestamp: completed ? completedAt : startedAt,
+            state: continuationCompleted
+              ? "completed"
+              : submitted
+                ? "working"
+                : "input-required",
+            timestamp: continuationCompleted
+              ? completedAt
+              : submitted
+                ? resumedAt
+                : startedAt,
           },
           metadata: {
+            localStatus: continuationCompleted
+              ? "completed"
+              : submitted
+                ? "running"
+                : "input_required",
             localThreadId: `thread-${now}`,
             runtimeThreadId: `thread-${now}`,
-            ...(completed ? {} : { inputRequest }),
+            lifecycleRevision: continuationCompleted
+              ? inputRequestRevision + 4
+              : submitted
+                ? inputRequestRevision + 2
+                : inputRequestRevision,
+            ...(submitted ? {} : { inputRequest }),
           },
         }),
       })
@@ -1282,19 +1315,77 @@ test.describe("Agent Workbench", () => {
     await page.route(
       `**/api/bff/agent/a2a/tasks/${taskId}/events**`,
       async (route) => {
-        await route.fulfill({ status: 200, contentType: "text/event-stream", body: "" })
+        if (submittedPayload === null) {
+          await route.fulfill({
+            status: 200,
+            contentType: "text/event-stream",
+            body: "",
+          })
+          return
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 750))
+        continuationCompleted = true
+        await route.fulfill({
+          status: 200,
+          contentType: "text/event-stream",
+          body: [
+            `event: artifact-update\ndata: ${JSON.stringify({
+              jsonrpc: "2.0",
+              id: `e2e-input-artifact-${now}`,
+              result: {
+                kind: "artifact-update",
+                taskId,
+                contextId,
+                artifact: {
+                  artifactId: "final_answer",
+                  parts: [{ kind: "text", text: answer }],
+                },
+                append: false,
+                lastChunk: true,
+                metadata: {
+                  localEventId: 11,
+                  localEventType: "task_artifact_created",
+                  localEventCreatedAt: completedAt,
+                  localStatus: "running",
+                  localThreadId: `thread-${now}`,
+                  runtimeThreadId: `thread-${now}`,
+                },
+              },
+            })}\n\n`,
+            `event: status-update\ndata: ${JSON.stringify({
+              jsonrpc: "2.0",
+              id: `e2e-input-completed-${now}`,
+              result: {
+                kind: "status-update",
+                taskId,
+                contextId,
+                status: { state: "completed", timestamp: completedAt },
+                final: true,
+                metadata: {
+                  localEventId: 12,
+                  localEventType: "task_completed",
+                  localEventCreatedAt: completedAt,
+                  localStatus: "completed",
+                  localThreadId: `thread-${now}`,
+                  runtimeThreadId: `thread-${now}`,
+                },
+              },
+            })}\n\n`,
+          ].join(""),
+        })
       }
     )
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/messages`,
+      `**/api/bff/agent/contexts/${contextId}/messages**`,
       async (route) => {
-        const completed = submittedPayload !== null
+        const submitted = submittedPayload !== null
         await route.fulfill({
           status: 200,
           contentType: "application/json",
           body: JSON.stringify([
             {
-              message_id: `msg-user-${now}`,
+              message_id: initialMessageId || `msg-user-${now}`,
               context_id: contextId,
               role: "user",
               parts: [{ kind: "text", text: prompt }],
@@ -1302,7 +1393,22 @@ test.describe("Agent Workbench", () => {
               metadata: {},
               created_at: startedAt,
             },
-            ...(completed
+            {
+              message_id: `msg-input-request-${taskId}-${inputRequestRevision}`,
+              context_id: contextId,
+              role: "agent",
+              parts: [{ kind: "text", text: inputRequest.prompt }],
+              task_id: taskId,
+              metadata: {
+                messageKind: "task_input_request",
+                inputRequest,
+                inputRequestRevision,
+              },
+              created_at: new Date(
+                Date.parse(startedAt) + 250
+              ).toISOString(),
+            },
+            ...(submitted
               ? [
                   {
                     message_id: `msg-input-${now}`,
@@ -1311,17 +1417,21 @@ test.describe("Agent Workbench", () => {
                     parts: [{ kind: "text", text: "staging" }],
                     task_id: taskId,
                     metadata: {},
-                    created_at: completedAt,
+                    created_at: resumedAt,
                   },
-                  {
-                    message_id: `msg-agent-${now}`,
-                    context_id: contextId,
-                    role: "agent",
-                    parts: [{ kind: "text", text: answer }],
-                    task_id: taskId,
-                    metadata: {},
-                    created_at: completedAt,
-                  },
+                  ...(continuationCompleted
+                    ? [
+                        {
+                          message_id: `msg-agent-${now}`,
+                          context_id: contextId,
+                          role: "agent",
+                          parts: [{ kind: "text", text: answer }],
+                          task_id: taskId,
+                          metadata: {},
+                          created_at: completedAt,
+                        },
+                      ]
+                    : []),
                 ]
               : []),
           ]),
@@ -1329,9 +1439,9 @@ test.describe("Agent Workbench", () => {
       }
     )
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/tasks`,
+      `**/api/bff/agent/contexts/${contextId}/tasks**`,
       async (route) => {
-        const completed = submittedPayload !== null
+        const submitted = submittedPayload !== null
         await route.fulfill({
           status: 200,
           contentType: "application/json",
@@ -1339,13 +1449,28 @@ test.describe("Agent Workbench", () => {
             {
               task_id: taskId,
               context_id: contextId,
-              status: completed ? "completed" : "interrupted",
-              input_message_id: `msg-user-${now}`,
-              output_message_id: completed ? `msg-agent-${now}` : null,
+              status: continuationCompleted
+                ? "completed"
+                : submitted
+                  ? "running"
+                  : "interrupted",
+              input_message_id: initialMessageId || `msg-user-${now}`,
+              output_message_id: continuationCompleted
+                ? `msg-agent-${now}`
+                : null,
               runtime_thread_id: `thread-${now}`,
+              lifecycle_revision: continuationCompleted
+                ? inputRequestRevision + 4
+                : submitted
+                  ? inputRequestRevision + 2
+                  : inputRequestRevision,
               attempt: 1,
               created_at: startedAt,
-              updated_at: completed ? completedAt : startedAt,
+              updated_at: continuationCompleted
+                ? completedAt
+                : submitted
+                  ? resumedAt
+                  : startedAt,
             },
           ]),
         })
@@ -1358,7 +1483,20 @@ test.describe("Agent Workbench", () => {
     await page.getByTestId("agent-composer-send").click()
 
     await expect(page.getByTestId("agent-task-input-card")).toBeVisible()
-    await expect(page.getByText("Which environment should I inspect?")).toBeVisible()
+    const clarificationMessage = assistantMessages(page).filter({
+      hasText: "Which environment should I inspect?",
+    })
+    await expect(clarificationMessage).toHaveCount(1)
+    await expect(clarificationMessage).toBeVisible()
+    await expect
+      .poll(() =>
+        page
+          .getByTestId("agent-message-item")
+          .evaluateAll((elements) =>
+            elements.map((element) => element.getAttribute("data-agent-role"))
+          )
+      )
+      .toEqual(["user", "assistant"])
     const messageList = page.getByTestId("agent-message-list")
     const inputCard = page.getByTestId("agent-task-input-card")
     const [messageListWidth, messageListScrollWidth, inputCardBox] =
@@ -1372,7 +1510,30 @@ test.describe("Agent Workbench", () => {
     await page.getByTestId("agent-composer-input").fill("staging")
     await page.getByTestId("agent-composer-send").click()
 
+    const continuationMessage = userMessages(page).filter({ hasText: "staging" })
+    await expect(continuationMessage).toBeVisible()
+    await expect
+      .poll(() =>
+        page
+          .getByTestId("agent-message-item")
+          .evaluateAll((elements) =>
+            elements.slice(-2).map((element) => element.getAttribute("data-agent-role"))
+          )
+      )
+      .toEqual(["user", "assistant"])
+
     await expect(assistantMessages(page).filter({ hasText: answer })).toBeVisible()
+    await expect(page.getByTestId("agent-task-input-card")).toHaveCount(0)
+    await expect(clarificationMessage).toHaveCount(1)
+    await expect
+      .poll(() =>
+        page
+          .getByTestId("agent-message-item")
+          .evaluateAll((elements) =>
+            elements.map((element) => element.getAttribute("data-agent-role"))
+          )
+      )
+      .toEqual(["user", "assistant", "user", "assistant"])
     await expect
       .poll(() =>
         messageList.evaluate(
@@ -1562,7 +1723,7 @@ test.describe("Agent Workbench", () => {
     })
 
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/route-decisions`,
+      `**/api/bff/agent/contexts/${contextId}/route-decisions**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -1585,7 +1746,7 @@ test.describe("Agent Workbench", () => {
     )
 
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/delegations`,
+      `**/api/bff/agent/contexts/${contextId}/delegations**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -1684,7 +1845,7 @@ test.describe("Agent Workbench", () => {
       })
     })
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/route-decisions`,
+      `**/api/bff/agent/contexts/${contextId}/route-decisions**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -1694,7 +1855,7 @@ test.describe("Agent Workbench", () => {
       }
     )
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/delegations`,
+      `**/api/bff/agent/contexts/${contextId}/delegations**`,
       async (route) => {
         await route.fulfill({
           status: 200,

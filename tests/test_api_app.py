@@ -12,6 +12,8 @@ from vermay.main_agent import (
     MainAgentRequest,
     MainAgentStore,
     MessageRole,
+    ReconcileStartupCommand,
+    StartupReconciliationOutcome,
     TaskStatus,
 )
 from vermay.storage import AgentStore
@@ -26,8 +28,10 @@ class FakeResponder:
 class ReconciliationSpy:
     calls: int = 0
 
-    def reconcile_startup(self) -> None:
+    def execute(self, command):
+        assert isinstance(command, ReconcileStartupCommand)
         self.calls += 1
+        return StartupReconciliationOutcome()
 
 
 @dataclass
@@ -134,6 +138,65 @@ def test_api_contexts_fall_back_to_first_user_message_as_title(tmp_path):
 
     assert response.status_code == 200
     assert response.json()[0]["title"] == "First question with spaces"
+    main_store_backend.close()
+
+
+def test_api_contexts_support_bounded_pagination(tmp_path):
+    main_store_backend = AgentStore(tmp_path / "main.sqlite")
+    main_store = MainAgentStore(main_store_backend)
+    for index in range(3):
+        context_id = f"ctx-{index}"
+        main_store.create_context(context_id=context_id, title=f"Context {index}")
+    core = MainAgentCore(store=main_store, local_message_responder=FakeResponder())
+    client = TestClient(create_app(main_agent_core=core))
+
+    first_response = client.get("/api/contexts?limit=1&offset=0")
+    second_response = client.get("/api/contexts?limit=1&offset=1")
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert len(first_response.json()) == 1
+    assert len(second_response.json()) == 1
+    assert first_response.json()[0]["context_id"] != second_response.json()[0]["context_id"]
+    assert client.get("/api/contexts?limit=201").status_code == 422
+    main_store_backend.close()
+
+
+def test_api_context_detail_reads_use_bounded_defaults(tmp_path, monkeypatch):
+    main_store_backend = AgentStore(tmp_path / "main.sqlite")
+    main_store = MainAgentStore(main_store_backend)
+    main_store.create_context(context_id="ctx-1")
+    observed: dict[str, tuple[int | None, int]] = {}
+
+    for method_name in (
+        "list_context_messages",
+        "list_context_tasks",
+        "list_context_route_decisions",
+        "list_context_delegations",
+    ):
+        original = getattr(main_store, method_name)
+
+        def capture(context_id, *args, _name=method_name, _original=original, **kwargs):
+            observed[_name] = (kwargs.get("limit"), kwargs.get("offset", 0))
+            return _original(context_id, *args, **kwargs)
+
+        monkeypatch.setattr(main_store, method_name, capture)
+
+    core = MainAgentCore(store=main_store, local_message_responder=FakeResponder())
+    client = TestClient(create_app(main_agent_core=core))
+    resources = ("messages", "tasks", "route-decisions", "delegations")
+
+    for resource in resources:
+        response = client.get(f"/api/contexts/ctx-1/{resource}")
+        assert response.status_code == 200
+        assert client.get(f"/api/contexts/ctx-1/{resource}?limit=501").status_code == 422
+
+    assert observed == {
+        "list_context_messages": (200, 0),
+        "list_context_tasks": (200, 0),
+        "list_context_route_decisions": (200, 0),
+        "list_context_delegations": (200, 0),
+    }
     main_store_backend.close()
 
 
@@ -457,6 +520,14 @@ def test_management_api_retries_a_safe_failed_local_task(tmp_path):
     assert retried["retry_of_task_id"] == source_result.task_id
     assert retried["attempt"] == 2
     assert retried["status"] == "completed"
+    assert retried["lifecycle_revision"] >= 1
+
+    context_tasks = client.get(f"/api/contexts/{context.context_id}/tasks")
+    assert context_tasks.status_code == 200
+    projected_retry = next(
+        task for task in context_tasks.json() if task["task_id"] == retried["task_id"]
+    )
+    assert projected_retry["lifecycle_revision"] == retried["lifecycle_revision"]
 
     duplicate = client.post(f"/api/management/tasks/{source_result.task_id}/retry")
     assert duplicate.status_code == 200

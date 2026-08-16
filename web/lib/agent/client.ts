@@ -15,6 +15,19 @@ import type {
 } from "@/lib/agent/types"
 import { requestDelete, requestGet, requestPatch, requestPost } from "@/lib/request"
 
+export type AgentContextReadPage = {
+  limit?: number
+  offset?: number
+}
+
+function contextReadQuery(page?: AgentContextReadPage) {
+  const params = new URLSearchParams()
+  if (page?.limit !== undefined) params.set("limit", String(page.limit))
+  if (page?.offset !== undefined) params.set("offset", String(page.offset))
+  const query = params.toString()
+  return query ? `?${query}` : ""
+}
+
 export function getAgentA2AAgentCard() {
   return requestGet<AgentA2AAgentCard>("/api/bff/agent/a2a/agent-card")
 }
@@ -84,14 +97,12 @@ export function updateAgentContext(contextId: string, payload: { title: string }
   )
 }
 
-export function listAgentContextMessages(contextId: string, limit?: number) {
-  const params = new URLSearchParams()
-  if (limit !== undefined) {
-    params.set("limit", String(limit))
-  }
-  const query = params.toString()
+export function listAgentContextMessages(
+  contextId: string,
+  page?: AgentContextReadPage
+) {
   return requestGet<AgentStoredMessage[]>(
-    `/api/bff/agent/contexts/${encodeURIComponent(contextId)}/messages${query ? `?${query}` : ""}`
+    `/api/bff/agent/contexts/${encodeURIComponent(contextId)}/messages${contextReadQuery(page)}`
   )
 }
 
@@ -101,9 +112,12 @@ export function getAgentMessageIngress(messageId: string) {
   )
 }
 
-export function listAgentContextTasks(contextId: string) {
+export function listAgentContextTasks(
+  contextId: string,
+  page?: AgentContextReadPage
+) {
   return requestGet<AgentContextTaskRecord[]>(
-    `/api/bff/agent/contexts/${encodeURIComponent(contextId)}/tasks`
+    `/api/bff/agent/contexts/${encodeURIComponent(contextId)}/tasks${contextReadQuery(page)}`
   )
 }
 
@@ -114,15 +128,21 @@ export function retryAgentTask(taskId: string) {
   )
 }
 
-export function listAgentContextRouteDecisions(contextId: string) {
+export function listAgentContextRouteDecisions(
+  contextId: string,
+  page?: AgentContextReadPage
+) {
   return requestGet<AgentRouteDecision[]>(
-    `/api/bff/agent/contexts/${encodeURIComponent(contextId)}/route-decisions`
+    `/api/bff/agent/contexts/${encodeURIComponent(contextId)}/route-decisions${contextReadQuery(page)}`
   )
 }
 
-export function listAgentContextDelegations(contextId: string) {
+export function listAgentContextDelegations(
+  contextId: string,
+  page?: AgentContextReadPage
+) {
   return requestGet<AgentDelegation[]>(
-    `/api/bff/agent/contexts/${encodeURIComponent(contextId)}/delegations`
+    `/api/bff/agent/contexts/${encodeURIComponent(contextId)}/delegations${contextReadQuery(page)}`
   )
 }
 

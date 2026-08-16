@@ -47,20 +47,28 @@ flowchart TB
     Bindings --> Adapter
 
     subgraph Lifecycle["vermay/main_agent/ - Lifecycle Control Plane"]
-        Core["MainAgentCore<br/>single A2A lifecycle owner"]
+        Core["MainAgentCore<br/>typed execute and stream command surface<br/>single A2A lifecycle owner"]
         Ingress["Durable Message Ingress<br/>messageId idempotency and outcome reuse"]
         Router["Main-agent Router<br/>local_message - local_task - remote_agent"]
         Responder["Direct Message Responder"]
         TaskRunner["MainAgentTaskRunner<br/>local Task execution bridge"]
         Remote["Remote Agent Client<br/>child-agent delegation and proxy lifecycle"]
         Projection["A2A Projection<br/>Task - status - event - artifact"]
+        OutcomeRecorder["TaskOutcomeRecorder<br/>accepted local and remote outcomes"]
+        LifecycleTx["LifecycleTransactionRunner<br/>commit before process-local effects"]
+        LocalExecution["InProcessLocalExecutionAdapter<br/>wake - deduplicate - dispatch<br/>process-local mechanics only"]
         MainStore["MainAgentStore<br/>durable lifecycle persistence adapter"]
 
         Core --> Ingress
         Core --> Router
         Router --> Responder
-        Router --> TaskRunner
         Router --> Remote
+        Core <--> LocalExecution
+        LocalExecution --> TaskRunner
+        Core --> OutcomeRecorder
+        Core --> LifecycleTx
+        LifecycleTx --> MainStore
+        OutcomeRecorder --> MainStore
         Core --> Projection
         Core <--> MainStore
     end
@@ -172,6 +180,34 @@ bindings expose the same underlying `MainAgentCore` lifecycle.
 - artifact and assistant Message persistence;
 - child-agent delegation and remote Task proxying.
 
+Externally meaningful mutations are represented by immutable commands in
+`vermay/main_agent/commands.py`. Non-streaming intents enter
+`MainAgentCore.execute()`; streamed Message admission enters
+`MainAgentCore.stream()`. A2A adapters consume typed outcomes rather than using
+raw persistence records as their mutation contract.
+
+`TaskOutcomeRecorder` is owned by `MainAgentCore` and persists already accepted
+local or remote execution outcomes. It does not route, schedule, invoke models
+or tools, or accept continuations, so it does not become another lifecycle
+owner.
+
+`LifecycleTransactionRunner` makes the ordering of accepted lifecycle work
+explicit without creating another lifecycle owner. A workflow writes through
+the existing `MainAgentStore` transaction, commits, and only then runs a named
+process-local action such as waking committed local work, signaling cooperative
+cancellation, or starting an accepted child-agent request. Durable Task-event
+notifications use the same rule through `AgentStore.register_after_commit()`.
+`InProcessTaskEventNotifier` is only a disposable wake-up hint; subscribers
+always re-read committed event rows by `event_id`. Rollback therefore prevents
+the related wake-up or delivery action.
+
+`InProcessLocalExecutionAdapter` owns only disposable single-process mechanics:
+wake-up, in-memory duplicate suppression, active-work tracking, runner dispatch,
+cooperative cancellation signaling, and checkpoint cleanup. It cannot write
+Task lifecycle state. Its claim and outcome callbacks return to
+`MainAgentCore`, which atomically claims durable work through `MainAgentStore`
+and records the resulting typed execution outcome.
+
 The router selects one of three execution paths:
 
 | Route | Meaning |
@@ -187,8 +223,15 @@ and tool loops, permission checks, approval or user-input interrupts,
 cooperative cancellation, and checkpoint continuation.
 
 It does not own the public A2A Task identity or protocol status. Runtime results
-are returned to `MainAgentCore`, which persists and projects them into A2A
-Messages, Task status updates, events, and artifacts.
+return to `MainAgentCore` as typed accepted-outcome commands. The core-owned
+outcome recorder persists them before the core projects A2A Messages, Task
+status updates, events, and artifacts.
+
+All committed local execution slices use one versioned queue-command path.
+Initial execution, approval continuation, and ordinary input continuation are
+stored as immutable typed payloads before the adapter is woken. There is no
+production path that invokes `LocalTaskRunner` directly from admission or
+continuation code.
 
 ### Capability and Context Layer
 
@@ -209,6 +252,101 @@ Vermay separates product lifecycle storage from graph continuation storage:
 | `data/agent.sqlite` | Contexts, Messages, ingress outcomes, route decisions, A2A Tasks, local process state, events, artifacts, delegations, tool invocations, observations, and registered agents. |
 | `data/checkpoints/langgraph.sqlite` | LangGraph graph state and continuation checkpoints addressed by `thread_id`. |
 | File-backed data | Authored skills, evaluation fixtures, generated traces, and other larger local artifacts. |
+
+### Snapshot And Replay Semantics
+
+The word "snapshot" refers to three different persisted views that must not be
+collapsed into one state model:
+
+| Persisted view | Purpose | Freshness or ordering key |
+| --- | --- | --- |
+| A2A Task record | Current externally meaningful lifecycle snapshot used by `tasks/get`, management reads, hydration, and the Inspector. | `lifecycle_revision` |
+| Task event log | Append-only lifecycle history and SSE replay source. It records what was published but does not rebuild the current Task row. | `event_id` |
+| LangGraph checkpoint | Internal graph execution and continuation snapshot for one local Task execution. It is not an A2A Task or conversation snapshot. | `thread_id` |
+
+The durable queued-execution record is a fourth, narrower fact: it is a
+versioned immutable command representing committed intent to run the next
+local execution slice. The process-local adapter and thread-pool wake-up are
+disposable delivery mechanisms. M3 guarantees they can observe only committed
+lifecycle and queue state; M4 guarantees every local execution kind enters the
+same claim, dispatch, and outcome path. M5 gives Task-event delivery the same
+separation: SQLite owns history, the notifier only wakes waiters, and replay
+advances its cursor only after the selected durable batch projects completely.
+
+```mermaid
+flowchart LR
+    Command["Lifecycle command<br/>admit - resume - cancel - retry"]
+    Core["MainAgentCore<br/>single lifecycle owner"]
+    Tx["SQLite lifecycle transaction"]
+
+    subgraph LifecycleDB["agent.sqlite - public lifecycle"]
+        Task["A2A Task snapshot<br/>current state<br/>lifecycle_revision"]
+        Queue["Versioned queued command<br/>initial - approval - user_input<br/>immutable typed payload"]
+        Events["Task event log<br/>append-only replay<br/>event_id"]
+    end
+
+    Commit["Transaction commit"]
+
+    subgraph Disposable["Post-commit delivery - disposable"]
+        WorkerWake["Wake local worker"]
+        EventNotify["In-process Task event notifier<br/>wake-up hint only"]
+    end
+
+    Adapter["InProcessLocalExecutionAdapter<br/>wake - deduplicate - dispatch"]
+    Claim["MainAgentCore claim callback<br/>atomic Queue claim + running transition"]
+    Runner["MainAgentTaskRunner"]
+    Runtime["LangGraph runtime<br/>model - tool - interrupt"]
+
+    subgraph CheckpointDB["langgraph.sqlite - execution continuation"]
+        Checkpoint["LangGraph checkpoint<br/>graph state<br/>thread_id"]
+    end
+
+    Outcome["Typed execution outcome<br/>complete - interrupt - fail - cancel"]
+    TaskRead["tasks/get and management reads"]
+    Replay["SSE replay/live delivery<br/>re-read after event_id"]
+    UI["Web transcript and Inspector"]
+
+    Command --> Core --> Tx
+    Tx --> Task
+    Tx --> Queue
+    Tx --> Events
+    Tx --> Commit
+
+    Commit -. "after commit" .-> WorkerWake
+    Commit -. "after commit" .-> EventNotify
+
+    WorkerWake --> Adapter
+    Queue --> Claim
+    Adapter --> Claim
+    Claim --> Runner --> Runtime
+    Runtime <--> Checkpoint
+    Runtime --> Outcome --> Adapter --> Core
+
+    Events --> Replay
+    EventNotify --> Replay
+    Task --> TaskRead
+    TaskRead --> UI
+    Replay --> UI
+```
+
+The main invariants shown by the diagram are:
+
+1. `Task` is the current public snapshot. It is not reconstructed from
+   `Events`.
+2. `Queue` is durable execution intent, not another public Task state. Each
+   command has a supported version, an execution kind, and an immutable typed
+   payload. The Core-owned claim can consume it only after the accepting
+   transaction commits.
+3. `Events` are durable history. Notifications may be lost or duplicated
+   because every subscriber re-reads the log by `event_id`. A malformed or
+   unprojectable durable event is returned as an explicit protocol failure and
+   the replay cursor does not skip it.
+4. `Checkpoint` belongs to LangGraph execution. Approval or ordinary input
+   continuation commits a new Queue slice before the worker resumes the same
+   `thread_id` from this checkpoint.
+5. Runtime outcomes return through the process-local adapter to
+   `MainAgentCore` and enter a new lifecycle transaction. LangGraph, the task
+   runner, and the adapter do not mutate the public Task snapshot directly.
 
 ## Identity and State Ownership
 
@@ -248,7 +386,10 @@ A2A Message
 A2A Message
   -> MainAgentCore durable ingress
   -> router selects local_task
-  -> create A2A Task and local process records
+  -> commit A2A Task, local process, events, and versioned queued command
+  -> post-commit wake-up
+  -> InProcessLocalExecutionAdapter deduplicates and dispatches
+  -> MainAgentCore atomically claims the command and marks the process running
   -> MainAgentTaskRunner
   -> LangGraphAgentRuntime using thread_id
   -> model / permission / tool / observation loop

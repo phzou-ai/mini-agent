@@ -34,6 +34,12 @@ POST /rpc
 
 Agent operations use A2A JSON-RPC methods through `/rpc`. Child-agent delegation in `vermay/main_agent/remote_agent.py` uses the same boundary.
 
+Mutating A2A bindings construct immutable lifecycle commands and consume typed
+outcomes from `MainAgentCore.execute()` or `MainAgentCore.stream()`. The API
+adapter does not mutate lifecycle storage directly. First-party management
+queries remain bounded read-model calls; startup reconciliation and failed-Task
+retry use the same command surface as A2A lifecycle mutations.
+
 The service implements the A2A `0.3.0` JSON-RPC binding. Unadvertised
 path-style agent routes are not part of the service surface.
 
@@ -197,7 +203,7 @@ Terminal tasks return `invalid_session_state` when cancellation is no longer all
 The `/api` prefix is reserved for Web UI management and diagnostics:
 
 ```text
-GET    /api/contexts
+GET    /api/contexts?limit=100&offset=0
 GET    /api/model-config
 GET    /api/contexts/{context_id}
 PATCH  /api/contexts/{context_id}
@@ -218,6 +224,25 @@ DELETE /api/registered-agents/{agent_id}
 ```
 
 Context deletion is core-owned and refuses live local or remote Tasks.
+
+The Context list is a bounded first-party read model. `limit` defaults to
+`100`, is capped at `200`, and `offset` defaults to `0`. The Web console
+currently requests the first 100 most recently updated Contexts; incremental
+UI loading remains deferred until retained data demonstrates that it is
+needed.
+
+New Contexts normally persist their title from the first admitted user
+Message. For older untitled records, the list endpoint resolves first-user
+Message titles in one bulk query for the current page. It must not issue one
+message-list query per Context.
+
+The four Context detail endpoints for Messages, Tasks, route decisions, and
+delegations also accept `limit` and `offset`. Their default `limit` is `200`,
+the maximum is `500`, and the default `offset` is `0`. Each endpoint returns
+the selected latest window in chronological order. This is a management read
+contract only; lifecycle operations that require complete Context state do not
+reuse a truncated page.
+
 `force=true` does not bypass that safeguard. A registered agent can be
 hard-deleted only if it has no delegation history; otherwise update it with
 `enabled: false` to prevent future delegation while preserving audit facts.
@@ -266,6 +291,15 @@ other agent error      -> mapped by local error info
 ## Projection Boundaries
 
 A2A projections include public task/message/status/artifact data only.
+
+Every A2A Task snapshot exposes its durable Task projection version as
+`metadata.lifecycleRevision`. Status and artifact events expose the revision
+current when their durable event was inserted. The first-party management API
+uses the snake-case field `lifecycle_revision` for the same value.
+
+The revision versions current Task state; it is not an event cursor. SSE replay
+and reconnect continue to use durable `event_id`. Several additive events may
+share one lifecycle revision.
 
 They must not expose:
 

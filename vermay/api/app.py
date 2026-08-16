@@ -18,9 +18,12 @@ from vermay.main_agent import (
     DirectModelRouterModelClient,
     DefaultMainAgentRouter,
     MainAgentCore,
+    ReconcileStartupCommand,
+    RetryTaskCommand,
     MainAgentStore,
     MainAgentToolInvocationLedger,
-    MessageRole,
+    StartupReconciliationOutcome,
+    TaskCommandOutcome,
     build_router_json_client,
     fetch_agent_card,
 )
@@ -42,6 +45,10 @@ from .management_models import (
 )
 
 
+DEFAULT_CONTEXT_DETAIL_LIMIT = 200
+MAX_CONTEXT_DETAIL_LIMIT = 500
+
+
 def create_app(
     *,
     main_agent_core: MainAgentCore | None = None,
@@ -60,7 +67,9 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         try:
-            main_agent_core.reconcile_startup()
+            outcome = main_agent_core.execute(ReconcileStartupCommand())
+            if not isinstance(outcome, StartupReconciliationOutcome):
+                raise RuntimeError("startup reconciliation returned an invalid outcome")
             yield
         finally:
             if owned_main_agent_executor is not None:
@@ -92,9 +101,13 @@ def create_app(
     api_router = APIRouter(prefix="/api")
 
     @api_router.get("/contexts")
-    def list_contexts() -> list[dict[str, Any]]:
+    def list_contexts(
+        limit: int = Query(default=100, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> list[dict[str, Any]]:
         core = _main_agent_core(app)
-        return [_context_to_dict(record, store=core.store) for record in core.store.list_contexts()]
+        records = core.store.list_contexts(limit=limit, offset=offset)
+        return _contexts_to_dict(records, store=core.store)
 
     @api_router.get("/model-config", response_model=ModelConfigResponse)
     def get_model_config() -> dict[str, Any]:
@@ -120,7 +133,7 @@ def create_app(
         record = core.store.get_context(context_id)
         if record is None:
             raise HTTPException(status_code=404, detail={"code": "context_not_found", "message": "context not found"})
-        return _context_to_dict(record, store=core.store)
+        return _contexts_to_dict([record], store=core.store)[0]
 
     @api_router.patch("/contexts/{context_id}")
     def update_context(context_id: str, request: ContextUpdateRequest) -> dict[str, Any]:
@@ -136,20 +149,32 @@ def create_app(
         record = core.store.update_context_title(context_id, title=title)
         if record is None:
             raise HTTPException(status_code=404, detail={"code": "context_not_found", "message": "context not found"})
-        return _context_to_dict(record, store=core.store)
+        return _contexts_to_dict([record], store=core.store)[0]
 
     @api_router.get("/contexts/{context_id}/messages")
-    def list_context_messages(context_id: str, limit: int | None = Query(default=None, ge=1)) -> list[dict[str, Any]]:
+    def list_context_messages(
+        context_id: str,
+        limit: int = Query(default=DEFAULT_CONTEXT_DETAIL_LIMIT, ge=1, le=MAX_CONTEXT_DETAIL_LIMIT),
+        offset: int = Query(default=0, ge=0),
+    ) -> list[dict[str, Any]]:
         core = _main_agent_core(app)
         if core.store.get_context(context_id) is None:
             raise HTTPException(status_code=404, detail={"code": "context_not_found", "message": "context not found"})
+        messages = core.store.list_context_messages(
+            context_id,
+            limit=limit,
+            offset=offset,
+        )
         failed_ingresses = {
             ingress.message_id: ingress
-            for ingress in core.store.list_failed_message_ingresses(context_id)
+            for ingress in core.store.list_failed_message_ingresses(
+                context_id,
+                message_ids=[record.message_id for record in messages],
+            )
         }
         return [
             _message_to_dict(record, ingress=failed_ingresses.get(record.message_id))
-            for record in core.store.list_context_messages(context_id, limit=limit)
+            for record in messages
         ]
 
     @api_router.get("/message-ingress/{message_id}")
@@ -164,11 +189,22 @@ def create_app(
         return _message_ingress_to_dict(ingress)
 
     @api_router.get("/contexts/{context_id}/tasks")
-    def list_context_tasks(context_id: str) -> list[dict[str, Any]]:
+    def list_context_tasks(
+        context_id: str,
+        limit: int = Query(default=DEFAULT_CONTEXT_DETAIL_LIMIT, ge=1, le=MAX_CONTEXT_DETAIL_LIMIT),
+        offset: int = Query(default=0, ge=0),
+    ) -> list[dict[str, Any]]:
         core = _main_agent_core(app)
         if core.store.get_context(context_id) is None:
             raise HTTPException(status_code=404, detail={"code": "context_not_found", "message": "context not found"})
-        return [_task_to_dict(record) for record in core.store.list_context_tasks(context_id)]
+        return [
+            _task_to_dict(record)
+            for record in core.store.list_context_tasks(
+                context_id,
+                limit=limit,
+                offset=offset,
+            )
+        ]
 
     @api_router.post("/management/tasks/{task_id}/retry")
     def retry_failed_task(task_id: str) -> dict[str, Any]:
@@ -176,7 +212,10 @@ def create_app(
 
         core = _main_agent_core(app)
         try:
-            return _task_to_dict(core.retry_failed_task(task_id))
+            outcome = core.execute(RetryTaskCommand(task_id))
+            if not isinstance(outcome, TaskCommandOutcome):
+                raise RuntimeError("retry command returned an invalid outcome")
+            return _task_to_dict(outcome.task)
         except Exception as exc:
             raise _http_exception(exc) from exc
 
@@ -213,18 +252,40 @@ def create_app(
         }
 
     @api_router.get("/contexts/{context_id}/route-decisions")
-    def list_context_route_decisions(context_id: str) -> list[dict[str, Any]]:
+    def list_context_route_decisions(
+        context_id: str,
+        limit: int = Query(default=DEFAULT_CONTEXT_DETAIL_LIMIT, ge=1, le=MAX_CONTEXT_DETAIL_LIMIT),
+        offset: int = Query(default=0, ge=0),
+    ) -> list[dict[str, Any]]:
         core = _main_agent_core(app)
         if core.store.get_context(context_id) is None:
             raise HTTPException(status_code=404, detail={"code": "context_not_found", "message": "context not found"})
-        return [_route_decision_to_dict(record) for record in core.store.list_context_route_decisions(context_id)]
+        return [
+            _route_decision_to_dict(record)
+            for record in core.store.list_context_route_decisions(
+                context_id,
+                limit=limit,
+                offset=offset,
+            )
+        ]
 
     @api_router.get("/contexts/{context_id}/delegations")
-    def list_context_delegations(context_id: str) -> list[dict[str, Any]]:
+    def list_context_delegations(
+        context_id: str,
+        limit: int = Query(default=DEFAULT_CONTEXT_DETAIL_LIMIT, ge=1, le=MAX_CONTEXT_DETAIL_LIMIT),
+        offset: int = Query(default=0, ge=0),
+    ) -> list[dict[str, Any]]:
         core = _main_agent_core(app)
         if core.store.get_context(context_id) is None:
             raise HTTPException(status_code=404, detail={"code": "context_not_found", "message": "context not found"})
-        return [_delegation_to_dict(record) for record in core.store.list_context_delegations(context_id)]
+        return [
+            _delegation_to_dict(record)
+            for record in core.store.list_context_delegations(
+                context_id,
+                limit=limit,
+                offset=offset,
+            )
+        ]
 
     @api_router.delete("/contexts/{context_id}", status_code=204)
     def delete_context(context_id: str, force: bool = Query(default=False)) -> None:
@@ -402,23 +463,30 @@ def _main_agent_core(app: FastAPI) -> MainAgentCore:
     return core
 
 
-def _context_to_dict(record, *, store: MainAgentStore | None = None) -> dict[str, Any]:
+def _context_to_dict(record, *, fallback_title: str | None = None) -> dict[str, Any]:
     return {
         "context_id": record.context_id,
-        "title": record.title or _first_user_message_title(record.context_id, store=store),
+        "title": record.title or fallback_title,
         "metadata": record.metadata,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
     }
 
 
-def _first_user_message_title(context_id: str, *, store: MainAgentStore | None) -> str | None:
-    if store is None:
-        return None
-    for message in store.list_context_messages(context_id):
-        if message.role == MessageRole.USER:
-            return _title_from_parts(message.parts)
-    return None
+def _contexts_to_dict(records, *, store: MainAgentStore) -> list[dict[str, Any]]:
+    untitled_context_ids = [record.context_id for record in records if not record.title]
+    first_messages = store.first_user_messages_by_context(untitled_context_ids)
+    return [
+        _context_to_dict(
+            record,
+            fallback_title=(
+                _title_from_parts(first_messages[record.context_id].parts)
+                if record.context_id in first_messages
+                else None
+            ),
+        )
+        for record in records
+    ]
 
 
 def _title_from_parts(parts: list[dict[str, Any]]) -> str | None:
@@ -485,6 +553,7 @@ def _task_to_dict(record) -> dict[str, Any]:
         "error_code": record.error_code,
         "error_message": record.error_message,
         "error_retryable": record.error_retryable,
+        "lifecycle_revision": record.lifecycle_revision,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
     }

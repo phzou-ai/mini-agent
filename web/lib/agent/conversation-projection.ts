@@ -3,6 +3,7 @@ import {
   isActiveStatus,
   isApprovalRequiredStatus,
   isTerminalStatus,
+  lifecycleRevisionFromMetadata,
   normalizeStatus,
   taskStateProjection,
   taskStatusFromA2A,
@@ -91,9 +92,73 @@ export function mergeConversationMessages(
     })
   }
 
-  return Array.from(byId.values()).sort(
-    (left, right) =>
-      new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+  return sortConversationMessages(Array.from(byId.values()))
+}
+
+function sortConversationMessages(messages: AgentMessage[]) {
+  const latestUserTimestampByTask = new Map<string, number>()
+  for (const message of messages) {
+    if (message.role !== "user" || !message.taskId) continue
+    const timestamp = conversationMessageTimestamp(message)
+    latestUserTimestampByTask.set(
+      message.taskId,
+      Math.max(latestUserTimestampByTask.get(message.taskId) ?? 0, timestamp)
+    )
+  }
+
+  return messages
+    .map((message, index) => ({ message, index }))
+    .sort((left, right) => {
+      const leftTimestamp = conversationSortTimestamp(
+        left.message,
+        latestUserTimestampByTask
+      )
+      const rightTimestamp = conversationSortTimestamp(
+        right.message,
+        latestUserTimestampByTask
+      )
+      if (leftTimestamp !== rightTimestamp) {
+        return leftTimestamp - rightTimestamp
+      }
+
+      if (
+        left.message.taskId &&
+        left.message.taskId === right.message.taskId &&
+        left.message.role !== right.message.role
+      ) {
+        if (left.message.role === "user") return -1
+        if (right.message.role === "user") return 1
+      }
+
+      return left.index - right.index
+    })
+    .map(({ message }) => message)
+}
+
+function conversationSortTimestamp(
+  message: AgentMessage,
+  latestUserTimestampByTask: Map<string, number>
+) {
+  const timestamp = conversationMessageTimestamp(message)
+  if (!isTransientTaskAssistantMessage(message) || !message.taskId) {
+    return timestamp
+  }
+  return Math.max(
+    timestamp,
+    latestUserTimestampByTask.get(message.taskId) ?? timestamp
+  )
+}
+
+function conversationMessageTimestamp(message: AgentMessage) {
+  const timestamp = Date.parse(message.createdAt)
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+function isTransientTaskAssistantMessage(message: AgentMessage) {
+  return (
+    message.role === "assistant" &&
+    Boolean(message.taskId) &&
+    (message.loading === true || !message.content)
   )
 }
 
@@ -127,6 +192,11 @@ export function storedMessagesToConversation(
         content: textFromParts(message.parts),
         createdAt: message.created_at,
         taskId: message.task_id ?? null,
+        messageKind:
+          message.metadata.messageKind === "task_input_request"
+            ? "task_input_request"
+            : undefined,
+        inputRequestRevision: inputRequestRevisionFromMetadata(message.metadata),
         request:
           message.role === "user"
             ? messageRequestFromMetadata(message.metadata)
@@ -155,7 +225,8 @@ export function approvalTasksToConversation(
       (task) =>
         isApprovalRequiredStatus(normalizeStatus(task.status)) &&
         !task.output_message_id &&
-        messageIds.has(task.input_message_id)
+        messageIds.has(task.input_message_id) &&
+        !hasDurableInputRequestMessage(task, messages)
     )
     .map((task) =>
       buildAssistantConversationMessage(
@@ -166,6 +237,38 @@ export function approvalTasksToConversation(
         task.task_id
       )
     )
+}
+
+function hasDurableInputRequestMessage(
+  task: AgentContextTaskRecord,
+  messages: AgentStoredMessage[]
+) {
+  const taskRevision = task.lifecycle_revision
+  return messages.some((message) => {
+    if (
+      message.role !== "agent" ||
+      message.task_id !== task.task_id ||
+      message.metadata.messageKind !== "task_input_request"
+    ) {
+      return false
+    }
+
+    const messageRevision = inputRequestRevisionFromMetadata(message.metadata)
+    return (
+      taskRevision == null ||
+      messageRevision == null ||
+      messageRevision === taskRevision
+    )
+  })
+}
+
+function inputRequestRevisionFromMetadata(
+  metadata: Record<string, unknown>
+) {
+  const value = metadata.inputRequestRevision
+  return typeof value === "number" && Number.isInteger(value) && value >= 1
+    ? value
+    : null
 }
 
 export function failedTasksToConversation(
@@ -268,6 +371,10 @@ export function storedTaskToAgentTask(
     task_id: task.task_id,
     session_id: task.context_id,
     thread_id: task.runtime_thread_id,
+    lifecycle_revision:
+      lifecycleRevisionFromMetadata(snapshot?.metadata) ??
+      task.lifecycle_revision ??
+      null,
     a2a_state: stateProjection.a2a_state,
     local_process_status: stateProjection.local_process_status,
     retry_of_task_id: task.retry_of_task_id,
@@ -434,6 +541,7 @@ export function a2aEnvelopeToTaskEvent(
     event_id: localEventId,
     task_id: result.taskId,
     session_id: result.contextId,
+    lifecycle_revision: lifecycleRevisionFromMetadata(metadata),
     context_id: result.contextId,
     thread_id: runtimeThreadId,
     a2a_state: stateProjection.a2a_state,

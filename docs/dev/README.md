@@ -9,6 +9,9 @@ in this directory does not.
 
 1. [runtime/README.md](runtime/README.md) - runtime roadmap, reliability work,
    and staged evolution criteria.
+2. [platform/README.md](platform/README.md) - proposed single-host contract
+   normalization and bounded refactoring across lifecycle, persistence,
+   execution, events, read models, and the Web console.
 
 `runtime/` is a development domain, not a mirror of one Python module. Add a
 new sibling domain only when a separate concern has its own active status and
@@ -17,9 +20,15 @@ creating a directory for it.
 
 ## Current Authority
 
-The Runtime roadmap owns the current engineering priority. Completed runtime
-and maintenance records live under [Historical Evidence](../history/README.md)
-and do not authorize more implementation by themselves.
+The Runtime roadmap remains the authority for current product behavior. The
+Platform contract plan owns the completed M0 inventory, M1 Task projection
+ordering contract, M2 lifecycle command surface, M3 transaction and
+post-commit boundary, M4 bounded local execution boundary, M5 event replay and
+subscription boundary, and M6 bounded reads plus focused Web controllers. M7
+remains unauthorized.
+Completed runtime and maintenance records live under
+[Historical Evidence](../history/README.md) and do not authorize more
+implementation by themselves.
 
 No runtime expansion work item is active. The closed S3 protocol-surface
 baseline, acceptance evidence, and latest durable handoff are maintained in

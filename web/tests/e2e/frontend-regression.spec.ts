@@ -79,7 +79,7 @@ test.describe("Frontend regression baseline", () => {
       })
     })
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/messages`,
+      `**/api/bff/agent/contexts/${contextId}/messages**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -263,7 +263,7 @@ test.describe("Frontend regression baseline", () => {
       })
     })
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/messages`,
+      `**/api/bff/agent/contexts/${contextId}/messages**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -397,7 +397,7 @@ test.describe("Frontend regression baseline", () => {
       })
     })
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/messages`,
+      `**/api/bff/agent/contexts/${contextId}/messages**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -407,7 +407,7 @@ test.describe("Frontend regression baseline", () => {
       }
     )
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/tasks`,
+      `**/api/bff/agent/contexts/${contextId}/tasks**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -417,7 +417,7 @@ test.describe("Frontend regression baseline", () => {
       }
     )
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/route-decisions`,
+      `**/api/bff/agent/contexts/${contextId}/route-decisions**`,
       async (route) => {
         await route.fulfill({
           status: 200,
@@ -427,7 +427,7 @@ test.describe("Frontend regression baseline", () => {
       }
     )
     await page.route(
-      `**/api/bff/agent/contexts/${contextId}/delegations`,
+      `**/api/bff/agent/contexts/${contextId}/delegations**`,
       async (route) => {
         await route.fulfill({
           status: 200,

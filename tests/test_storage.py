@@ -45,10 +45,19 @@ def test_agent_store_creates_the_active_main_agent_baseline(tmp_path):
     context_columns = {row["name"] for row in store.query("PRAGMA table_info(contexts)")}
     message_columns = {row["name"] for row in store.query("PRAGMA table_info(messages)")}
     task_columns = {row["name"] for row in store.query("PRAGMA table_info(main_agent_tasks)")}
+    event_columns = {
+        row["name"] for row in store.query("PRAGMA table_info(main_agent_task_events)")
+    }
+    queued_execution_columns = {
+        row["name"] for row in store.query("PRAGMA table_info(main_agent_queued_executions)")
+    }
     assert "next_message_sequence" in context_columns
     assert "context_sequence" in message_columns
     assert "input_context_sequence" in task_columns
     assert "error_retryable" in task_columns
+    assert "lifecycle_revision" in task_columns
+    assert "lifecycle_revision" in event_columns
+    assert "command_version" in queued_execution_columns
     store.close()
 
 
@@ -171,6 +180,50 @@ def test_agent_store_transaction_rolls_back_execute_calls(tmp_path):
             raise RuntimeError("rollback probe")
 
     assert store.query("SELECT name FROM skill_index WHERE name=?", ("probe",)) == []
+    store.close()
+
+
+def test_agent_store_runs_callbacks_only_after_outer_commit(tmp_path):
+    store = AgentStore(tmp_path / "agent.sqlite")
+    observed: list[str] = []
+
+    with store.transaction():
+        store.register_after_commit(lambda: observed.append("outer"))
+        with store.transaction():
+            store.register_after_commit(lambda: observed.append("inner"))
+        assert observed == []
+
+    assert observed == ["outer", "inner"]
+    store.close()
+
+
+def test_agent_store_discards_callbacks_from_rolled_back_transaction(tmp_path):
+    store = AgentStore(tmp_path / "agent.sqlite")
+    observed: list[str] = []
+
+    with pytest.raises(RuntimeError, match="rollback probe"):
+        with store.transaction():
+            store.register_after_commit(lambda: observed.append("unexpected"))
+            raise RuntimeError("rollback probe")
+
+    assert observed == []
+    store.close()
+
+
+def test_agent_store_keeps_nested_callback_when_outer_transaction_commits(tmp_path):
+    store = AgentStore(tmp_path / "agent.sqlite")
+    observed: list[str] = []
+
+    with store.transaction():
+        try:
+            with store.transaction():
+                store.register_after_commit(lambda: observed.append("nested"))
+                raise RuntimeError("caught nested probe")
+        except RuntimeError:
+            pass
+        assert observed == []
+
+    assert observed == ["nested"]
     store.close()
 
 

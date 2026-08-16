@@ -41,6 +41,8 @@ LangGraph, and delegation to registered child A2A agents.
 - The Python backend exposes the public A2A JSON-RPC and SSE boundary.
 - `MainAgentCore` is the single owner of public Message and Task lifecycle
   decisions.
+- Lifecycle mutations enter one immutable typed command surface; accepted local
+  and remote Task outcomes are persisted by a core-owned outcome recorder.
 - LangGraph is an internal execution engine for local Tasks and checkpoint
   continuation. A LangGraph thread is not a public A2A identity.
 - Durable Message Ingress provides idempotent admission before routing or
@@ -142,6 +144,20 @@ priority.
 2. [architecture/lifecycle-and-state.md](architecture/lifecycle-and-state.md)
 3. [dev/runtime/README.md](dev/runtime/README.md)
 4. [dev/runtime/roadmap.md](dev/runtime/roadmap.md)
+
+### Plan A Single-Host Contract Refactor
+
+1. [architecture/current-system.md](architecture/current-system.md)
+2. [architecture/lifecycle-and-state.md](architecture/lifecycle-and-state.md)
+3. [dev/runtime/roadmap.md](dev/runtime/roadmap.md)
+4. [dev/platform/README.md](dev/platform/README.md)
+5. [dev/platform/architecture-modernization-plan.md](dev/platform/architecture-modernization-plan.md)
+6. [dev/platform/m0-contract-baseline.md](dev/platform/m0-contract-baseline.md)
+7. [dev/platform/m1-task-projection.md](dev/platform/m1-task-projection.md)
+8. [dev/platform/m2-lifecycle-command-surface.md](dev/platform/m2-lifecycle-command-surface.md)
+9. [dev/platform/m3-transaction-post-commit-boundary.md](dev/platform/m3-transaction-post-commit-boundary.md)
+10. [dev/platform/m4-bounded-local-execution.md](dev/platform/m4-bounded-local-execution.md)
+11. [dev/platform/m5-event-replay-subscription.md](dev/platform/m5-event-replay-subscription.md)
 
 ### Change The Backend Or A2A Boundary
 

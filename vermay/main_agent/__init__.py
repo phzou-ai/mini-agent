@@ -1,14 +1,31 @@
 """Protocol-independent main-agent core primitives."""
 
-from .core import MainAgentCore, StartupReconciliationResult
+from .commands import (
+    AdmitMessageCommand,
+    CancelTaskCommand,
+    MainAgentCommand,
+    MainAgentCommandOutcome,
+    MessageCommandOutcome,
+    MessageStreamOutcome,
+    ReconcileStartupCommand,
+    ResolveApprovalCommand,
+    RetryTaskCommand,
+    StartupReconciliationOutcome,
+    SubmitTaskInputCommand,
+    TaskCommandOutcome,
+)
+from .core import MainAgentCore
 from .executor import InProcessTaskExecutor
 from .invocation_ledger import MainAgentToolInvocationLedger
 from .lifecycle import InvalidLocalTaskTransitionError
 from .models import (
+    LOCAL_EXECUTION_COMMAND_VERSION,
+    ApprovalTaskExecutionPayload,
     ArtifactRecord,
     ContextRecord,
     DelegatedTaskRecord,
     DeleteContextResult,
+    InitialTaskExecutionPayload,
     LocalMessageDelta,
     LocalMessageResult,
     LocalTaskResult,
@@ -22,6 +39,7 @@ from .models import (
     MessageRole,
     PendingContinuationRecord,
     QueuedTaskExecutionKind,
+    QueuedTaskExecutionPayload,
     QueuedTaskExecutionRecord,
     RegisteredAgentRecord,
     RemoteAgentResult,
@@ -33,6 +51,7 @@ from .models import (
     ToolInvocationApprovalStatus,
     ToolInvocationRecord,
     ToolInvocationStatus,
+    UserInputTaskExecutionPayload,
 )
 from .responder import DirectModelLocalMessageResponder, LocalMessageResponder
 from .remote_agent import (
@@ -54,10 +73,14 @@ from .router import (
 )
 from .router_json_client import RouterJsonHttpClient, build_router_json_client
 from .store import MainAgentStore
+from .task_event_subscription import InProcessTaskEventNotifier, TaskEventNotifier
 from .task_runner import DirectLangGraphLocalTaskRunner, LocalTaskRunner, LocalTaskRunResult
 
 __all__ = [
     "ArtifactRecord",
+    "ApprovalTaskExecutionPayload",
+    "AdmitMessageCommand",
+    "CancelTaskCommand",
     "ContextRecord",
     "DelegatedTaskRecord",
     "DeleteContextResult",
@@ -67,7 +90,10 @@ __all__ = [
     "DirectModelRouterModelClient",
     "DirectLangGraphLocalTaskRunner",
     "InProcessTaskExecutor",
+    "InProcessTaskEventNotifier",
+    "InitialTaskExecutionPayload",
     "InvalidLocalTaskTransitionError",
+    "LOCAL_EXECUTION_COMMAND_VERSION",
     "LocalMessageDelta",
     "LocalMessageResult",
     "LocalTaskResult",
@@ -75,12 +101,15 @@ __all__ = [
     "LocalTaskRunner",
     "LocalTaskRunResult",
     "MainAgentCore",
+    "MainAgentCommand",
+    "MainAgentCommandOutcome",
     "MainAgentToolInvocationLedger",
     "MainAgentStore",
     "MainAgentRequest",
     "MainAgentResult",
     "MainAgentStreamResult",
-    "StartupReconciliationResult",
+    "MessageCommandOutcome",
+    "MessageStreamOutcome",
     "MessageIngressOutcomeKind",
     "MessageIngressRecord",
     "MessageIngressState",
@@ -90,6 +119,7 @@ __all__ = [
     "MessageRole",
     "PendingContinuationRecord",
     "QueuedTaskExecutionKind",
+    "QueuedTaskExecutionPayload",
     "QueuedTaskExecutionRecord",
     "RegisteredAgentRecord",
     "RemoteAgentClient",
@@ -97,18 +127,26 @@ __all__ = [
     "RemoteAgentResult",
     "RemoteAgentSendResult",
     "RemoteAgentTaskSnapshot",
+    "ReconcileStartupCommand",
+    "ResolveApprovalCommand",
     "RouteDecisionKind",
     "RouteDecisionRecord",
     "RouterModelClient",
     "RouterModelDecision",
     "RouterRawJsonClient",
     "RouterJsonHttpClient",
+    "RetryTaskCommand",
+    "StartupReconciliationOutcome",
+    "SubmitTaskInputCommand",
     "TaskEventRecord",
+    "TaskEventNotifier",
     "TaskRecord",
     "TaskStatus",
+    "TaskCommandOutcome",
     "ToolInvocationApprovalStatus",
     "ToolInvocationRecord",
     "ToolInvocationStatus",
+    "UserInputTaskExecutionPayload",
     "build_router_json_client",
     "fetch_agent_card",
 ]

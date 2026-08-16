@@ -22,6 +22,7 @@ import {
   taskActivityLabel,
   taskFailureForDisplay,
   taskInputRequest,
+  taskLifecycleRevision,
 } from "@/lib/agent/task-presentation"
 import type {
   AgentMessage,
@@ -174,13 +175,31 @@ function MessageItem({
   const isTaskFailure = Boolean(
     !isUser && !isDirectMessageFailure && taskFailure && !message.content
   )
-  const isInputPending = Boolean(
+  const currentTaskRevision = taskLifecycleRevision(task)
+  const isCurrentDurableInputPrompt = Boolean(
+    message.messageKind === "task_input_request" &&
+      task &&
+      isGeneralInputRequiredTask(task) &&
+      (message.inputRequestRevision == null ||
+        currentTaskRevision == null ||
+        message.inputRequestRevision === currentTaskRevision)
+  )
+  const isGeneralInputPending = Boolean(
+    !isUser &&
+      !isDirectMessageFailure &&
+      task &&
+      isGeneralInputRequiredTask(task) &&
+      (isCurrentDurableInputPrompt || !message.content)
+  )
+  const isApprovalPending = Boolean(
     !isUser &&
       !isDirectMessageFailure &&
       task &&
       isApprovalRequiredStatus(task.status) &&
+      !isGeneralInputRequiredTask(task) &&
       !message.content
   )
+  const isInputPending = isGeneralInputPending || isApprovalPending
   const isLoadingOnly =
     message.loading &&
     !message.content &&
@@ -258,9 +277,10 @@ function MessageItem({
                 onRetry={onRetryTask}
               />
             ) : isInputPending && task ? (
-              isGeneralInputRequiredTask(task) ? (
+              isGeneralInputPending ? (
                 <TaskInputRequiredCard
                   task={task}
+                  messageContent={message.content || undefined}
                   submitting={submittingInput}
                   onSubmit={onSubmitInput}
                 />
@@ -505,10 +525,12 @@ function ApprovalRequiredCard({
 
 function TaskInputRequiredCard({
   task,
+  messageContent,
   submitting,
   onSubmit,
 }: {
   task: AgentTask
+  messageContent?: string
   submitting: boolean
   onSubmit: (value: string) => void
 }) {
@@ -523,7 +545,7 @@ function TaskInputRequiredCard({
 
   return (
     <form
-      className="w-full max-w-[640px] min-w-0 overflow-hidden"
+      className="w-full min-w-0 overflow-hidden"
       data-testid="agent-task-input-card"
       onClick={(event) => event.stopPropagation()}
       onSubmit={(event) => {
@@ -531,22 +553,43 @@ function TaskInputRequiredCard({
         if (!submitting && value.trim()) onSubmit(value)
       }}
     >
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="m-0 text-[13px] font-semibold leading-5 text-[#1F0013]">
-            Input required
-          </p>
-          <p className="m-0 mt-1 text-[12px] leading-5 text-[#64748B]">
-            The task is paused until you provide this information.
-          </p>
+      {messageContent ? (
+        <MarkdownText content={messageContent} />
+      ) : (
+        <>
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="m-0 text-[13px] font-semibold leading-5 text-[#1F0013]">
+                Input required
+              </p>
+              <p className="m-0 mt-1 text-[12px] leading-5 text-[#64748B]">
+                The task is paused until you provide this information.
+              </p>
+            </div>
+            <span className="shrink-0 rounded-full bg-[#F3E8FF] px-2 py-0.5 text-[11px] font-semibold leading-4 text-[#6B21A8]">
+              waiting
+            </span>
+          </div>
+          <div className="mb-3 break-words rounded-[4px] border border-[#E7E5E8] bg-[#F8FAFC] px-3 py-2 text-[12px] leading-5 text-[#54465C] [overflow-wrap:anywhere]">
+            {request.prompt}
+          </div>
+        </>
+      )}
+      {messageContent && (
+        <div className="my-3 flex min-w-0 items-center justify-between gap-3 border-t border-[#E7E5E8] pt-3">
+          <div className="min-w-0">
+            <p className="m-0 text-[12px] font-semibold leading-5 text-[#1F0013]">
+              Input required
+            </p>
+            <p className="m-0 text-[11px] leading-4 text-[#64748B]">
+              The task will continue after your reply.
+            </p>
+          </div>
+          <span className="shrink-0 rounded-full bg-[#F3E8FF] px-2 py-0.5 text-[11px] font-semibold leading-4 text-[#6B21A8]">
+            waiting
+          </span>
         </div>
-        <span className="shrink-0 rounded-full bg-[#F3E8FF] px-2 py-0.5 text-[11px] font-semibold leading-4 text-[#6B21A8]">
-          waiting
-        </span>
-      </div>
-      <div className="mb-3 break-words rounded-[4px] border border-[#E7E5E8] bg-[#F8FAFC] px-3 py-2 text-[12px] leading-5 text-[#54465C] [overflow-wrap:anywhere]">
-        {request.prompt}
-      </div>
+      )}
       {request.choices.length > 0 && (
         <div
           className="mb-3 flex flex-wrap gap-2"

@@ -5,20 +5,37 @@ from typing import Any, Iterable
 
 from pydantic import ValidationError
 
-from vermay.errors import InvalidRequestError, InvalidSessionStateError, TaskNotFoundError
+from vermay.errors import (
+    InvalidRequestError,
+    InvalidSessionStateError,
+    TaskEventProjectionError,
+    TaskNotFoundError,
+)
 from vermay.main_agent import (
+    AdmitMessageCommand,
+    CancelTaskCommand,
     LocalMessageDelta,
     LocalMessageResult,
     LocalTaskResult,
+    MainAgentCommandOutcome,
     MainAgentCore,
     MainAgentRequest,
+    MainAgentResult,
+    MainAgentStreamResult,
+    MessageCommandOutcome,
+    MessageStreamOutcome,
     MessageRole,
     RemoteAgentResult,
+    ResolveApprovalCommand,
     RouteDecisionKind,
+    SubmitTaskInputCommand,
+    TaskCommandOutcome,
+    TaskRecord,
 )
 from vermay.main_agent.models import RegisteredAgentRecord
 from vermay.main_agent.models import is_terminal_task_status
 from vermay.main_agent.projection import (
+    is_a2a_internal_task_event,
     task_event_to_a2a_artifact_update,
     task_event_to_a2a_status_update,
     task_to_a2a_payload,
@@ -73,16 +90,23 @@ class A2AAdapter:
         _validate_jsonrpc_user_message(message)
         metadata = _merged_metadata(params, message=message)
         if message.task_id is not None:
-            task = core.submit_task_input(
-                message.task_id,
-                _main_agent_request(message, metadata=metadata),
+            task = _task_from_outcome(
+                core.execute(
+                    SubmitTaskInputCommand(
+                        task_id=message.task_id,
+                        request=_main_agent_request(message, metadata=metadata),
+                    )
+                )
             )
             yield _jsonrpc_success(
                 request_id,
                 _main_task_payload(task, store=core.store),
             )
             return
-        for result in core.stream_message(_main_agent_request(message, metadata=metadata)):
+        for outcome in core.stream(
+            AdmitMessageCommand(_main_agent_request(message, metadata=metadata))
+        ):
+            result = _stream_result_from_outcome(outcome)
             if isinstance(result, LocalMessageDelta):
                 yield _jsonrpc_success(request_id, _local_message_delta_payload(result))
             else:
@@ -99,15 +123,21 @@ class A2AAdapter:
         _validate_jsonrpc_user_message(message)
         metadata = _merged_metadata(params, message=message)
         if message.task_id is not None:
-            task = core.submit_task_input(
-                message.task_id,
-                _main_agent_request(message, metadata=metadata),
+            task = _task_from_outcome(
+                core.execute(
+                    SubmitTaskInputCommand(
+                        task_id=message.task_id,
+                        request=_main_agent_request(message, metadata=metadata),
+                    )
+                )
             )
             return _jsonrpc_success(
                 payload.get("id"),
                 _main_task_payload(task, store=core.store),
             )
-        result = core.handle_message(_main_agent_request(message, metadata=metadata))
+        result = _message_result_from_outcome(
+            core.execute(AdmitMessageCommand(_main_agent_request(message, metadata=metadata)))
+        )
         return {
             "jsonrpc": "2.0",
             "id": payload.get("id"),
@@ -131,7 +161,9 @@ class A2AAdapter:
             raise TaskNotFoundError(task_id)
         if is_terminal_task_status(task.status):
             raise InvalidSessionStateError(f"task is terminal and cannot be canceled: {task_id}")
-        updated = core.cancel_task(task_id, reason=reason)
+        updated = _task_from_outcome(
+            core.execute(CancelTaskCommand(task_id=task_id, reason=reason))
+        )
         return _jsonrpc_success(f"cancel-{task_id}", task_to_a2a_payload(updated))
 
     def resume_task(self, task_id: str, *, approved: bool, reason: str | None = None) -> dict[str, Any]:
@@ -139,7 +171,15 @@ class A2AAdapter:
         task = core.store.get_task(task_id)
         if task is None:
             raise TaskNotFoundError(task_id)
-        updated = core.resume_task(task_id, approved=approved, reason=reason)
+        updated = _task_from_outcome(
+            core.execute(
+                ResolveApprovalCommand(
+                    task_id=task_id,
+                    approved=approved,
+                    reason=reason,
+                )
+            )
+        )
         return _jsonrpc_success(f"resume-{task_id}", task_to_a2a_payload(updated))
 
     def project_task_events(self, task_id: str, *, after_event_id: int = 0) -> list[dict[str, Any]]:
@@ -147,11 +187,15 @@ class A2AAdapter:
         task = core.get_task(task_id, refresh_remote=True)
         if task is None:
             raise TaskNotFoundError(task_id)
-        return [
-            payload
-            for event in core.store.list_task_events(task_id, after_event_id=after_event_id)
-            if (payload := self._project_main_agent_task_event(event, task=task)) is not None
-        ]
+        projected: list[dict[str, Any]] = []
+        for event in core.store.list_task_events(
+            task_id,
+            after_event_id=after_event_id,
+        ):
+            payload = self._project_classified_main_agent_task_event(event, task=task)
+            if payload is not None:
+                projected.append(payload)
+        return projected
 
     def wait_for_task_events(
         self,
@@ -169,13 +213,14 @@ class A2AAdapter:
             after_event_id=after_event_id,
             timeout_seconds=timeout_seconds,
         )
+        projected: list[dict[str, Any]] = []
+        for event in events:
+            payload = self._project_classified_main_agent_task_event(event, task=task)
+            if payload is not None:
+                projected.append(_jsonrpc_success(f"event-{event.event_id}", payload))
         return A2AEventBatch(
             last_event_id=_last_main_event_id(events, fallback=after_event_id),
-            events=[
-                _jsonrpc_success(f"event-{event.event_id}", payload)
-                for event in events
-                if (payload := self._project_main_agent_task_event(event, task=task)) is not None
-            ],
+            events=projected,
         )
 
     def is_main_agent_task(self, task_id: str) -> bool:
@@ -191,13 +236,41 @@ class A2AAdapter:
             raise InvalidRequestError(f"{operation} requires MainAgentCore.")
         return self.main_agent_core
 
-    def _project_main_agent_task_event(self, event, *, task):
+    def _project_classified_main_agent_task_event(self, event, *, task):
         artifact_id = event.payload.get("artifact_id")
         artifact = self.main_agent_core.store.get_artifact(str(artifact_id)) if artifact_id else None
-        return task_event_to_a2a_artifact_update(event, task=task, artifact=artifact) or task_event_to_a2a_status_update(
+        payload = task_event_to_a2a_artifact_update(event, task=task, artifact=artifact) or task_event_to_a2a_status_update(
             event,
             task=task,
         )
+        if payload is None and is_a2a_internal_task_event(event):
+            return None
+        if payload is None:
+            raise TaskEventProjectionError(
+                task_id=event.task_id,
+                event_id=event.event_id,
+                event_type=event.type,
+            )
+        return payload
+
+
+def _message_result_from_outcome(outcome: MainAgentCommandOutcome) -> MainAgentResult:
+    if not isinstance(outcome, MessageCommandOutcome):
+        raise RuntimeError("message command returned an invalid outcome")
+    return outcome.result
+
+
+def _stream_result_from_outcome(outcome: MessageStreamOutcome) -> MainAgentStreamResult:
+    if not isinstance(outcome, MessageStreamOutcome):
+        raise RuntimeError("message stream command returned an invalid outcome")
+    return outcome.result
+
+
+def _task_from_outcome(outcome: MainAgentCommandOutcome) -> TaskRecord:
+    if not isinstance(outcome, TaskCommandOutcome):
+        raise RuntimeError("task command returned an invalid outcome")
+    return outcome.task
+
 
 def _validate_jsonrpc_user_message(message: A2AMessage) -> None:
     if message.role not in {None, "user"}:

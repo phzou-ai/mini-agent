@@ -43,8 +43,13 @@ agent operations enter through the A2A adapter and delegate to
 
 `vermay/main_agent/`
 
-- `core.py`: the application lifecycle owner for direct Messages, local Tasks,
-  continuations, cancellation, remote child-task proxies, and durable ingress.
+- `core.py`: the application lifecycle facade and sole command dispatcher for
+  direct Messages, local Tasks, continuations, cancellation, remote child-task
+  proxies, and durable ingress.
+- `commands.py`: immutable lifecycle command inputs and typed application
+  outcomes used by protocol adapters and core-owned execution callbacks.
+- `task_outcomes.py`: core-owned persistence of accepted local and remote Task
+  execution outcomes; it owns no routing, scheduling, or model execution.
 - `store.py`: Main Agent persistence adapter over the SQLite store.
 - `router.py`, `router_classifier.py`, and `router_json_client.py`: explicit
   route selection, model-backed classification, and model-provider transport.
@@ -58,8 +63,10 @@ agent operations enter through the A2A adapter and delegate to
 - `remote_agent.py`: child A2A client and remote Task snapshot validation.
 - `projection.py`: protocol-facing projection of durable main-agent records.
 
-`MainAgentCore` owns public lifecycle facts; `LangGraphAgentRuntime` owns only
-local graph execution and checkpoint continuation.
+`MainAgentCore.execute()` and `MainAgentCore.stream()` are the lifecycle command
+surface. `MainAgentCore` owns public lifecycle facts;
+`LangGraphAgentRuntime` owns only local graph execution and checkpoint
+continuation.
 
 ## Runtime Factory
 

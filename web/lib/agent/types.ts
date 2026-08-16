@@ -48,6 +48,8 @@ export type AgentTask = {
   task_id: string
   session_id: string
   thread_id: string
+  /** Monotonic version of the durable public Task projection. */
+  lifecycle_revision?: number | null
   /** A2A's public projection of the durable local process state. */
   a2a_state?: string | null
   /** The local durable process state owned by the main-agent runtime. */
@@ -62,6 +64,8 @@ export type AgentTask = {
   interrupt_message?: string | null
   stop_message?: string | null
   error?: AgentTaskError | null
+  /** Client-only failure of the Task event subscription; not Task lifecycle state. */
+  stream_error?: AgentTaskError | null
   model?: Record<string, unknown> | null
   max_loops?: number | null
   mcp?: Record<string, unknown> | null
@@ -74,6 +78,8 @@ export type AgentTaskEvent = {
   event_id: number
   task_id: string
   session_id: string
+  /** Projection version this replay event describes; distinct from event_id. */
+  lifecycle_revision?: number | null
   context_id?: string | null
   thread_id?: string | null
   /** A2A state carried by a status-update event, when that event changes state. */
@@ -100,6 +106,8 @@ export type AgentMessage = {
   content: string
   createdAt: string
   taskId?: string | null
+  messageKind?: "task_input_request"
+  inputRequestRevision?: number | null
   loading?: boolean
   failure?: AgentMessageFailure
   request?: AgentMessageRequest
@@ -289,6 +297,7 @@ export type AgentContextTaskRecord = {
   error_code?: string | null
   error_message?: string | null
   error_retryable?: boolean | null
+  lifecycle_revision?: number | null
   created_at: string
   updated_at: string
 }

@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-import threading
 import time
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any, Iterator, Sequence
 
 from vermay.storage import AgentStore, utc_now
 
 from .lifecycle import lifecycle_event_type_for_status, validate_local_task_transition
 from .models import (
+    LOCAL_EXECUTION_COMMAND_VERSION,
+    InitialTaskExecutionPayload,
     ArtifactRecord,
     ContextRecord,
     DelegatedTaskRecord,
@@ -20,6 +21,7 @@ from .models import (
     MessageRole,
     PendingContinuationRecord,
     QueuedTaskExecutionKind,
+    QueuedTaskExecutionPayload,
     QueuedTaskExecutionRecord,
     RegisteredAgentRecord,
     RouteDecisionKind,
@@ -31,6 +33,7 @@ from .models import (
     ToolInvocationRecord,
     ToolInvocationStatus,
     is_terminal_task_status,
+    queued_task_execution_payload_to_dict,
 )
 from .store_mappers import (
     _artifact_from_row,
@@ -48,13 +51,18 @@ from .store_mappers import (
     _task_from_row,
     _tool_invocation_from_row,
 )
+from .task_event_subscription import InProcessTaskEventNotifier, TaskEventNotifier
 
 
 class MainAgentStore:
-    def __init__(self, store: AgentStore) -> None:
+    def __init__(
+        self,
+        store: AgentStore,
+        *,
+        task_event_notifier: TaskEventNotifier | None = None,
+    ) -> None:
         self.store = store
-        self._task_event_condition = threading.Condition()
-        self._task_event_versions: dict[str, int] = {}
+        self._task_event_notifier = task_event_notifier or InProcessTaskEventNotifier()
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -94,15 +102,61 @@ class MainAgentStore:
             return None
         return _context_from_row(rows[0])
 
-    def list_contexts(self) -> list[ContextRecord]:
+    def list_contexts(
+        self,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[ContextRecord]:
+        if limit is not None and limit < 1:
+            raise ValueError("context list limit must be positive")
+        if offset < 0:
+            raise ValueError("context list offset must not be negative")
+        pagination = ""
+        params: tuple[Any, ...] = ()
+        if limit is not None:
+            pagination = " LIMIT ? OFFSET ?"
+            params = (limit, offset)
+        elif offset:
+            pagination = " LIMIT -1 OFFSET ?"
+            params = (offset,)
         rows = self.store.query(
-            """
+            f"""
             SELECT context_id, title, metadata, created_at, updated_at
             FROM contexts
-            ORDER BY updated_at DESC
-            """
+            ORDER BY updated_at DESC, context_id DESC
+            {pagination}
+            """,
+            params,
         )
         return [_context_from_row(row) for row in rows]
+
+    def first_user_messages_by_context(
+        self, context_ids: Sequence[str]
+    ) -> dict[str, MessageRecord]:
+        unique_context_ids = list(dict.fromkeys(context_ids))
+        if not unique_context_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in unique_context_ids)
+        rows = self.store.query(
+            f"""
+            SELECT m.message_id, m.context_id, m.context_sequence, m.role,
+                   m.parts, m.task_id, m.metadata, m.created_at
+            FROM messages AS m
+            WHERE m.role=?
+              AND m.context_id IN ({placeholders})
+              AND m.context_sequence=(
+                  SELECT MIN(candidate.context_sequence)
+                  FROM messages AS candidate
+                  WHERE candidate.context_id=m.context_id AND candidate.role=?
+              )
+            """,
+            (MessageRole.USER.value, *unique_context_ids, MessageRole.USER.value),
+        )
+        return {
+            message.context_id: message
+            for message in (_message_from_row(row) for row in rows)
+        }
 
     def touch_context(self, context_id: str) -> None:
         self.store.execute("UPDATE contexts SET updated_at=? WHERE context_id=?", (utc_now(), context_id))
@@ -253,7 +307,12 @@ class MainAgentStore:
             return None
         return _message_ingress_from_row(rows[0])
 
-    def list_failed_message_ingresses(self, context_id: str) -> list[MessageIngressRecord]:
+    def list_failed_message_ingresses(
+        self,
+        context_id: str,
+        *,
+        message_ids: Sequence[str] | None = None,
+    ) -> list[MessageIngressRecord]:
         """Return terminal direct-message failures for one Context.
 
         The ingress record is the durable owner of a direct-message failure.
@@ -261,17 +320,27 @@ class MainAgentStore:
         Messages without storing a synthetic agent Message.
         """
 
+        where = ["context_id=?", "state=?"]
+        values: list[Any] = [context_id, MessageIngressState.FAILED.value]
+        if message_ids is not None:
+            bounded_message_ids = tuple(dict.fromkeys(message_ids))
+            if not bounded_message_ids:
+                return []
+            where.append(
+                f"message_id IN ({', '.join('?' for _ in bounded_message_ids)})"
+            )
+            values.extend(bounded_message_ids)
         rows = self.store.query(
-            """
+            f"""
             SELECT message_id, context_id, request_fingerprint, state,
                    route_decision_id, outcome_kind, outcome_id,
                    error_code, error_message, error_http_status, error_retryable,
                    created_at, updated_at
             FROM main_agent_message_ingress
-            WHERE context_id=? AND state=?
+            WHERE {' AND '.join(where)}
             ORDER BY updated_at ASC, message_id ASC
             """,
-            (context_id, MessageIngressState.FAILED.value),
+            values,
         )
         return [_message_ingress_from_row(row) for row in rows]
 
@@ -427,22 +496,36 @@ class MainAgentStore:
         context_id: str,
         *,
         limit: int | None = None,
+        offset: int = 0,
         through_sequence: int | None = None,
     ) -> list[MessageRecord]:
+        if limit is not None and limit < 1:
+            raise ValueError("context message limit must be positive")
+        if offset < 0:
+            raise ValueError("context message offset must not be negative")
+        if offset and limit is None:
+            raise ValueError("context message offset requires a limit")
         where = ["context_id=?"]
         values: list[Any] = [context_id]
         if through_sequence is not None:
             where.append("context_sequence <= ?")
             values.append(through_sequence)
+        order = "context_sequence ASC"
         sql = """
             SELECT message_id, context_id, context_sequence, role, parts, task_id, metadata, created_at
             FROM messages
             WHERE {where}
-            ORDER BY context_sequence ASC
-        """.format(where=" AND ".join(where))
+            ORDER BY {order}
+        """.format(where=" AND ".join(where), order=order)
         if limit is not None:
-            sql = f"SELECT * FROM ({sql}) ORDER BY context_sequence DESC LIMIT ?"
-            values.append(limit)
+            sql = """
+                SELECT message_id, context_id, context_sequence, role, parts, task_id, metadata, created_at
+                FROM messages
+                WHERE {where}
+                ORDER BY context_sequence DESC
+                LIMIT ? OFFSET ?
+            """.format(where=" AND ".join(where))
+            values.extend((limit, offset))
         rows = self.store.query(sql, values)
         records = [_message_from_row(row) for row in rows]
         if limit is not None:
@@ -516,17 +599,37 @@ class MainAgentStore:
             return None
         return _route_decision_from_row(rows[0])
 
-    def list_context_route_decisions(self, context_id: str) -> list[RouteDecisionRecord]:
+    def list_context_route_decisions(
+        self,
+        context_id: str,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[RouteDecisionRecord]:
+        if limit is not None and limit < 1:
+            raise ValueError("route decision limit must be positive")
+        if offset < 0:
+            raise ValueError("route decision offset must not be negative")
+        if offset and limit is None:
+            raise ValueError("route decision offset requires a limit")
+        pagination = ""
+        values: list[Any] = [context_id]
+        order = "created_at ASC, decision_id ASC"
+        if limit is not None:
+            pagination = " LIMIT ? OFFSET ?"
+            values.extend((limit, offset))
+            order = "created_at DESC, decision_id DESC"
         rows = self.store.query(
-            """
+            f"""
             SELECT decision_id, context_id, message_id, kind, reason, confidence, target_agent_id, metadata, created_at
             FROM route_decisions
             WHERE context_id=?
-            ORDER BY created_at ASC
+            ORDER BY {order}{pagination}
             """,
-            (context_id,),
+            values,
         )
-        return [_route_decision_from_row(row) for row in rows]
+        records = [_route_decision_from_row(row) for row in rows]
+        return list(reversed(records)) if limit is not None else records
 
     def create_task(
         self,
@@ -556,9 +659,9 @@ class MainAgentStore:
             INSERT INTO main_agent_tasks(
                 task_id, context_id, status, input_message_id, input_context_sequence, output_message_id, runtime_thread_id,
                 assigned_agent_id, retry_of_task_id, attempt, model, max_loops, mcp, error_code,
-                error_message, error_retryable, created_at, updated_at
+                error_message, error_retryable, lifecycle_revision, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task_id,
@@ -577,6 +680,7 @@ class MainAgentStore:
                 None,
                 None,
                 0,
+                1,
                 now,
                 now,
             ),
@@ -691,7 +795,7 @@ class MainAgentStore:
             """
             SELECT task_id, context_id, status, input_message_id, input_context_sequence, output_message_id, runtime_thread_id,
                    assigned_agent_id, retry_of_task_id, attempt, model, max_loops, mcp, error_code,
-                   error_message, error_retryable, created_at, updated_at
+                   error_message, error_retryable, lifecycle_revision, created_at, updated_at
             FROM main_agent_tasks
             WHERE task_id=?
             """,
@@ -708,7 +812,7 @@ class MainAgentStore:
             """
             SELECT task_id, context_id, status, input_message_id, input_context_sequence, output_message_id,
                    runtime_thread_id, assigned_agent_id, retry_of_task_id, attempt, model, max_loops, mcp,
-                   error_code, error_message, error_retryable, created_at, updated_at
+                   error_code, error_message, error_retryable, lifecycle_revision, created_at, updated_at
             FROM main_agent_tasks
             WHERE retry_of_task_id=?
             ORDER BY created_at ASC, task_id ASC
@@ -725,7 +829,7 @@ class MainAgentStore:
             """
             SELECT task_id, context_id, status, input_message_id, input_context_sequence, output_message_id,
                    runtime_thread_id, assigned_agent_id, retry_of_task_id, attempt, model, max_loops, mcp,
-                   error_code, error_message, error_retryable, created_at, updated_at
+                   error_code, error_message, error_retryable, lifecycle_revision, created_at, updated_at
             FROM main_agent_tasks
             WHERE runtime_thread_id=?
             """,
@@ -735,19 +839,39 @@ class MainAgentStore:
             return None
         return _task_from_row(rows[0])
 
-    def list_context_tasks(self, context_id: str) -> list[TaskRecord]:
+    def list_context_tasks(
+        self,
+        context_id: str,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[TaskRecord]:
+        if limit is not None and limit < 1:
+            raise ValueError("context task limit must be positive")
+        if offset < 0:
+            raise ValueError("context task offset must not be negative")
+        if offset and limit is None:
+            raise ValueError("context task offset requires a limit")
+        pagination = ""
+        values: list[Any] = [context_id]
+        order = "created_at ASC, task_id ASC"
+        if limit is not None:
+            pagination = " LIMIT ? OFFSET ?"
+            values.extend((limit, offset))
+            order = "created_at DESC, task_id DESC"
         rows = self.store.query(
-            """
+            f"""
             SELECT task_id, context_id, status, input_message_id, input_context_sequence, output_message_id, runtime_thread_id,
                    assigned_agent_id, retry_of_task_id, attempt, model, max_loops, mcp, error_code,
-                   error_message, error_retryable, created_at, updated_at
+                   error_message, error_retryable, lifecycle_revision, created_at, updated_at
             FROM main_agent_tasks
             WHERE context_id=?
-            ORDER BY created_at ASC
+            ORDER BY {order}{pagination}
             """,
-            (context_id,),
+            values,
         )
-        return [_task_from_row(row) for row in rows]
+        records = [_task_from_row(row) for row in rows]
+        return list(reversed(records)) if limit is not None else records
 
     def list_local_tasks_by_statuses(self, statuses: set[TaskStatus]) -> list[TaskRecord]:
         """Return locally owned processes in one of the supplied states."""
@@ -760,7 +884,7 @@ class MainAgentStore:
             f"""
             SELECT task_id, context_id, status, input_message_id, input_context_sequence, output_message_id,
                    runtime_thread_id, assigned_agent_id, retry_of_task_id, attempt, model, max_loops, mcp,
-                   error_code, error_message, error_retryable, created_at, updated_at
+                   error_code, error_message, error_retryable, lifecycle_revision, created_at, updated_at
             FROM main_agent_tasks
             WHERE assigned_agent_id IS NULL AND status IN ({placeholders})
             ORDER BY created_at ASC, task_id ASC
@@ -1326,7 +1450,8 @@ class MainAgentStore:
             self.store.execute(
                 """
                 UPDATE main_agent_tasks
-                SET status=?, error_code=?, error_message=?, error_retryable=?, updated_at=?
+                SET status=?, error_code=?, error_message=?, error_retryable=?,
+                    lifecycle_revision=lifecycle_revision + 1, updated_at=?
                 WHERE task_id=?
                 """,
                 (target_status.value, error_code, error_message, int(error_retryable), utc_now(), task_id),
@@ -1356,34 +1481,52 @@ class MainAgentStore:
         Locally owned process transitions must use `transition_local_task()`.
         """
 
-        self.store.execute(
-            """
-            UPDATE main_agent_tasks
-            SET status=?, error_code=?, error_message=?, error_retryable=?, updated_at=?
-            WHERE task_id=?
-            """,
-            (status.value, error_code, error_message, int(error_retryable), utc_now(), task_id),
-        )
-        record = self.get_task(task_id)
-        if record is None:
-            raise RuntimeError(f"failed to update task: {task_id}")
-        return record
+        with self.transaction():
+            current = self.get_task(task_id)
+            if current is None:
+                raise ValueError(f"unknown task: {task_id}")
+            if (
+                current.status == status
+                and current.error_code == error_code
+                and current.error_message == error_message
+                and current.error_retryable == error_retryable
+            ):
+                return current
+            self.store.execute(
+                """
+                UPDATE main_agent_tasks
+                SET status=?, error_code=?, error_message=?, error_retryable=?,
+                    lifecycle_revision=lifecycle_revision + 1, updated_at=?
+                WHERE task_id=?
+                """,
+                (status.value, error_code, error_message, int(error_retryable), utc_now(), task_id),
+            )
+            record = self.get_task(task_id)
+            if record is None:
+                raise RuntimeError(f"failed to update task: {task_id}")
+            return record
 
     def set_task_output_message(self, task_id: str, output_message_id: str) -> TaskRecord:
         if self.get_message(output_message_id) is None:
             raise ValueError(f"unknown output message: {output_message_id}")
-        self.store.execute(
-            """
-            UPDATE main_agent_tasks
-            SET output_message_id=?, updated_at=?
-            WHERE task_id=?
-            """,
-            (output_message_id, utc_now(), task_id),
-        )
-        record = self.get_task(task_id)
-        if record is None:
-            raise RuntimeError(f"failed to set task output: {task_id}")
-        return record
+        with self.transaction():
+            current = self.get_task(task_id)
+            if current is None:
+                raise ValueError(f"unknown task: {task_id}")
+            if current.output_message_id == output_message_id:
+                return current
+            self.store.execute(
+                """
+                UPDATE main_agent_tasks
+                SET output_message_id=?, lifecycle_revision=lifecycle_revision + 1, updated_at=?
+                WHERE task_id=?
+                """,
+                (output_message_id, utc_now(), task_id),
+            )
+            record = self.get_task(task_id)
+            if record is None:
+                raise RuntimeError(f"failed to set task output: {task_id}")
+            return record
 
     def append_task_event(
         self,
@@ -1393,27 +1536,37 @@ class MainAgentStore:
         status: TaskStatus | None = None,
         payload: dict[str, Any] | None = None,
     ) -> TaskEventRecord:
-        if self.get_task(task_id) is None:
+        task = self.get_task(task_id)
+        if task is None:
             raise ValueError(f"unknown task: {task_id}")
         cursor = self.store.execute(
             """
-            INSERT INTO main_agent_task_events(task_id, type, status, payload, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO main_agent_task_events(
+                task_id, type, status, lifecycle_revision, payload, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (task_id, type, status.value if status is not None else None, _dumps(payload or {}), utc_now()),
+            (
+                task_id,
+                type,
+                status.value if status is not None else None,
+                task.lifecycle_revision,
+                _dumps(payload or {}),
+                utc_now(),
+            ),
         )
         record = self.get_task_event(int(cursor.lastrowid))
         if record is None:
             raise RuntimeError(f"failed to append task event: {task_id}")
-        with self._task_event_condition:
-            self._task_event_versions[task_id] = self._task_event_versions.get(task_id, 0) + 1
-            self._task_event_condition.notify_all()
+        self.store.register_after_commit(
+            lambda task_id=task_id: self._task_event_notifier.notify(task_id)
+        )
         return record
 
     def get_task_event(self, event_id: int) -> TaskEventRecord | None:
         rows = self.store.query(
             """
-            SELECT event_id, task_id, type, status, payload, created_at
+            SELECT event_id, task_id, type, status, lifecycle_revision, payload, created_at
             FROM main_agent_task_events
             WHERE event_id=?
             """,
@@ -1426,7 +1579,7 @@ class MainAgentStore:
     def list_task_events(self, task_id: str, *, after_event_id: int = 0) -> list[TaskEventRecord]:
         rows = self.store.query(
             """
-            SELECT event_id, task_id, type, status, payload, created_at
+            SELECT event_id, task_id, type, status, lifecycle_revision, payload, created_at
             FROM main_agent_task_events
             WHERE task_id=? AND event_id > ?
             ORDER BY event_id ASC
@@ -1510,7 +1663,8 @@ class MainAgentStore:
         *,
         kind: QueuedTaskExecutionKind,
         runtime_thread_id: str,
-        payload: dict[str, Any] | None = None,
+        payload: QueuedTaskExecutionPayload | None = None,
+        command_version: int = LOCAL_EXECUTION_COMMAND_VERSION,
     ) -> QueuedTaskExecutionRecord:
         """Persist the next worker slice before exposing a task as queued."""
 
@@ -1524,14 +1678,23 @@ class MainAgentStore:
         if task.runtime_thread_id != runtime_thread_id:
             raise ValueError(f"task runtime thread mismatch: {task_id}")
 
-        if payload is not None and not isinstance(payload, dict):
-            raise ValueError(f"queued execution payload must be an object: {task_id}")
-        normalized_payload = payload or {}
+        if command_version != LOCAL_EXECUTION_COMMAND_VERSION:
+            raise ValueError(f"unsupported local execution command version: {command_version}")
+        normalized_payload = payload
+        if normalized_payload is None:
+            if kind != QueuedTaskExecutionKind.INITIAL:
+                raise ValueError(f"queued execution payload is required: {task_id}")
+            normalized_payload = InitialTaskExecutionPayload()
+        serialized_payload = queued_task_execution_payload_to_dict(
+            kind=kind,
+            payload=normalized_payload,
+        )
         existing = self.get_queued_task_execution(task_id)
         if existing is not None:
             if (
                 existing.kind == kind
                 and existing.runtime_thread_id == runtime_thread_id
+                and existing.command_version == command_version
                 and existing.payload == normalized_payload
             ):
                 return existing
@@ -1539,10 +1702,19 @@ class MainAgentStore:
 
         self.store.execute(
             """
-            INSERT INTO main_agent_queued_executions(task_id, kind, runtime_thread_id, payload, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO main_agent_queued_executions(
+                task_id, kind, runtime_thread_id, command_version, payload, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (task_id, kind.value, runtime_thread_id, _dumps(normalized_payload), utc_now()),
+            (
+                task_id,
+                kind.value,
+                runtime_thread_id,
+                command_version,
+                _dumps(serialized_payload),
+                utc_now(),
+            ),
         )
         record = self.get_queued_task_execution(task_id)
         if record is None:
@@ -1552,7 +1724,7 @@ class MainAgentStore:
     def get_queued_task_execution(self, task_id: str) -> QueuedTaskExecutionRecord | None:
         rows = self.store.query(
             """
-            SELECT task_id, kind, runtime_thread_id, payload, created_at
+            SELECT task_id, kind, runtime_thread_id, command_version, payload, created_at
             FROM main_agent_queued_executions
             WHERE task_id=?
             """,
@@ -1610,8 +1782,7 @@ class MainAgentStore:
         if events or timeout_seconds <= 0:
             return events
 
-        with self._task_event_condition:
-            version = self._task_event_versions.get(task_id, 0)
+        version = self._task_event_notifier.observe(task_id)
         deadline = time.monotonic() + timeout_seconds
         while True:
             events = self.list_task_events(task_id, after_event_id=after_event_id)
@@ -1620,10 +1791,11 @@ class MainAgentStore:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return []
-            with self._task_event_condition:
-                if self._task_event_versions.get(task_id, 0) <= version:
-                    self._task_event_condition.wait(timeout=remaining)
-                version = self._task_event_versions.get(task_id, 0)
+            version = self._task_event_notifier.wait_for_change(
+                task_id,
+                observed_version=version,
+                timeout_seconds=remaining,
+            )
 
     def upsert_artifact(
         self,
@@ -1634,24 +1806,42 @@ class MainAgentStore:
         parts: list[dict[str, Any]],
         metadata: dict[str, Any] | None = None,
     ) -> ArtifactRecord:
-        if self.get_task(task_id) is None:
-            raise ValueError(f"unknown task: {task_id}")
-        now = utc_now()
-        self.store.execute(
-            """
-            INSERT INTO artifacts(artifact_id, task_id, context_id, parts, metadata, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(artifact_id) DO UPDATE SET
-                parts=excluded.parts,
-                metadata=excluded.metadata,
-                updated_at=excluded.updated_at
-            """,
-            (artifact_id, task_id, context_id, _dumps(parts), _dumps(metadata or {}), now, now),
-        )
-        record = self.get_artifact(artifact_id)
-        if record is None:
-            raise RuntimeError(f"failed to upsert artifact: {artifact_id}")
-        return record
+        with self.transaction():
+            task = self.get_task(task_id)
+            if task is None:
+                raise ValueError(f"unknown task: {task_id}")
+            artifact_metadata = metadata or {}
+            current = self.get_artifact(artifact_id)
+            if current is not None:
+                if current.task_id != task_id or current.context_id != context_id:
+                    raise ValueError(f"artifact ownership mismatch: {artifact_id}")
+                if current.parts == parts and current.metadata == artifact_metadata:
+                    return current
+
+            now = utc_now()
+            self.store.execute(
+                """
+                INSERT INTO artifacts(artifact_id, task_id, context_id, parts, metadata, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(artifact_id) DO UPDATE SET
+                    parts=excluded.parts,
+                    metadata=excluded.metadata,
+                    updated_at=excluded.updated_at
+                """,
+                (artifact_id, task_id, context_id, _dumps(parts), _dumps(artifact_metadata), now, now),
+            )
+            self.store.execute(
+                """
+                UPDATE main_agent_tasks
+                SET lifecycle_revision=lifecycle_revision + 1, updated_at=?
+                WHERE task_id=?
+                """,
+                (now, task_id),
+            )
+            record = self.get_artifact(artifact_id)
+            if record is None:
+                raise RuntimeError(f"failed to upsert artifact: {artifact_id}")
+            return record
 
     def get_artifact(self, artifact_id: str) -> ArtifactRecord | None:
         rows = self.store.query(
@@ -1892,19 +2082,39 @@ class MainAgentStore:
             raise RuntimeError(f"failed to update delegated task: {delegation_id}")
         return record
 
-    def list_context_delegations(self, context_id: str) -> list[DelegatedTaskRecord]:
+    def list_context_delegations(
+        self,
+        context_id: str,
+        *,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[DelegatedTaskRecord]:
+        if limit is not None and limit < 1:
+            raise ValueError("context delegation limit must be positive")
+        if offset < 0:
+            raise ValueError("context delegation offset must not be negative")
+        if offset and limit is None:
+            raise ValueError("context delegation offset requires a limit")
+        pagination = ""
+        values: list[Any] = [context_id]
+        order = "created_at ASC, delegation_id ASC"
+        if limit is not None:
+            pagination = " LIMIT ? OFFSET ?"
+            values.extend((limit, offset))
+            order = "created_at DESC, delegation_id DESC"
         rows = self.store.query(
-            """
+            f"""
             SELECT delegation_id, context_id, input_message_id, route_decision_id, remote_agent_id,
                    local_task_id, remote_task_id, remote_context_id, remote_message_id, result_kind,
                    status, metadata, created_at, updated_at
             FROM delegated_tasks
             WHERE context_id=?
-            ORDER BY created_at ASC
+            ORDER BY {order}{pagination}
             """,
-            (context_id,),
+            values,
         )
-        return [_delegated_task_from_row(row) for row in rows]
+        records = [_delegated_task_from_row(row) for row in rows]
+        return list(reversed(records)) if limit is not None else records
 
     def list_delegated_tasks_for_remote_agent(self, agent_id: str) -> list[DelegatedTaskRecord]:
         rows = self.store.query(

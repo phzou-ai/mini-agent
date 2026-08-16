@@ -1,4 +1,5 @@
 import type {
+  AgentA2ATask,
   AgentTask,
   AgentTaskEvent,
   AgentTaskStatus,
@@ -155,6 +156,23 @@ export function metadataString(
   return typeof value === "string" ? value : ""
 }
 
+export function lifecycleRevisionFromMetadata(
+  metadata?: Record<string, unknown> | null
+) {
+  const value = metadata?.lifecycleRevision
+  return typeof value === "number" && Number.isInteger(value) && value >= 1
+    ? value
+    : null
+}
+
+export function taskLifecycleRevision(task?: AgentTask | null) {
+  const value = task?.lifecycle_revision
+  if (typeof value === "number" && Number.isInteger(value) && value >= 1) {
+    return value
+  }
+  return lifecycleRevisionFromMetadata(task?.metadata)
+}
+
 export function a2aStateFromLocalProcessStatus(status?: string | null) {
   switch (status) {
     case "created":
@@ -248,9 +266,12 @@ export function taskErrorFromA2AEvent(event: AgentTaskEvent) {
 export function taskFailureForDisplay(
   task?: AgentTask
 ): NonNullable<AgentTask["error"]> | null {
-  if (!task || isMessageDisplayTask(task) || task.status !== "failed") {
+  if (!task || isMessageDisplayTask(task)) {
     return null
   }
+
+  if (task.stream_error) return task.stream_error
+  if (task.status !== "failed") return null
 
   return (
     task.error ?? {
@@ -269,4 +290,153 @@ export function threadIdFromMetadata(
     metadataString(metadata ?? undefined, "localThreadId") ||
     metadataString(metadata ?? undefined, "threadId")
   )
+}
+
+function timestampMillis(value?: string | null) {
+  if (!value) return null
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function mergeAcceptedTaskProjection(
+  current: AgentTask,
+  incoming: AgentTask
+): AgentTask {
+  const metadata = {
+    ...(current.metadata ?? {}),
+    ...(incoming.metadata ?? {}),
+  }
+  if (incoming.status !== "interrupted") {
+    delete metadata.inputRequest
+  }
+
+  return {
+    ...current,
+    ...incoming,
+    thread_id: incoming.thread_id || current.thread_id,
+    final_answer: incoming.final_answer ?? current.final_answer,
+    error: incoming.error === undefined ? current.error : incoming.error,
+    stream_error:
+      incoming.stream_error === undefined
+        ? isTerminalStatus(incoming.status)
+          ? null
+          : current.stream_error
+        : incoming.stream_error,
+    metadata,
+  }
+}
+
+function mergeEqualTaskProjection(
+  current: AgentTask,
+  incoming: AgentTask
+): AgentTask {
+  const incomingMetadata = { ...(incoming.metadata ?? {}) }
+  const sameLifecycle =
+    incoming.status === current.status &&
+    (!incoming.a2a_state || incoming.a2a_state === current.a2a_state) &&
+    (!incoming.local_process_status ||
+      incoming.local_process_status === current.local_process_status)
+
+  if (!sameLifecycle) {
+    for (const key of [
+      "localStatus",
+      "inputRequest",
+      "inputRequestKind",
+      "outputMessageId",
+      "localErrorCode",
+      "localErrorMessage",
+      "localErrorRetryable",
+      "remoteStatus",
+    ]) {
+      delete incomingMetadata[key]
+    }
+  }
+
+  const metadata = {
+    ...incomingMetadata,
+    ...(current.metadata ?? {}),
+  }
+  if (current.status !== "interrupted") {
+    delete metadata.inputRequest
+    delete metadata.inputRequestKind
+  }
+  if (current.status !== "failed") {
+    delete metadata.localErrorCode
+    delete metadata.localErrorMessage
+    delete metadata.localErrorRetryable
+  }
+
+  return {
+    ...current,
+    thread_id: current.thread_id || incoming.thread_id,
+    final_answer: current.final_answer ?? incoming.final_answer,
+    error: sameLifecycle ? current.error ?? incoming.error : current.error,
+    stream_error: sameLifecycle
+      ? current.stream_error ?? incoming.stream_error
+      : current.stream_error,
+    metadata,
+  }
+}
+
+/** Merge one public Task projection without allowing lifecycle regression.
+ *
+ * Revision is authoritative when both sources provide it. Timestamp ordering
+ * remains only as a bounded compatibility path for transient or older data.
+ * Equal revisions preserve lifecycle fields while accepting additive evidence
+ * such as an artifact-derived final answer or metadata.
+ */
+export function mergeTaskProjection(
+  current: AgentTask,
+  incoming: AgentTask
+): AgentTask {
+  const currentRevision = taskLifecycleRevision(current)
+  const incomingRevision = taskLifecycleRevision(incoming)
+
+  if (currentRevision !== null && incomingRevision !== null) {
+    if (incomingRevision < currentRevision) return current
+    if (incomingRevision === currentRevision) {
+      return mergeEqualTaskProjection(current, incoming)
+    }
+    return mergeAcceptedTaskProjection(current, incoming)
+  }
+
+  const currentTimestamp = timestampMillis(current.updated_at)
+  const incomingTimestamp = timestampMillis(incoming.updated_at)
+  if (
+    currentTimestamp !== null &&
+    incomingTimestamp !== null &&
+    incomingTimestamp < currentTimestamp
+  ) {
+    return current
+  }
+  return mergeAcceptedTaskProjection(current, incoming)
+}
+
+export function mergeTaskWithA2ASnapshot(
+  current: AgentTask,
+  snapshot: AgentA2ATask
+): AgentTask {
+  const snapshotUpdatedAt = snapshot.status.timestamp
+  const status = taskStatusFromA2A(snapshot.status.state, snapshot.metadata)
+  const stateProjection = taskStateProjection(
+    snapshot.status.state,
+    snapshot.metadata,
+    current.local_process_status
+  )
+  const taskError = taskErrorFromA2AMetadata(snapshot.metadata)
+  const runtimeThreadId = threadIdFromMetadata(snapshot.metadata)
+  const candidate: AgentTask = {
+    ...current,
+    lifecycle_revision: lifecycleRevisionFromMetadata(snapshot.metadata),
+    thread_id: runtimeThreadId || current.thread_id,
+    a2a_state: stateProjection.a2a_state,
+    local_process_status: stateProjection.local_process_status,
+    status,
+    updated_at: snapshotUpdatedAt || current.updated_at,
+    error: status === "failed" ? taskError ?? current.error : null,
+    stream_error: isTerminalStatus(status) ? null : current.stream_error,
+    metadata: snapshot.metadata ?? {},
+  }
+  const merged = mergeTaskProjection(current, candidate)
+  return merged
 }

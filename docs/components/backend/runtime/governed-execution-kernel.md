@@ -111,6 +111,12 @@ should distinguish active model/tool execution time from suspended
 approval/input lifetime. It should not turn the current
 `max_elapsed_seconds` process-age limit into a short global default.
 
+This remains an explicit product decision rather than an unfinished wiring
+task. The next justified step is to expose elapsed active time and current
+execution phase when operators cannot diagnose long-running work. A default
+overall deadline should be selected only after that evidence exists and after
+active execution time can be distinguished from human-paced suspension.
+
 ## Stop Reasons And Process Projection
 
 `stop_reason` is an execution-kernel fact, not a new A2A or local-process

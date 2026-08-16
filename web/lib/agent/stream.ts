@@ -9,6 +9,7 @@ type AgentA2AStreamHandlers = {
   after?: number
   onEvent: (event: AgentA2AStreamEnvelope) => void
   onError?: (error: Event) => void
+  onProtocolError?: (error: RequestError) => void
   onDone?: () => void
 }
 
@@ -21,7 +22,13 @@ type AgentA2AMessageStreamHandlers = {
 
 export function openAgentA2ATaskEventStream(
   taskId: string,
-  { after = 0, onEvent, onError, onDone }: AgentA2AStreamHandlers
+  {
+    after = 0,
+    onEvent,
+    onError,
+    onProtocolError,
+    onDone,
+  }: AgentA2AStreamHandlers
 ) {
   const params = new URLSearchParams()
   if (after > 0) {
@@ -34,17 +41,23 @@ export function openAgentA2ATaskEventStream(
   )
 
   source.onerror = (error) => {
+    // A server-sent `event: error` is a MessageEvent and is forwarded through
+    // the JSON-RPC error contract below. Only transport failures reach here.
+    if (error instanceof MessageEvent) return
     onError?.(error)
     source.close()
     onDone?.()
   }
 
   const forwardEvent = (message: MessageEvent<string>) => {
+    let envelope: AgentA2AStreamEnvelope
     try {
-      onEvent(JSON.parse(message.data) as AgentA2AStreamEnvelope)
-    } catch {
-      // Ignore malformed events from an interrupted A2A stream.
+      envelope = parseA2AStreamEnvelope(message.data)
+    } catch (error) {
+      onProtocolError?.(asInvalidA2AStreamError(error))
+      return
     }
+    onEvent(envelope)
   }
 
   for (const eventName of A2A_STREAM_EVENT_NAMES) {
@@ -140,9 +153,82 @@ function emitSseChunk(
 
   if (!data) return
 
+  onEvent(parseA2AStreamEnvelope(data))
+}
+
+function parseA2AStreamEnvelope(data: string): AgentA2AStreamEnvelope {
+  let value: unknown
   try {
-    onEvent(JSON.parse(data) as AgentA2AStreamEnvelope)
-  } catch {
-    // Ignore malformed events from an interrupted A2A stream.
+    value = JSON.parse(data)
+  } catch (error) {
+    throw invalidA2AStreamError("The A2A stream returned malformed JSON.", error)
   }
+
+  if (!isRecord(value) || value.jsonrpc !== "2.0") {
+    throw invalidA2AStreamError(
+      "The A2A stream returned an invalid JSON-RPC envelope."
+    )
+  }
+
+  if (isRecord(value.error)) {
+    return value as AgentA2AStreamEnvelope
+  }
+
+  if (!isRecord(value.result) || !isValidA2AStreamResult(value.result)) {
+    throw invalidA2AStreamError(
+      "The A2A stream returned an invalid result payload."
+    )
+  }
+
+  return value as AgentA2AStreamEnvelope
+}
+
+function isValidA2AStreamResult(result: Record<string, unknown>) {
+  switch (result.kind) {
+    case "message":
+      return (
+        typeof result.messageId === "string" &&
+        typeof result.contextId === "string" &&
+        Array.isArray(result.parts)
+      )
+    case "task":
+      return (
+        typeof result.id === "string" &&
+        typeof result.contextId === "string" &&
+        hasState(result.status)
+      )
+    case "status-update":
+      return (
+        typeof result.taskId === "string" &&
+        typeof result.contextId === "string" &&
+        hasState(result.status)
+      )
+    case "artifact-update":
+      return (
+        typeof result.taskId === "string" &&
+        typeof result.contextId === "string" &&
+        isRecord(result.artifact) &&
+        Array.isArray(result.artifact.parts)
+      )
+    default:
+      return false
+  }
+}
+
+function hasState(value: unknown) {
+  return isRecord(value) && typeof value.state === "string"
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+}
+
+function invalidA2AStreamError(message: string, details?: unknown) {
+  return new RequestError(message, 502, details, "invalid_a2a_stream", false)
+}
+
+function asInvalidA2AStreamError(error: unknown) {
+  return error instanceof RequestError
+    ? error
+    : invalidA2AStreamError("The A2A stream returned invalid data.", error)
 }

@@ -6,6 +6,7 @@ export const A2A_STREAM_EVENT_NAMES = [
   "artifact-update",
   "message",
   "task",
+  "error",
 ] as const
 
 export function isA2APartialMessage(
