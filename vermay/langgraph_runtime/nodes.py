@@ -667,15 +667,35 @@ def record_tool_messages_node(components: GraphComponents):
                 {"loop": loop_index, **payload, "observation": observation},
             )
 
+        argument_errors = [error for error in errors if error["category"] == "tool_argument_error"]
+        execution_errors = [error for error in errors if error["category"] != "tool_argument_error"]
+        argument_error_rounds = int(state.get("tool_argument_error_rounds") or 0) + (
+            1 if argument_errors else 0
+        )
         updates: dict[str, Any] = {
             "observations": [*state.get("observations", []), *observations],
             "tool_calls": int(state.get("tool_calls") or 0) + len(observations),
-            "failure_count": int(state.get("failure_count") or 0) + len(errors),
+            "failure_count": int(state.get("failure_count") or 0) + len(execution_errors),
+            "tool_argument_error_rounds": argument_error_rounds,
             "errors": [*state.get("errors", []), *errors],
         }
         policy = policy_from_state(state)
         failure_count = int(updates["failure_count"])
-        if failure_count >= policy.max_failures:
+        if argument_errors and argument_error_rounds > policy.max_tool_argument_corrections:
+            limit = ExecutionLimit(
+                reason=ExecutionStopReason.TOOL_ARGUMENT_ERROR,
+                message=(
+                    "Execution stopped because tool arguments remained invalid "
+                    "after the allowed model correction."
+                ),
+                detail={
+                    "limit": "max_tool_argument_corrections",
+                    "limit_value": policy.max_tool_argument_corrections,
+                    "observed_value": argument_error_rounds,
+                },
+            )
+            updates.update(_execution_stop_updates(components, state, limit))
+        elif failure_count >= policy.max_failures:
             limit = ExecutionLimit(
                 reason=ExecutionStopReason.REPEATED_FAILURE,
                 message=f"Execution stopped after {failure_count} tool failure(s).",

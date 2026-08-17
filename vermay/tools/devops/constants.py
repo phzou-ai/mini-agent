@@ -10,6 +10,10 @@ class KubectlGetResource(str, Enum):
     nodes = "nodes"
     namespaces = "namespaces"
     events = "events"
+    certificates = "certificates"
+    challenges = "challenges"
+    orders = "orders"
+    certificaterequests = "certificaterequests"
 
 
 class KubectlDescribeResource(str, Enum):
@@ -17,6 +21,10 @@ class KubectlDescribeResource(str, Enum):
     service = "service"
     deployment = "deployment"
     node = "node"
+    certificate = "certificate"
+    challenge = "challenge"
+    order = "order"
+    certificaterequest = "certificaterequest"
 
 
 class KubectlDeleteResource(str, Enum):

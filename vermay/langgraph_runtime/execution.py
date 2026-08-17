@@ -22,6 +22,7 @@ class ExecutionStopReason(str, Enum):
     POLICY_BLOCKED = "policy_blocked"
     CANCELED = "canceled"
     ENVIRONMENT_FAILURE = "environment_failure"
+    TOOL_ARGUMENT_ERROR = "tool_argument_error"
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class ExecutionPolicy:
     max_model_calls: int = 5
     max_tool_calls: int = 20
     max_failures: int = 2
+    max_tool_argument_corrections: int = 1
     max_loop_steps: int = 5
     max_elapsed_seconds: float | None = None
 
@@ -47,6 +49,8 @@ class ExecutionPolicy:
             raise ValueError("max_tool_calls must be non-negative")
         if self.max_failures < 1:
             raise ValueError("max_failures must be at least 1")
+        if self.max_tool_argument_corrections < 0:
+            raise ValueError("max_tool_argument_corrections must be non-negative")
         if self.max_loop_steps < 1:
             raise ValueError("max_loop_steps must be at least 1")
         if self.max_elapsed_seconds is not None and self.max_elapsed_seconds <= 0:
@@ -59,6 +63,7 @@ class ExecutionPolicy:
         *,
         max_tool_calls: int | None = None,
         max_failures: int = 2,
+        max_tool_argument_corrections: int = 1,
         max_elapsed_seconds: float | None = None,
     ) -> "ExecutionPolicy":
         if max_loops < 1:
@@ -67,6 +72,7 @@ class ExecutionPolicy:
             max_model_calls=max_loops,
             max_tool_calls=max_tool_calls if max_tool_calls is not None else max(8, max_loops * 4),
             max_failures=max_failures,
+            max_tool_argument_corrections=max_tool_argument_corrections,
             max_loop_steps=max_loops,
             max_elapsed_seconds=max_elapsed_seconds,
         )
@@ -76,6 +82,7 @@ class ExecutionPolicy:
             "max_model_calls": self.max_model_calls,
             "max_tool_calls": self.max_tool_calls,
             "max_failures": self.max_failures,
+            "max_tool_argument_corrections": self.max_tool_argument_corrections,
             "max_loop_steps": self.max_loop_steps,
             "max_elapsed_seconds": self.max_elapsed_seconds,
         }
@@ -90,6 +97,9 @@ class ExecutionPolicy:
             max_model_calls=_positive_int(value.get("max_model_calls"), default=5),
             max_tool_calls=_non_negative_int(value.get("max_tool_calls"), default=20),
             max_failures=_positive_int(value.get("max_failures"), default=2),
+            max_tool_argument_corrections=_non_negative_int(
+                value.get("max_tool_argument_corrections"), default=1
+            ),
             max_loop_steps=_positive_int(value.get("max_loop_steps"), default=5),
             max_elapsed_seconds=_positive_float_or_none(value.get("max_elapsed_seconds")),
         )
@@ -247,6 +257,9 @@ def execution_summary(state: dict[str, Any], *, final_answer: str | None = None)
             "model_calls": _non_negative_int(state.get("model_calls"), default=0),
             "tool_calls": _non_negative_int(state.get("tool_calls"), default=0),
             "failure_count": _non_negative_int(state.get("failure_count"), default=0),
+            "tool_argument_error_rounds": _non_negative_int(
+                state.get("tool_argument_error_rounds"), default=0
+            ),
             "loop_index": _positive_int(state.get("loop_index"), default=1),
             "elapsed_seconds": round(elapsed_seconds(state), 3),
         },

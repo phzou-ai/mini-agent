@@ -157,7 +157,19 @@ def test_devops_tool_schemas_use_single_source_resource_enums():
     delete_resource_schema = schemas["delete_resource"]["parameters"]["$defs"]["KubectlDeleteResource"]
 
     assert get_resource_schema["enum"] == KUBECTL_GET_RESOURCES
+    assert {
+        "certificates",
+        "challenges",
+        "orders",
+        "certificaterequests",
+    }.issubset(get_resource_schema["enum"])
     assert describe_resource_schema["enum"] == KUBECTL_DESCRIBE_RESOURCES
+    assert {
+        "certificate",
+        "challenge",
+        "order",
+        "certificaterequest",
+    }.issubset(describe_resource_schema["enum"])
     assert delete_resource_schema["enum"] == KUBECTL_DELETE_RESOURCES
     assert "exec_shell" not in schemas
     assert "kubectl_apply" not in schemas

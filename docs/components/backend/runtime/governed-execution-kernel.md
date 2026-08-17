@@ -21,6 +21,7 @@ approval or user-input continuation.
 | `max_model_calls` | `5` | Before a model invocation. |
 | `max_tool_calls` | `20` (`max(8, max_loop_steps * 4)`) | Before `ToolNode` execution. |
 | `max_failures` | `2` | Immediately after normalized tool observations are recorded. |
+| `max_tool_argument_corrections` | `1` | After each model/tool round containing schema-invalid arguments. |
 | `max_loop_steps` | `5` | Between ReAct iterations. |
 | `max_elapsed_seconds` | Disabled | Before model/tool/loop work when explicitly configured. |
 
@@ -79,6 +80,28 @@ call returned while tools are unavailable, or an invalid explicit
 the permission gate can execute anything. The runtime never guesses a tool
 call from prose.
 
+Arguments that reach `ToolNode` but do not satisfy the selected tool's schema
+are a narrower, recoverable error. The runtime returns a structured
+`tool_argument_error` ToolMessage to the model, including the validation
+details, and permits one additional model round to correct the call. All
+invalid calls emitted in the same model round consume one correction round,
+not one normal execution failure each. The model receives the registered tool
+schemas again on that correction round. If its next tool round is still
+schema-invalid, execution stops deterministically with
+`tool_argument_error`; the tool body was never invoked for either invalid
+call. Failures raised by a valid invocation remain `tool_execution_error` and
+continue to consume `max_failures`.
+
+The built-in read-only Kubernetes tools expose matching list/detail contracts
+for the supported cert-manager resources. `ssh_kubectl_get` accepts the plural
+`certificates`, `challenges`, `orders`, and `certificaterequests` collection
+names; `ssh_kubectl_describe` accepts their singular forms. This prevents a
+normal list-then-inspect workflow from spending its bounded argument-correction
+round on an artificial schema mismatch. Tool descriptions also tell the model
+to reuse successful observations rather than repeat identical reads. The
+execution budgets remain unchanged: duplicate or unfocused model behavior must
+still stop predictably instead of being hidden by a larger loop allowance.
+
 `prompt_json` remains an explicit Ollama compatibility strategy; it is not a
 fallback from native calling. Direct A2A Messages use normal plain-text model
 responses when no tools are exposed. See
@@ -130,6 +153,7 @@ state machine.
 | `approval_required` | A protected capability needs authorization. | `auth_required`; resumable. |
 | `budget_exhausted` | A model, tool, loop, or optional elapsed-time limit was reached. | `failed` with a structured execution summary. |
 | `repeated_failure` | The normalized tool-failure budget was reached. | `failed` with observations retained. |
+| `tool_argument_error` | Tool arguments remained schema-invalid after the bounded correction round. | `failed` with validation observations retained. |
 | `policy_blocked` | A capability was rejected by policy or approval. | `completed` with a refusal answer; the summary makes the blocked effect explicit. |
 | `canceled` | The control plane ended the process at a safe boundary. | `canceled`. |
 | `environment_failure` | The core could not execute or persist the slice safely. | `failed`, with structured retryability. |
@@ -152,8 +176,11 @@ changed_resources, artifact_refs
 ```
 
 Failure classification uses the `ToolMessage` status plus structured tool
-fields such as `error_code`, `error_category`, and `retryable`. It never asks
-the model to infer failure type or retryability from an arbitrary error string.
+fields such as `error_code`, `error_category`, and `retryable`. Schema-invalid
+invocations are recorded as `tool_argument_error`; failures from an invoked
+tool are recorded separately as `tool_execution_error` or a more specific
+tool-owned category. It never asks the model to infer failure type or
+retryability from an arbitrary error string.
 Large structured values are bounded before persistence. Non-read-only calls
 also cite the R1 Tool Invocation Ledger result artifact when one exists.
 

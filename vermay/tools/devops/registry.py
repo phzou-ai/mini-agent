@@ -15,7 +15,9 @@ class SshKubectlGetArgs(ToolArgs):
 
 
 class SshKubectlDescribeArgs(ToolArgs):
-    resource: KubectlDescribeResource = Field(description="Kubernetes resource type to describe.")
+    resource: KubectlDescribeResource = Field(
+        description="Kubernetes core or cert-manager resource type to describe."
+    )
     name: str = Field(description="Kubernetes resource name.")
     namespace: str = Field(default="default", description="Kubernetes namespace. Ignored for node.")
 
@@ -33,7 +35,8 @@ def register_devops_tools(registry: ToolRegistry) -> None:
             name="ssh_kubectl_get",
             description=(
                 "Read current real Kubernetes cluster state over SSH. Prefer this for current, real, "
-                "remote, or live cluster questions. This is read-only."
+                "remote, or live cluster questions. Supports core resources plus cert-manager "
+                "certificates, challenges, orders, and certificaterequests. This is read-only."
             ),
             args_schema=SshKubectlGetArgs,
             dangerous=False,
@@ -51,8 +54,10 @@ def register_devops_tools(registry: ToolRegistry) -> None:
             func=ssh_kubectl_describe,
             name="ssh_kubectl_describe",
             description=(
-                "Describe a Kubernetes resource over SSH. Read-only. Use after ssh_kubectl_get "
-                "when detailed status/events are needed."
+                "Describe one Kubernetes core or cert-manager resource over SSH. Read-only. "
+                "Use after ssh_kubectl_get has identified the exact resource name and detailed "
+                "status or events are needed. Do not repeat an already successful get or describe "
+                "call unless its arguments must change."
             ),
             args_schema=SshKubectlDescribeArgs,
             dangerous=False,

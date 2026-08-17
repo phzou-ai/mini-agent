@@ -23,7 +23,7 @@ from vermay.langgraph_runtime.graph import build_graph
 from vermay.langgraph_runtime.model_factory import ModelProviderConfig, build_graph_model_client
 from vermay.langgraph_runtime.nodes import GraphComponents
 from vermay.langgraph_runtime.execution import model_call_limit, policy_from_state
-from vermay.langgraph_runtime.observations import normalize_tool_observation
+from vermay.langgraph_runtime.observations import normalize_tool_observation, structured_tool_error
 from vermay.langgraph_runtime.routing import (
     latest_ai_message,
     route_after_approval,
@@ -715,6 +715,103 @@ def test_langgraph_runtime_stops_after_repeated_tool_failure_and_keeps_observati
         "evidence_count": 0,
         "residual_risk_count": 2,
     }
+
+
+def test_langgraph_runtime_allows_one_model_correction_after_batched_tool_argument_errors():
+    model = FakeModel(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "echo", "args": {}, "id": "call-invalid-1", "type": "tool_call"},
+                    {"name": "echo", "args": {}, "id": "call-invalid-2", "type": "tool_call"},
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "echo",
+                        "args": {"value": "corrected"},
+                        "id": "call-corrected",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="finished after correcting the tool arguments"),
+        ]
+    )
+    runtime = LangGraphAgentRuntime(
+        model=model,
+        tools=[make_echo_tool()],
+        execution_policy=ExecutionPolicy(
+            max_model_calls=3,
+            max_tool_calls=4,
+            max_failures=1,
+            max_tool_argument_corrections=1,
+            max_loop_steps=3,
+        ),
+    )
+
+    result = runtime.start("echo a value", thread_id="thread-tool-argument-correction")
+
+    assert result.status == "completed"
+    assert result.final_answer == "finished after correcting the tool arguments"
+    assert result.execution["metrics"]["failure_count"] == 0
+    assert result.execution["metrics"]["tool_argument_error_rounds"] == 1
+    assert [item["error_category"] for item in result.observations[:2]] == [
+        "tool_argument_error",
+        "tool_argument_error",
+    ]
+    assert result.observations[2]["ok"] is True
+    correction_messages = model.calls[1][0]
+    assert sum(isinstance(message, ToolMessage) for message in correction_messages) == 2
+
+
+def test_langgraph_runtime_stops_when_tool_arguments_remain_invalid_after_correction():
+    def invalid_call(call_id):
+        return AIMessage(
+            content="",
+            tool_calls=[{"name": "echo", "args": {}, "id": call_id, "type": "tool_call"}],
+        )
+
+    runtime = LangGraphAgentRuntime(
+        model=FakeModel([invalid_call("call-invalid-1"), invalid_call("call-invalid-2")]),
+        tools=[make_echo_tool()],
+        execution_policy=ExecutionPolicy(
+            max_model_calls=3,
+            max_tool_calls=2,
+            max_failures=1,
+            max_tool_argument_corrections=1,
+            max_loop_steps=3,
+        ),
+    )
+
+    result = runtime.start("echo a value", thread_id="thread-tool-argument-stop")
+
+    assert result.status == "stopped"
+    assert result.stop_reason == "tool_argument_error"
+    assert result.execution["metrics"]["failure_count"] == 0
+    assert result.execution["metrics"]["tool_argument_error_rounds"] == 2
+    assert result.execution["stop_detail"] == {
+        "limit": "max_tool_argument_corrections",
+        "limit_value": 1,
+        "observed_value": 2,
+    }
+
+
+def test_structured_tool_error_classifies_tool_invocation_validation_errors():
+    from langgraph.prebuilt.tool_node import ToolInvocationError
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as captured:
+        EchoArgs.model_validate({})
+    error = ToolInvocationError("echo", captured.value, {}, captured.value.errors())
+
+    payload = structured_tool_error(error)
+
+    assert '"error_code": "tool_argument_error"' in payload
+    assert '"retryable": true' in payload
 
 
 def test_normalized_tool_observation_uses_structured_error_fields_without_text_inference():

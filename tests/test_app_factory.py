@@ -39,6 +39,7 @@ def test_app_factory_builds_runtime_with_registered_tools(tmp_path):
         "max_model_calls": 7,
         "max_tool_calls": 9,
         "max_failures": 3,
+        "max_tool_argument_corrections": 1,
         "max_loop_steps": 7,
         "max_elapsed_seconds": 42.0,
     }

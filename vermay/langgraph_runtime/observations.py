@@ -4,12 +4,46 @@ import json
 from typing import Any
 
 from langchain_core.messages import ToolMessage
+from langgraph.prebuilt.tool_node import ToolInvocationError
 
 from vermay.result_summary import observation_summary
 
 
 MAX_OBSERVATION_DATA_CHARS = 16_000
 MAX_OBSERVATION_SUMMARY_CHARS = 2_000
+
+
+def structured_tool_error(exc: Exception) -> str:
+    """Return a machine-readable ToolMessage error for runtime correction.
+
+    LangGraph raises ``ToolInvocationError`` when a model emits arguments that
+    do not satisfy a tool's schema.  Keep that distinct from a tool that was
+    invoked successfully but failed while doing its work: the former can be
+    corrected by the next model turn, while the latter consumes the normal
+    execution-failure budget.
+    """
+
+    if isinstance(exc, ToolInvocationError):
+        return json.dumps(
+            {
+                "ok": False,
+                "error_code": "tool_argument_error",
+                "message": exc.message,
+                "retryable": True,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    return json.dumps(
+        {
+            "ok": False,
+            "error_code": "tool_execution_error",
+            "message": str(exc),
+            "retryable": False,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
 
 
 def normalize_tool_observation(

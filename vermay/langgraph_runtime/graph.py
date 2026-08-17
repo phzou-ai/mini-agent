@@ -15,6 +15,7 @@ from .nodes import (
     tool_call_wrapper,
     user_input_required_node,
 )
+from .observations import structured_tool_error
 from .routing import route_after_approval, route_after_model, route_after_permission, route_loop_limit
 from .state import AgentState
 
@@ -30,7 +31,7 @@ def build_graph(components: GraphComponents, checkpointer=None):
         "tools",
         ToolNode(
             components.tools,
-            handle_tool_errors=True,
+            handle_tool_errors=structured_tool_error,
             wrap_tool_call=tool_call_wrapper(components),
         ),
     )

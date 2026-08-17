@@ -23,6 +23,7 @@ class AgentState(TypedDict):
     model_calls: int
     tool_calls: int
     failure_count: int
+    tool_argument_error_rounds: int
     observations: list[dict[str, Any]]
     stop_reason: str | None
     stop_detail: dict[str, Any] | None
@@ -62,6 +63,7 @@ def build_initial_state(
         "model_calls": 0,
         "tool_calls": 0,
         "failure_count": 0,
+        "tool_argument_error_rounds": 0,
         "observations": [],
         "stop_reason": None,
         "stop_detail": None,

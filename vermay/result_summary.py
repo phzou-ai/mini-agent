@@ -25,6 +25,9 @@ def tool_exit_code(output: object) -> object:
 
 def observation_summary(output: object, content: str) -> str:
     if isinstance(output, dict):
+        message = output.get("message")
+        if isinstance(message, str) and message:
+            return message
         status = output.get("status")
         if isinstance(status, str):
             return f"status={status}"

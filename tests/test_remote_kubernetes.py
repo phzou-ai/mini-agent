@@ -46,6 +46,30 @@ def test_ssh_kubectl_get_builds_read_only_command_without_live_ssh(monkeypatch):
     assert "delete" not in calls[0]
 
 
+@pytest.mark.parametrize(
+    "resource",
+    ["certificates", "challenges", "orders", "certificaterequests"],
+)
+def test_ssh_kubectl_get_supports_cert_manager_resources_without_live_ssh(
+    monkeypatch,
+    resource,
+):
+    calls = []
+
+    class FakeSshClient:
+        def run(self, command: str) -> dict:
+            calls.append(command)
+            return {"ok": True, "command": command, "stdout": "", "stderr": "", "exit_code": 0}
+
+    monkeypatch.setattr(remote_kubernetes, "SshClient", FakeSshClient)
+
+    result = remote_kubernetes.ssh_kubectl_get(resource, namespace="all")
+
+    assert result["ok"] is True
+    assert len(calls) == 1
+    assert f"kubectl get {resource} -A -o wide" in calls[0]
+
+
 def test_ssh_kubectl_describe_node_omits_namespace_without_live_ssh(monkeypatch):
     calls = []
 
@@ -66,6 +90,37 @@ def test_ssh_kubectl_describe_node_omits_namespace_without_live_ssh(monkeypatch)
     assert "kubectl describe node phzou-nuc" in calls[0]
     assert "kubectl describe node phzou-nuc -n" not in calls[0]
     assert "microk8s kubectl describe node phzou-nuc -n" not in calls[0]
+
+
+@pytest.mark.parametrize(
+    "resource",
+    ["certificate", "challenge", "order", "certificaterequest"],
+)
+def test_ssh_kubectl_describe_supports_cert_manager_resources_without_live_ssh(
+    monkeypatch,
+    resource,
+):
+    calls = []
+
+    class FakeSshClient:
+        def __init__(self, timeout_seconds: int = 20) -> None:
+            self.timeout_seconds = timeout_seconds
+
+        def run(self, command: str) -> dict:
+            calls.append(command)
+            return {"ok": True, "command": command, "stdout": "", "stderr": "", "exit_code": 0}
+
+    monkeypatch.setattr(remote_kubernetes, "SshClient", FakeSshClient)
+
+    result = remote_kubernetes.ssh_kubectl_describe(
+        resource,
+        "gitlab-phzou-tls",
+        namespace="default",
+    )
+
+    assert result["ok"] is True
+    assert len(calls) == 1
+    assert f"kubectl describe {resource} gitlab-phzou-tls -n default" in calls[0]
 
 
 def test_delete_resource_builds_namespace_scoped_command_without_live_ssh(monkeypatch):
