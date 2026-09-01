@@ -98,6 +98,9 @@ documentation authority or runtime ownership from chat history.
 - Local non-read-only effects use a durable Tool Invocation Ledger.
 - Governed execution limits and cancellation reach the current model and
   SSH/Kubernetes capability paths.
+- An opt-in read-only live Kubernetes workflow gate exercises the real A2A
+  Task boundary and validates normalized tool observations without coupling
+  external infrastructure to the deterministic release gates.
 - The Inspector separates public A2A state, durable local process state, and
   the LangGraph checkpoint thread.
 - Documentation has stable overview, architecture, component, operations, and
@@ -145,6 +148,20 @@ S2 closed on 2026-08-14 with deterministic and live-model evidence:
 The suite still reports a non-blocking Starlette `TestClient` deprecation
 warning. Live MCP, SSH/Kubernetes, and child-agent workflows were not part of
 the S2 acceptance boundary and were not exercised by this refresh.
+
+The later live Kubernetes gate implementation was verified independently from
+that historical S2 evidence:
+
+- `scripts/check_live_kubernetes_workflow.sh` passes shell syntax validation
+  and refuses to contact external infrastructure unless `RUN_LIVE_K8S=1` is
+  set explicitly.
+- A controlled local A2A fixture verified successful list-and-describe
+  observation validation.
+- A controlled duplicate-observation fixture verified that repeated identical
+  successful reads fail the gate.
+- No operator-configured model, MCP/SSH transport, or Kubernetes target was
+  exercised during this implementation pass. The script therefore provides a
+  validation mechanism, not new live-environment evidence.
 
 S3 closed on 2026-08-14 with protocol-focused, full-stack, and live-model
 evidence:
@@ -218,6 +235,14 @@ the S3 release baseline and the Platform M1-M6 contracts. Collect measured
 evidence of a deep-history workflow, execution-boundary defect, concrete
 change-coupling defect, or release-reproducibility failure before authorizing
 another runtime or platform milestone.
+
+The operations layer now provides an opt-in, read-only live Kubernetes
+workflow gate. It is evidence collection infrastructure, not a new runtime
+milestone and not part of default CI. The next runtime decision should be based
+on a dated run of that gate against an operator-configured target: a clean pass
+preserves the current phase gate, while a reproduced duplicate call,
+correction failure, or budget exhaustion authorizes only the narrowest
+corresponding stabilization change.
 
 ### 2026-08-16 Stabilization Strategy
 

@@ -60,6 +60,10 @@ Run the default smoke against one local main-agent server:
 scripts/a2a_dev_smoke.sh
 ```
 
+For an explicitly enabled, read-only live model/MCP/SSH/Kubernetes workflow,
+use the opt-in gate documented in
+[Full-Stack Regression Baseline](regression-gate.md#optional-live-kubernetes-workflow-gate).
+
 To include registered child-agent delegation, start a second local A2A server on another port and pass it as the child endpoint:
 
 ```bash

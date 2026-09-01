@@ -69,6 +69,67 @@ RUN_LIVE_E2E=1 scripts/check_full_stack_regression.sh
 
 The live suite requires configured model and MCP dependencies.
 
+## Optional Live Kubernetes Workflow Gate
+
+The default gates deliberately do not depend on a live model, SSH target, MCP
+server, or Kubernetes cluster. After changing model tool calling, Kubernetes
+tool schemas, observation persistence, or execution budgets, an operator can
+run this additional read-only check:
+
+```bash
+RUN_LIVE_K8S=1 scripts/check_live_kubernetes_workflow.sh
+```
+
+The script submits a real local Task through `/rpc`, waits for its durable A2A
+terminal state, and validates normalized observations through the first-party
+diagnostic API. It requires successful expected tool evidence and rejects
+retained argument-correction errors, budget exhaustion, and identical repeated
+successful reads.
+
+The default target lists cluster nodes. Configure another read-only resource
+or an exact detail workflow without changing the script:
+
+```bash
+RUN_LIVE_K8S=1 \
+LIVE_K8S_RESOURCE=certificates \
+LIVE_K8S_NAMESPACE=cert-manager \
+LIVE_K8S_NAME=example-certificate \
+scripts/check_live_kubernetes_workflow.sh
+```
+
+When `LIVE_K8S_NAME` is set, the generated prompt requires both a list and an
+exact describe operation. `LIVE_K8S_PROMPT` can replace the generated prompt,
+and `LIVE_K8S_EXPECTED_TOOLS` accepts a comma-separated set of tool names. A
+custom prompt must remain read-only. This gate is opt-in and must not be added
+to default CI because its result depends on operator credentials and external
+infrastructure.
+
+### Gate success contract
+
+The gate passes only when all of the following are true:
+
+1. `message/send` returns a durable A2A Task identity.
+2. `tasks/get` reaches `completed` within the configured timeout.
+3. The diagnostic API returns at least one normalized tool observation.
+4. Every tool named by `LIVE_K8S_EXPECTED_TOOLS` has a successful normalized
+   observation with durable evidence.
+5. No retained `tool_argument_error` or execution-budget exhaustion is
+   present.
+6. Successful observations do not contain an identical repeated read for the
+   same tool and structured result.
+
+`TIMEOUT_SECONDS` controls only this operator-side wait. It does not change the
+runtime Task budget. A non-completed terminal Task, an input or authorization
+continuation, malformed diagnostic evidence, or a timeout fails the command
+and prints the Task identity or response needed for investigation.
+
+The script contract has been verified with controlled local A2A fixtures for
+both a successful list-and-describe workflow and duplicate-observation
+rejection. That fixture verification is not evidence that a configured live
+cluster passed. Record live evidence in the
+[Single-Host Reliability Matrix](single-host-reliability-matrix.md) only after
+an operator runs the gate against the intended target.
+
 ## Public Error Contract
 
 Browser-facing BFF errors use one shape:

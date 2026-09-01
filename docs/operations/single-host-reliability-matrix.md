@@ -58,6 +58,12 @@ This evidence establishes the current single-host baseline. It does not claim
 that every configured MCP server, SSH target, Kubernetes operation, or child
 agent has been exercised live.
 
+An opt-in read-only live Kubernetes gate is available through
+`RUN_LIVE_K8S=1 scripts/check_live_kubernetes_workflow.sh`. Its presence does
+not constitute validation evidence by itself. Record a dated result here only
+after it has run against an explicitly configured target; keep the default
+deterministic gate independent of that target.
+
 ## Coverage Matrix
 
 | Scenario | Required outcome | Primary deterministic evidence |
